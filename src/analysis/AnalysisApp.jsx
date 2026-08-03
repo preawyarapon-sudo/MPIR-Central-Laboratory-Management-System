@@ -2123,7 +2123,7 @@ export default function App() {
           .topTabRow { display: none !important; }
           .bottomNavBar {
             display: flex !important;
-            position: sticky; bottom: 0; left: 0; right: 0; z-index: 20;
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
             background: ${C.bg}; border-top: 1px solid ${C.borderSoft};
             padding: 2px 4px calc(4px + env(safe-area-inset-bottom));
             box-shadow: 0 -2px 10px rgba(11,42,74,0.06);
