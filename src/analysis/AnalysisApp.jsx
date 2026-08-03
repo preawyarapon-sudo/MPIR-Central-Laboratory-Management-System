@@ -1300,7 +1300,7 @@ function JobsList({ jobs, onOpen }) {
           )}
         </div>
       </div>
-      <div style={{ overflowX: "auto" }}>
+      <div style={{ overflowX: "auto" }} className="tableScrollWrap">
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }} className="jobsTable">
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -1669,7 +1669,7 @@ function ParametersTable({ jobs, onOpenJob }) {
 
   return (
     <Panel style={{ overflow: "hidden" }}>
-      <div style={{ overflowX: "auto" }}>
+      <div style={{ overflowX: "auto" }} className="tableScrollWrap">
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }} className="paramsTable">
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -2130,19 +2130,27 @@ export default function App() {
           /* Dashboard: job row deadline/progress group drops to its own line */
           .jobRowMeta { width: 100% !important; justify-content: space-between !important; margin-top: 2px !important; }
 
-          /* Jobs tab table + Parameters tab table: collapse into stacked cards */
+          /* Jobs tab table + Parameters tab table: collapse into stacked cards.
+             These wrappers no longer need horizontal scroll once collapsed —
+             leaving overflow-x:auto on caused the whole row to become
+             scrollable (and start scrolled) whenever any cell was a hair
+             wider than the screen, clipping text on the left. */
+          .tableScrollWrap { overflow-x: hidden !important; }
           .jobsTable thead, .paramsTable thead { display: none !important; }
           .jobsTable, .jobsTable tbody, .jobsTableRow,
           .paramsTable, .paramsTable tbody, .paramsTableRow { display: block !important; width: 100% !important; }
-          .jobsTableRow, .paramsTableRow { padding: 10px 12px !important; position: relative; }
+          .jobsTableRow, .paramsTableRow { padding: 10px 12px !important; position: relative; box-sizing: border-box !important; }
           .jobsTableCell, .jobsTableTitleCell,
           .paramsTableCell, .paramsTableTitleCell {
             display: flex !important; justify-content: space-between !important; align-items: center !important;
             gap: 10px !important; padding: 3px 0 !important; text-align: right !important; width: auto !important;
+            min-width: 0 !important; flex-wrap: wrap !important; box-sizing: border-box !important;
           }
+          .jobsTableCell > *, .paramsTableCell > * { min-width: 0; word-break: break-word; }
           .jobsTableTitleCell, .paramsTableTitleCell {
             font-size: 14px !important; justify-content: flex-start !important; text-align: left !important;
             border-bottom: 1px solid ${C.borderSoft} !important; padding-bottom: 6px !important; margin-bottom: 4px !important;
+            padding-right: 26px !important; word-break: break-word !important;
           }
           .jobsTableCell::before, .paramsTableCell::before {
             content: attr(data-label); font-size: 10.5px; font-weight: 600; color: ${C.textMuted};
