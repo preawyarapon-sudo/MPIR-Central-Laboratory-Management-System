@@ -888,7 +888,7 @@ function NewJobForm({ onCancel, onCreate, onSaveEdit, suggestedNo, suggestedRegS
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }} className="grid3col">
         <div>
           <label style={{ fontSize: 11, color: C.textMuted, display: "block", marginBottom: 4 }}>รหัสงาน (Job No)</label>
           <input
@@ -955,7 +955,7 @@ function NewJobForm({ onCancel, onCreate, onSaveEdit, suggestedNo, suggestedRegS
       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
         จำนวนตัวอย่าง / เลขทะเบียน
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 6 }} className="grid3col">
         <div>
           <label style={{ fontSize: 11, color: C.textMuted, display: "block", marginBottom: 4 }}>จำนวนตัวอย่าง</label>
           <input
@@ -2052,6 +2052,7 @@ export default function App() {
         border: "none", borderBottom: tab === key ? `2px solid ${C.cyan}` : "2px solid transparent",
         color: tab === key ? C.text : C.textMuted,
         padding: "10px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+        whiteSpace: "nowrap", flexShrink: 0,
       }}
     >
       <Icon size={15} /> {label}
@@ -2059,7 +2060,13 @@ export default function App() {
   );
 
   return (
-    <div style={{ background: C.bg, minHeight: 500, borderRadius: 10, fontFamily: "'Prompt', system-ui, sans-serif", color: C.text, padding: 0, border: `1px solid ${C.border}`, boxShadow: "0 2px 18px rgba(14, 111, 186, 0.08)" }}>
+    <div style={{ background: C.bg, minHeight: 500, borderRadius: 10, fontFamily: "'Prompt', system-ui, sans-serif", color: C.text, padding: 0, border: `1px solid ${C.border}`, boxShadow: "0 2px 18px rgba(14, 111, 186, 0.08)" }} className="latApp">
+      <style>{`
+        @media (max-width: 640px) {
+          .latApp { border-radius: 0 !important; }
+          .grid3col { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
       <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <div style={{ width: 30, height: 30, borderRadius: 6, background: C.cyanDim, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -2076,7 +2083,7 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ display: "flex", borderBottom: `1px solid ${C.borderSoft}`, padding: "0 12px" }}>
+      <div style={{ display: "flex", borderBottom: `1px solid ${C.borderSoft}`, padding: "0 12px", overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
         {tabBtn("dashboard", "Dashboard", LayoutGrid)}
         {tabBtn("jobs", "Jobs", ListChecks)}
         {tabBtn("analysts", "Analysts", Users)}

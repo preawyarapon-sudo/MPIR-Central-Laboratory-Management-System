@@ -12,8 +12,17 @@ export default function App() {
   const [section, setSection] = useState("labtrack");
 
   return (
-    <div style={styles.page}>
-      <div style={styles.topbar}>
+    <div style={styles.page} className="appPage">
+      <style>{`
+        @media (max-width: 640px) {
+          .appPage { padding: 10px 10px 18px !important; }
+          .appTopbar { padding: 8px 10px !important; }
+          .appTabRow { width: 100%; }
+          .appTabBtn { flex: 1 1 auto !important; justify-content: center !important; }
+          .appTabSub { display: none !important; }
+        }
+      `}</style>
+      <div style={styles.topbar} className="appTopbar">
         <div style={styles.brand}>
           <img src="/logo.png" alt="MPIR Central Lab" style={styles.logo} />
           <div>
@@ -21,7 +30,7 @@ export default function App() {
             <div style={styles.brandSub}>ระบบห้องปฏิบัติการ</div>
           </div>
         </div>
-        <div style={styles.tabRow}>
+        <div style={styles.tabRow} className="appTabRow">
           {TABS.map(({ key, label, sub, Icon }) => {
             const active = section === key;
             return (
@@ -29,11 +38,12 @@ export default function App() {
                 key={key}
                 onClick={() => setSection(key)}
                 style={{ ...styles.tabBtn, ...(active ? styles.tabBtnActive : null) }}
+                className="appTabBtn"
               >
                 <Icon size={16} />
                 <span>
                   <span style={styles.tabLabel}>{label}</span>
-                  <span style={styles.tabSub}> · {sub}</span>
+                  <span style={styles.tabSub} className="appTabSub"> · {sub}</span>
                 </span>
               </button>
             );

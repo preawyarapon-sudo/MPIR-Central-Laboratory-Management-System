@@ -133,11 +133,11 @@ export default function App() {
   }
 
   return (
-    <div style={S.app}>
+    <div style={S.app} className="ltApp">
       <style>{CSS}</style>
-      <div style={S.shell}>
+      <div style={S.shell} className="ltShell">
         {/* sidebar */}
-        <aside style={S.sidebar}>
+        <aside style={S.sidebar} className="ltSidebar">
           <div style={S.brand}>
             <div style={S.brandMark}>
               <img src="/logo.png" alt="MPIR Central Lab" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
@@ -147,7 +147,7 @@ export default function App() {
               <div style={S.brandSub}>MPIR Central Lab</div>
             </div>
           </div>
-          <nav style={{ marginTop: 18 }}>
+          <nav style={{ marginTop: 18 }} className="ltNav">
             {NAV.map(n => {
               const Icon = n.icon;
               const active = tab === n.key;
@@ -155,19 +155,19 @@ export default function App() {
                 ? alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length
                 : 0;
               return (
-                <button key={n.key} onClick={() => setTab(n.key)} style={{ ...S.navBtn, ...(active ? S.navBtnActive : {}) }}>
+                <button key={n.key} onClick={() => setTab(n.key)} style={{ ...S.navBtn, ...(active ? S.navBtnActive : {}) }} className="ltNavBtn">
                   <Icon size={16} strokeWidth={2} />
-                  <span style={{ flex: 1, textAlign: "left" }}>{n.label}</span>
+                  <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
                   {count > 0 && <span style={S.navBadge}>{count}</span>}
                 </button>
               );
             })}
           </nav>
-          <div style={S.sidebarFoot}>ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ</div>
+          <div style={S.sidebarFoot} className="ltSidebarFoot">ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ</div>
         </aside>
 
         {/* main */}
-        <main style={S.main}>
+        <main style={S.main} className="ltMain">
           {tab === "dashboard" && (
             <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} alerts={alerts} goto={setTab} />
           )}
@@ -203,11 +203,11 @@ function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
 
   return (
     <div>
-      <div style={S.hero}>
+      <div style={S.hero} className="ltHero">
         <div style={S.heroGrid} />
         <div style={{ position: "relative" }}>
           <div style={S.eyebrow}>ภาพรวมวันนี้ · {fmtDate(todayISO())}</div>
-          <h1 style={S.h1}>สถานะห้องปฏิบัติการ</h1>
+          <h1 style={S.h1} className="ltH1">สถานะห้องปฏิบัติการ</h1>
           <p style={S.heroSub}>ติดตามกำหนดสอบเทียบ อายุสารเคมี และพัสดุใกล้หมด ในที่เดียว</p>
         </div>
       </div>
@@ -383,7 +383,7 @@ function EquipmentForm({ item, onCancel, onSave }) {
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
     <Modal onClose={onCancel} title={item.code ? "แก้ไขเครื่องมือ" : "เพิ่มเครื่องมือใหม่"}>
-      <div style={S.formGrid}>
+      <div style={S.formGrid} className="ltFormGrid">
         <Field label="รหัสเครื่องมือ"><input style={S.input} value={f.code} onChange={set("code")} placeholder="เช่น MPIR-006" /></Field>
         <Field label="ชื่อเครื่องมือ"><input style={S.input} value={f.name} onChange={set("name")} placeholder="เช่น เครื่องชั่ง 3 ตำแหน่ง" /></Field>
         <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder="เช่น เครื่องชั่ง" /></Field>
@@ -458,7 +458,7 @@ function ActivityForm({ onCancel, onSave }) {
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
     <Modal onClose={onCancel} title="บันทึกกิจกรรม">
-      <div style={S.formGrid}>
+      <div style={S.formGrid} className="ltFormGrid">
         <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="ประเภทกิจกรรม">
           <select style={S.input} value={f.type} onChange={set("type")}>
@@ -526,7 +526,7 @@ function ChemicalForm({ item, onCancel, onSave }) {
   const set = (k, num) => (e) => setF({ ...f, [k]: num ? Number(e.target.value) : e.target.value });
   return (
     <Modal onClose={onCancel} title={item.name ? "แก้ไขสารเคมี" : "เพิ่มสารเคมี"}>
-      <div style={S.formGrid}>
+      <div style={S.formGrid} className="ltFormGrid">
         <Field label="ชื่อสารเคมี" full><input style={S.input} value={f.name} onChange={set("name")} /></Field>
         <Field label="Lot No."><input style={S.input} value={f.lotNo} onChange={set("lotNo")} /></Field>
         <Field label="ตำแหน่งจัดเก็บ"><input style={S.input} value={f.location} onChange={set("location")} /></Field>
@@ -587,7 +587,7 @@ function ConsumableForm({ item, onCancel, onSave }) {
   const set = (k, num) => (e) => setF({ ...f, [k]: num ? Number(e.target.value) : e.target.value });
   return (
     <Modal onClose={onCancel} title={item.name ? "แก้ไขพัสดุ" : "เพิ่มพัสดุ"}>
-      <div style={S.formGrid}>
+      <div style={S.formGrid} className="ltFormGrid">
         <Field label="ชื่อพัสดุ" full><input style={S.input} value={f.name} onChange={set("name")} /></Field>
         <Field label="ตำแหน่งจัดเก็บ"><input style={S.input} value={f.location} onChange={set("location")} /></Field>
         <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} placeholder="เช่น กล่อง, ห่อ, ชิ้น" /></Field>
@@ -747,6 +747,37 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outl
 button { cursor: pointer; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: #D3DBD9; border-radius: 8px; }
+
+@media (max-width: 760px) {
+  .ltApp { border-radius: 0 !important; }
+  .ltShell { flex-direction: column !important; min-height: 0 !important; }
+  .ltSidebar {
+    width: 100% !important;
+    padding: 10px 12px !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--line) !important;
+  }
+  .ltNav {
+    margin-top: 10px !important;
+    display: flex !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    gap: 4px !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ltNavBtn {
+    width: auto !important;
+    flex: 0 0 auto !important;
+    white-space: nowrap !important;
+    margin-bottom: 0 !important;
+  }
+  .ltNavBtnLabel { flex: none !important; }
+  .ltSidebarFoot { display: none !important; }
+  .ltMain { padding: 14px 14px !important; max-height: none !important; }
+  .ltHero { padding: 18px 16px !important; border-radius: 12px !important; }
+  .ltH1 { font-size: 20px !important; }
+  .ltFormGrid { grid-template-columns: 1fr !important; }
+}
 `;
 
 const S = {
