@@ -634,7 +634,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
   const [selected, setSelected] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const filtered = chemicals
-    .filter(c => (c.name + c.location).toLowerCase().includes(q.toLowerCase()))
+    .filter(c => (c.name + (c.formula || "") + (c.brand || "") + c.location).toLowerCase().includes(q.toLowerCase()))
     .slice()
     .sort((a, b) => {
       const ea = earliestExpiry(a), eb = earliestExpiry(b);
@@ -655,7 +655,8 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
   function importItems(items) {
     const newItems = items.map(it => ({
       id: uid(), name: it.name, unit: it.unit || "", quantity: it.quantity || 0,
-      location: it.location || "", expiryDate: it.expiryDate || "", minThreshold: 0, transactions: [],
+      location: it.location || "", expiryDate: it.expiryDate || "", formula: it.formula || "", brand: it.brand || "",
+      minThreshold: 0, transactions: [],
     }));
     setChemicals([...newItems, ...chemicals]);
     notify(`นำเข้า ${newItems.length} รายการแล้ว`);
@@ -712,7 +713,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", expiryDate: "", location: "", minThreshold: 0, transactions: [] })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", expiryDate: "", location: "", formula: "", brand: "", minThreshold: 0, transactions: [] })}>
           <Plus size={15} /> เพิ่มสารเคมี
         </button>
       </Toolbar>
@@ -725,7 +726,14 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
           const st = statusOf(days);
           const low = c.quantity <= c.minThreshold;
           return [
-            <RowTitle beacon={low ? "var(--amber)" : "transparent"} text={c.name} />,
+            <div>
+              <RowTitle beacon={low ? "var(--amber)" : "transparent"} text={c.name} />
+              {(c.formula || c.brand) && (
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, marginLeft: 15 }}>
+                  {[c.formula, c.brand].filter(Boolean).join(" · ")}
+                </div>
+              )}
+            </div>,
             <span>{c.quantity} {c.unit}{low && <span style={S.lowTag}>ใกล้หมด</span>}</span>,
             <span style={{ color: STATUS_COLOR[st] }}>{exp ? fmtDate(exp) : "-"}</span>,
             c.location || "-",
@@ -786,6 +794,11 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
       <div style={S.detailHead}>
         <div>
           <div style={S.detailName}>{item.name}</div>
+          {(item.formula || item.brand) && (
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+              {[item.formula, item.brand].filter(Boolean).join(" · ")}
+            </div>
+          )}
           <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"}</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -912,6 +925,8 @@ function ChemicalForm({ item, onCancel, onSave }) {
     <Modal onClose={onCancel} title={item.name ? "แก้ไขสารเคมี" : "เพิ่มสารเคมี"}>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="ชื่อสารเคมี" full><input style={S.input} value={f.name} onChange={set("name")} /></Field>
+        <Field label="สูตรเคมี"><input style={S.input} value={f.formula || ""} onChange={set("formula")} placeholder="เช่น NaOH" /></Field>
+        <Field label="ยี่ห้อ"><input style={S.input} value={f.brand || ""} onChange={set("brand")} placeholder="เช่น Merck, Sigma-Aldrich" /></Field>
         <Field label="ตำแหน่งจัดเก็บ"><input style={S.input} value={f.location} onChange={set("location")} /></Field>
         <Field label="ปริมาณคงเหลือ"><input type="number" style={S.input} value={f.quantity} onChange={set("quantity", true)} /></Field>
         <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} placeholder="เช่น ขวด, kg, L" /></Field>
@@ -933,19 +948,21 @@ function ChemicalsImportForm({ onCancel, onImport }) {
       quantity: Number(parts[2]) || 0,
       location: parts[3] || "",
       expiryDate: parts[4] || "",
+      formula: parts[5] || "",
+      brand: parts[6] || "",
     };
   }).filter(r => r.name);
 
   return (
     <Modal onClose={onCancel} title="นำเข้ารายการสารเคมี" wide>
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>
-        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>ชื่อสารเคมี | หน่วย | จำนวน | ตำแหน่ง | วันหมดอายุ (YYYY-MM-DD)</b> (คั่นด้วย | — ตำแหน่งและวันหมดอายุใส่หรือเว้นว่างก็ได้)
+        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>ชื่อสารเคมี | หน่วย | จำนวน | ตำแหน่ง | วันหมดอายุ (YYYY-MM-DD) | สูตรเคมี | ยี่ห้อ</b> (คั่นด้วย | — ทุกช่องหลังชื่อใส่หรือเว้นว่างก็ได้)
       </div>
       <textarea
         style={{ ...S.input, minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder={"ตัวอย่าง:\nAcetonitrile HPLC grade | ขวด (2.5 L) | 4 | ตู้เก็บสารไวไฟ | 2026-09-10\nSodium Hydroxide | kg | 1 | ชั้นสารเคมีทั่วไป | 2026-08-25"}
+        placeholder={"ตัวอย่าง:\nAcetonitrile HPLC grade | ขวด (2.5 L) | 4 | ตู้เก็บสารไวไฟ | 2026-09-10 | CH3CN | Merck\nSodium Hydroxide | kg | 1 | ชั้นสารเคมีทั่วไป | 2026-08-25 | NaOH | Sigma-Aldrich"}
       />
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 8 }}>
         ตรวจพบ <b>{parsed.length}</b> รายการที่จะนำเข้า (รายการเดิมจะไม่ถูกลบหรือทับ — รายการใหม่จะถูกเพิ่มเข้าไป)
@@ -1269,8 +1286,8 @@ function ReportsTab({ equipment, activities, chemicals, consumables }) {
     ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ"]
   ));
   const exportChemicals = () => download("chemicals.csv", toCSV(
-    chemicals.map(c => [c.name, c.quantity, c.unit, earliestExpiry(c), c.location, c.minThreshold]),
-    ["ชื่อ", "คงเหลือ", "หน่วย", "วันหมดอายุ (ใกล้สุด)", "ตำแหน่ง", "ขั้นต่ำ"]
+    chemicals.map(c => [c.name, c.formula || "", c.brand || "", c.quantity, c.unit, earliestExpiry(c), c.location, c.minThreshold]),
+    ["ชื่อ", "สูตรเคมี", "ยี่ห้อ", "คงเหลือ", "หน่วย", "วันหมดอายุ (ใกล้สุด)", "ตำแหน่ง", "ขั้นต่ำ"]
   ));
   const exportConsumables = () => download("consumables.csv", toCSV(
     consumables.map(s => [s.name, s.quantity, s.unit, s.minThreshold]),
