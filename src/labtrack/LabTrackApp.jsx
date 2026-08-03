@@ -708,11 +708,19 @@ function Tag({ children, color }) {
 function Table({ cols, rows, empty }) {
   return (
     <div style={S.tableWrap}>
-      <table style={S.table}>
+      <table style={S.table} className="ltTable">
         <thead><tr>{cols.map((c, i) => <th key={i} style={S.th}>{c}</th>)}</tr></thead>
         <tbody>
           {rows.length === 0 && <tr><td colSpan={cols.length}><EmptyState text={empty} /></td></tr>}
-          {rows.map((r, i) => <tr key={i} style={S.tr}>{r.map((c, j) => <td key={j} style={S.td}>{c}</td>)}</tr>)}
+          {rows.map((r, i) => (
+            <tr key={i} style={S.tr} className="ltTableRow">
+              {r.map((c, j) => (
+                <td key={j} style={S.td} data-label={cols[j]} className={j === 0 ? "ltTableTitleCell" : "ltTableCell"}>
+                  {c}
+                </td>
+              ))}
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -777,6 +785,24 @@ button { cursor: pointer; }
   .ltHero { padding: 18px 16px !important; border-radius: 12px !important; }
   .ltH1 { font-size: 20px !important; }
   .ltFormGrid { grid-template-columns: 1fr !important; }
+
+  /* Chemicals / Consumables tables: collapse into stacked cards */
+  .ltTable thead { display: none !important; }
+  .ltTable, .ltTable tbody, .ltTableRow { display: block !important; width: 100% !important; }
+  .ltTableRow { padding: 12px 14px !important; }
+  .ltTableCell, .ltTableTitleCell {
+    display: flex !important; justify-content: space-between !important; align-items: center !important;
+    gap: 10px !important; padding: 4px 0 !important; border: none !important; text-align: right !important;
+  }
+  .ltTableTitleCell {
+    font-weight: 600 !important; font-size: 13.5px !important; justify-content: flex-start !important;
+    text-align: left !important; border-bottom: 1px solid var(--line) !important;
+    padding-bottom: 6px !important; margin-bottom: 4px !important;
+  }
+  .ltTableCell::before {
+    content: attr(data-label); font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0; text-align: left;
+  }
 }
 `;
 
