@@ -1,0 +1,2137 @@
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { FlaskConical, Plus, X, RefreshCw, LayoutGrid, ListChecks, Users, Layers, Trash2, Play, CheckCircle2, CircleDot, Circle, ChevronRight, ChevronDown, AlertCircle, AlertTriangle, Clock, ClipboardPaste, Sparkles, Search, Wrench } from "lucide-react";
+import { db } from "./firebase";
+import { ref, onValue, set, remove, runTransaction } from "firebase/database";
+
+const C = {
+  bg: "#FFFFFF",
+  bg2: "#F3F8FD",
+  panel: "#FFFFFF",
+  panel2: "#EAF3FB",
+  border: "#D3E6F5",
+  borderSoft: "#E4EFF9",
+  text: "#0B2A4A",
+  textMuted: "#5B7A96",
+  textFaint: "#9BB4C9",
+  amber: "#C97F0E",
+  amberDim: "#FBEBD3",
+  green: "#1E9E6B",
+  greenDim: "#DCF3E9",
+  gray: "#7E93A6",
+  cyan: "#0E6FBA",
+  cyanDim: "#DCEDFB",
+  red: "#C6493B",
+  redDim: "#FBE4E1",
+};
+
+const STATUS = { WAIT: "Waiting", RUN: "Running", DONE: "Complete" };
+const STATUS_RANK = { [STATUS.DONE]: 0, [STATUS.RUN]: 1, [STATUS.WAIT]: 2 };
+
+function nowHM() {
+  return new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function nowTS() {
+  return Date.now();
+}
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WARN_DAYS = 10; // แจ้งเตือนเมื่อใกล้ครบกำหนด
+const LATE_DAYS = 15; // ถือว่าล่าช้าเมื่อครบกำหนดนี้
+const LATE_REPEAT_DAYS = 10; // แจ้งเตือนซ้ำทุกกี่วันหลังจากล่าช้าแล้ว
+const LATE_REPEAT_MS = LATE_REPEAT_DAYS * DAY_MS;
+
+// Convert a timestamp to a yyyy-mm-dd string for <input type="date">, in
+// local time (so it lines up with what the user sees in fmtDate).
+function tsToDateInputValue(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+// Apply a yyyy-mm-dd date-input value to a base timestamp, keeping the
+// original time-of-day (so "days since" math stays stable within a day).
+function dateInputValueToTs(value, baseTs) {
+  if (!value) return baseTs ?? nowTS();
+  const [y, m, d] = value.split("-").map(Number);
+  if (!y || !m || !d) return baseTs ?? nowTS();
+  const dt = new Date(baseTs ?? nowTS());
+  dt.setFullYear(y, m - 1, d);
+  return dt.getTime();
+}
+
+function daysSince(ts) {
+  if (!ts) return 0;
+  return Math.floor((nowTS() - ts) / DAY_MS);
+}
+// Thai date, e.g. 23 ก.ค. 2569 (พ.ศ.)
+function fmtDate(ts) {
+  if (!ts) return "-";
+  return new Date(ts).toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
+}
+// Compact date + time, e.g. "23 ก.ค. 09:42" — used for start/finish columns
+// so it's clear which day a measurement was started or completed on, not
+// just the time of day.
+function fmtDateTime(ts) {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  const date = d.toLocaleDateString("th-TH", { day: "2-digit", month: "short" });
+  const time = d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return `${date} ${time}`;
+}
+// Prefers the full date+time from a stored timestamp; falls back to the
+// old time-only label for rows saved before finishTs/startTs existed.
+function tsLabel(ts, fallbackLabel) {
+  if (ts) return fmtDateTime(ts);
+  return fallbackLabel || "-";
+}
+// Deadline urgency for a job, based on days since creation.
+// Only meaningful while the job isn't fully complete.
+function deadlineInfo(job) {
+  const days = daysSince(job.createdAt);
+  const done = computeJobStats(job).status === STATUS.DONE;
+  if (done) return { level: "done", days };
+  if (days >= LATE_DAYS) return { level: "late", days };
+  if (days >= WARN_DAYS) return { level: "warn", days };
+  return { level: "ok", days };
+}
+
+// Converts a dd/mm/yyyy string (as printed on lab documents) to a timestamp.
+function thaiDateToTs(str) {
+  const m = str && str.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!m) return null;
+  const [, d, mo, y] = m;
+  const ts = new Date(`${y}-${mo}-${d}T00:00:00`).getTime();
+  return Number.isNaN(ts) ? null : ts;
+}
+
+// Elements that get folded into a single "ICP-A" / "ICP-B" parameter when
+// they appear as "Total <element>" or "Extractable <element>" bullets, per
+// the lab's grouping convention:
+//   Total/Extractable K, Ca, Mg, Na                                -> ICP-A
+//   Total/Extractable Zn, Mn, Cu, S, Fe, Si, Al, Pb, As, Hg, Cr     -> ICP-B
+const ICP_ELEMENT_GROUP = {
+  k: "A", ca: "A", mg: "A", na: "A",
+  zn: "B", mn: "B", cu: "B", s: "B", fe: "B", si: "B", al: "B", pb: "B", as: "B", hg: "B", cr: "B",
+};
+
+// Collapses any "Total <element>" / "Extractable <element>" bullet whose
+// element is in ICP_ELEMENT_GROUP into a single "<Prefix> ICP-<A|B>" entry
+// (even if only one such element was present), keeping everything else
+// (and original ordering) untouched.
+function groupICPParameters(params) {
+  const seen = new Set();
+  const result = [];
+  for (const raw of params) {
+    const m = raw.match(/^(Total|Extractable)\s+([A-Za-z]+)$/i);
+    const group = m ? ICP_ELEMENT_GROUP[m[2].toLowerCase()] : null;
+    if (m && group) {
+      const prefix = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+      const label = `${prefix} ICP-${group}`;
+      if (!seen.has(label)) {
+        seen.add(label);
+        result.push(label);
+      }
+      continue;
+    }
+    result.push(raw);
+  }
+  return result;
+}
+
+// Parses text pasted from a "ใบแจกจ่ายงานวิเคราะห์ / ข้อมูลทะเบียนและรายชื่อ" document
+// (or similar job-order sheet) and pulls out the job number, parameter list,
+// and individual sample registration numbers/names it can recognize.
+// Anything it can't find is just left blank for the user to fill in by hand.
+function parseImportText(text) {
+  const norm = (text || "").replace(/\r\n/g, "\n");
+
+  const jobNoMatch = norm.match(/\b([A-Za-z]{1,5}\d{2}-\d{3,7})\b/);
+  const jobNo = jobNoMatch ? jobNoMatch[1].toUpperCase() : "";
+
+  const rawParameters = [...norm.matchAll(/^[•·][ \t]*(.+?)[ \t]*$/gm)]
+    .map((m) => m[1].trim())
+    .filter(Boolean);
+  const parameters = groupICPParameters(rawParameters);
+
+  let sampleType = "";
+  const typeMatch = norm.match(/ประเภทตัวอย[่]?าง[^\n]*\n[ \t]*([^\n]+)/);
+  if (typeMatch) {
+    // The matched line can sometimes be a full table row (e.g. "05486 05493
+    // 8 น้าตาล") rather than a clean label value — strip pure-digit tokens
+    // (registration numbers / counts) so only the descriptive type remains.
+    sampleType = typeMatch[1]
+      .split(/\s+/)
+      .filter((t) => t && !/^\d+$/.test(t))
+      .join(" ")
+      .trim();
+  }
+
+  const rangeMatch = norm.match(/(\d{4,7})[ \t]*-[ \t]*(\d{4,7})/);
+  const rangeStart = rangeMatch ? rangeMatch[1] : "";
+  const rangeEnd = rangeMatch ? rangeMatch[2] : "";
+
+  const countMatch = norm.match(/(\d+)[ \t]*ตัวอย[่]?าง[่]?/);
+  const totalSamples = countMatch ? parseInt(countMatch[1], 10) : null;
+
+  const dates = [...norm.matchAll(/(\d{2}\/\d{2}\/\d{4})/g)].map((m) => m[1]);
+  const receivedDate = dates[0] || "";
+  const dueDate = dates[1] || "";
+
+  // Individual sub-sample / registration-number rows are intentionally NOT
+  // parsed into a per-sample list — imports should only surface the sample
+  // count and the registration-number range, not every single sub-sample line.
+  const samples = [];
+
+  // Prefer an explicit "N ตัวอย่าง" count from the document; otherwise derive
+  // it from the registration-number range (end - start + 1).
+  const rangeCount =
+    rangeStart && rangeEnd ? parseInt(rangeEnd, 10) - parseInt(rangeStart, 10) + 1 : null;
+  const sampleCount = totalSamples || rangeCount;
+
+  // e.g. "60 ตัวอย่าง เลข 005-064"
+  const sampleSummary = [
+    sampleCount ? `${sampleCount} ตัวอย่าง` : "",
+    rangeStart && rangeEnd ? `เลข ${rangeStart}-${rangeEnd}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return { jobNo, parameters, samples, sampleSummary, receivedDate, dueDate };
+}
+// jobs are already sorted numerically descending (see subscribeJobs), so
+// jobs[0] is the latest job number actually used. We bump its trailing
+// number by 1, keeping the same prefix and zero-padding width.
+// Falls back to the old LAB{yy}{mm}{seq} scheme if there are no jobs yet.
+function genJobNo(jobs) {
+  if (jobs.length > 0) {
+    const latest = jobs[0].jobNo || "";
+    const match = latest.match(/^(.*?)(\d+)$/);
+    if (match) {
+      const [, prefix, digits] = match;
+      const next = String(parseInt(digits, 10) + 1).padStart(digits.length, "0");
+      return `${prefix}${next}`;
+    }
+  }
+  const d = new Date();
+  const yy = String(d.getFullYear() + 543).slice(-2);
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const seq = String(jobs.length + 1).padStart(3, "0");
+  return `LAB${yy}${mm}${seq}`;
+}
+
+// Parses a registration number string like "05171" into its numeric value
+// and zero-padded width (so we can keep the same digit-count when we
+// generate the next range, e.g. "00099" -> width 5, not just "99").
+function parseRegNo(str) {
+  const m = (str || "").trim().match(/^(\d+)$/);
+  return m ? { num: parseInt(m[1], 10), width: m[1].length } : null;
+}
+// Given a starting registration number and a sample count, returns the
+// ending registration number (start + count - 1), zero-padded to match
+// the width of the start value.
+function computeRegEnd(start, count) {
+  const p = parseRegNo(start);
+  const n = parseInt(count, 10);
+  if (!p || !n || n < 1) return "";
+  return String(p.num + n - 1).padStart(p.width, "0");
+}
+// Finds the highest registration number used across all existing jobs
+// (checking both the new regStart/regEnd fields and, for backward
+// compatibility, any old per-sample "samples" arrays) and returns the
+// next number after it, zero-padded to match the width of whatever was
+// found. Returns "" if no registration numbers exist yet anywhere.
+function nextRegStart(jobs) {
+  let max = null;
+  for (const job of jobs) {
+    const candidates = [];
+    if (job.regEnd) candidates.push(job.regEnd);
+    else if (job.regStart) candidates.push(job.regStart);
+    if (job.samples) for (const s of job.samples) if (s.code) candidates.push(s.code);
+    for (const c of candidates) {
+      const p = parseRegNo(c);
+      if (p && (!max || p.num > max.num)) max = p;
+    }
+  }
+  if (!max) return "";
+  return String(max.num + 1).padStart(max.width, "0");
+}
+
+function statColor(status) {
+  if (status === STATUS.DONE) return C.green;
+  if (status === STATUS.RUN) return C.amber;
+  return C.gray;
+}
+
+function computeJobStats(job) {
+  const total = job.parameters.length;
+  const complete = job.parameters.filter((p) => p.status === STATUS.DONE).length;
+  const running = job.parameters.filter((p) => p.status === STATUS.RUN).length;
+  const progress = total === 0 ? 0 : Math.round((complete / total) * 100);
+  const status = total > 0 && complete === total ? STATUS.DONE : running > 0 ? STATUS.RUN : STATUS.WAIT;
+  return { total, complete, running, progress, status };
+}
+
+// True if a parameter has any unresolved "needs repair" flag (independent
+// of its WAIT/RUN/DONE status — a completed result can still be flagged for
+// re-analysis).
+function paramNeedsRepair(p) {
+  return (p.repairs || []).some((r) => !r.resolvedAt);
+}
+// Every unresolved repair across a whole job, used for the row badge in the
+// Jobs list and the "ต้องซ่อม" filter.
+function jobPendingRepairs(job) {
+  const items = [];
+  for (const p of job.parameters) {
+    for (const r of p.repairs || []) {
+      if (!r.resolvedAt) items.push({ param: p, repair: r });
+    }
+  }
+  return items;
+}
+
+// Groups every parameter by its analyst, split into three buckets so the
+// Analysts tab can show "currently running" separately from "not yet
+// queued" and "already finished".
+function computeAnalysts(jobs) {
+  const map = {};
+  for (const job of jobs) {
+    for (const p of job.parameters) {
+      if (!p.analyst) continue;
+      if (!map[p.analyst]) map[p.analyst] = { name: p.analyst, running: [], waiting: [], done: [], repair: [] };
+      const row = { ...p, jobNo: job.jobNo, sample: job.sample };
+      // Repair-flagged items get pulled into their own bucket regardless of
+      // WAIT/RUN/DONE status, so they show up as a distinct "ต้องซ่อม" queue
+      // instead of being buried inside running/waiting/done.
+      if (paramNeedsRepair(p)) map[p.analyst].repair.push(row);
+      else if (p.status === STATUS.RUN) map[p.analyst].running.push(row);
+      else if (p.status === STATUS.WAIT) map[p.analyst].waiting.push(row);
+      else map[p.analyst].done.push(row);
+    }
+  }
+  return Object.values(map).sort((a, b) => a.name.localeCompare(b.name, "th"));
+}
+
+// For each parameter name, finds the analyst most recently assigned to it
+// (by the parameter's updatedTs, falling back to the job's createdAt).
+// Used to auto-suggest an analyst when the same parameter is added to a
+// new job — always reflects the latest reassignment, since it's recomputed
+// live from current job data every time.
+function computeLastAnalystByParam(jobs) {
+  const latest = {};
+  for (const job of jobs) {
+    for (const p of job.parameters) {
+      if (!p.name || !p.analyst) continue;
+      const key = p.name.trim();
+      const ts = p.updatedTs || job.createdAt || 0;
+      if (!latest[key] || ts > latest[key].ts) {
+        latest[key] = { analyst: p.analyst, ts };
+      }
+    }
+  }
+  const out = {};
+  for (const key in latest) out[key] = latest[key].analyst;
+  return out;
+}
+
+function computeParamQueue(jobs) {
+  const map = {};
+  for (const job of jobs) {
+    for (const p of job.parameters) {
+      if (!p.name) continue;
+      if (!map[p.name]) {
+        map[p.name] = { name: p.name, total: 0, waiting: 0, running: 0, complete: 0, analysts: new Set() };
+      }
+      const g = map[p.name];
+      g.total += 1;
+      if (p.status === STATUS.WAIT) g.waiting += 1;
+      if (p.status === STATUS.RUN) g.running += 1;
+      if (p.status === STATUS.DONE) g.complete += 1;
+      if (p.analyst) g.analysts.add(p.analyst);
+    }
+  }
+  return Object.values(map)
+    .map((g) => ({ ...g, analysts: [...g.analysts].sort((a, b) => a.localeCompare(b, "th")) }))
+    .sort((x, y) => y.waiting + y.running - (x.waiting + x.running));
+}
+
+function paramJobs(jobs, name) {
+  const rows = [];
+  for (const job of jobs) {
+    for (const p of job.parameters) {
+      if (p.name === name) rows.push({ ...p, jobNo: job.jobNo, sample: job.sample });
+    }
+  }
+  const order = { [STATUS.RUN]: 0, [STATUS.WAIT]: 1, [STATUS.DONE]: 2 };
+  rows.sort((x, y) => (order[x.status] ?? 3) - (order[y.status] ?? 3));
+  return rows;
+}
+
+function StatusGlyph({ status, size = 15 }) {
+  if (status === STATUS.DONE) return <CheckCircle2 size={size} color={C.green} strokeWidth={2} />;
+  if (status === STATUS.RUN) return <CircleDot size={size} color={C.amber} strokeWidth={2} />;
+  return <Circle size={size} color={C.textFaint} strokeWidth={2} />;
+}
+
+function Badge({ children, color, bg }) {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: 0.3,
+        padding: "2px 8px",
+        borderRadius: 3,
+        color,
+        background: bg,
+        fontFamily: "monospace",
+        textTransform: "uppercase",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function StatusBadge({ status }) {
+  if (status === STATUS.DONE) return <Badge color={C.green} bg={C.greenDim}>Complete</Badge>;
+  if (status === STATUS.RUN) return <Badge color={C.amber} bg={C.amberDim}>Running</Badge>;
+  return <Badge color={C.textMuted} bg={C.panel2}>Waiting</Badge>;
+}
+
+// Shows how many days a job has been open, colored by deadline urgency:
+// < 10 days = normal, 10-14 days = amber warning, 15+ days = red "late".
+function DeadlineBadge({ job }) {
+  const { level, days } = deadlineInfo(job);
+  if (level === "done") return null;
+  if (level === "late") return <Badge color={C.red} bg={C.redDim}>ล่าช้า {days} วัน</Badge>;
+  if (level === "warn") return <Badge color={C.amber} bg={C.amberDim}>ใกล้ครบกำหนด {days} วัน</Badge>;
+  return <span style={{ fontSize: 11, color: C.textFaint, fontFamily: "monospace" }}>{days} วัน</span>;
+}
+
+// Segments always render complete -> running -> waiting, left to right,
+// regardless of the order parameters were added in, so progress is
+// comparable at a glance across jobs.
+function ProgressBar({ job }) {
+  const ordered = [...job.parameters].sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status]);
+  return (
+    <div style={{ display: "flex", height: 7, borderRadius: 4, overflow: "hidden", background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+      {ordered.map((p) => (
+        <div key={p.id} style={{ flex: 1, background: statColor(p.status) }} />
+      ))}
+    </div>
+  );
+}
+
+function DeadlinePill({ job }) {
+  const { level, days } = deadlineInfo(job);
+  if (level === "done") {
+    return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, color: C.green }}><CheckCircle2 size={12} /> เสร็จสมบูรณ์</span>;
+  }
+  if (level === "late") {
+    return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, color: C.red, background: C.redDim, padding: "3px 8px", borderRadius: 5 }}><AlertTriangle size={12} /> ล่าช้า {days} วัน</span>;
+  }
+  if (level === "warn") {
+    return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, color: C.amber, background: C.amberDim, padding: "3px 8px", borderRadius: 5 }}><Clock size={12} /> ใกล้ครบกำหนด · เหลือ {LATE_DAYS - days} วัน</span>;
+  }
+  return <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: "monospace" }}>{days} วัน</span>;
+}
+
+function MetricCard({ label, value, color, icon: Icon }) {
+  return (
+    <div style={{ flex: 1, background: C.panel2, borderRadius: 8, padding: "14px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        {Icon && <Icon size={13} color={color} />}
+        <div style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{label}</div>
+      </div>
+      <div style={{ fontSize: 25, fontWeight: 700, fontFamily: "monospace", color }}>{value}</div>
+    </div>
+  );
+}
+
+function JobRow({ job, onOpen }) {
+  const stats = computeJobStats(job);
+  const visible = job.parameters.slice(0, 6);
+  const rest = job.parameters.length - visible.length;
+  return (
+    <div
+      onClick={() => onOpen(job.jobNo)}
+      style={{ padding: "14px 4px", borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <span style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 14 }}>{job.jobNo}</span>
+          <span style={{ fontSize: 12, background: C.panel2, color: C.textMuted, padding: "2px 8px", borderRadius: 4, fontWeight: 600 }}>{job.sample || "-"}</span>
+          {(job.regStart || job.regEnd) && (
+            <span style={{ fontSize: 11.5, color: C.textFaint, fontFamily: "monospace" }}>{job.regStart}–{job.regEnd}{job.sampleCount ? ` (${job.sampleCount})` : ""}</span>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
+          <DeadlinePill job={job} />
+          <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.text, minWidth: 34, textAlign: "right" }}>{stats.progress}%</span>
+          <ChevronRight size={15} color={C.textFaint} />
+        </div>
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <ProgressBar job={job} />
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+        {visible.map((p) => (
+          <span key={p.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: p.status === STATUS.WAIT ? C.textFaint : C.text }}>
+            <StatusGlyph status={p.status} size={12} /> {p.name}
+          </span>
+        ))}
+        {rest > 0 && <span style={{ fontSize: 11.5, color: C.textFaint, fontStyle: "italic" }}>+{rest} พารามิเตอร์</span>}
+      </div>
+    </div>
+  );
+}
+
+function Btn({ children, onClick, kind = "default", small, disabled, title }) {
+  const styles = {
+    default: { bg: "transparent", border: C.border, color: C.text },
+    primary: { bg: C.cyan, border: C.cyan, color: "#FFFFFF" },
+    danger: { bg: "transparent", border: C.red, color: C.red },
+    amber: { bg: C.amber, border: C.amber, color: "#FFFFFF" },
+    green: { bg: C.green, border: C.green, color: "#FFFFFF" },
+  };
+  const s = styles[kind];
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        background: s.bg,
+        border: `1px solid ${s.border}`,
+        color: s.color,
+        borderRadius: 5,
+        padding: small ? "4px 9px" : "7px 14px",
+        fontSize: small ? 12 : 13,
+        fontWeight: 600,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.4 : 1,
+        fontFamily: "inherit",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Panel({ children, style }) {
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, ...style }}>
+      {children}
+    </div>
+  );
+}
+
+// ---------- storage (Firebase Realtime Database) ----------
+// All jobs live under the "jobs/{jobNo}" path. We subscribe with onValue
+// in the App component so every connected user sees updates live.
+function subscribeJobs(callback, onError) {
+  const jobsRef = ref(db, "jobs");
+  return onValue(
+    jobsRef,
+    (snapshot) => {
+      const val = snapshot.val() || {};
+      const jobs = Object.values(val);
+      jobs.sort((a, b) => (b.jobNo || "").localeCompare(a.jobNo || "", undefined, { numeric: true }));
+      callback(jobs);
+    },
+    (err) => onError && onError(err)
+  );
+}
+async function saveJob(job) {
+  await set(ref(db, `jobs/${job.jobNo}`), job);
+}
+// Atomically claims a "...NotifiedAt" flag on a single job field. This app
+// is shared by the whole team (everyone has it open at once), and the two
+// automatic notification effects in App() used to do a plain read-then-write:
+// each client read `job.lateNotifiedAt`/`job.doneNotifiedAt` from its own
+// local `jobs` state, and if it looked unset, wrote a new timestamp and then
+// fired the LINE message. When two clients had the same job in front of them
+// at the same moment (e.g. right as the last parameter was marked Complete),
+// both would see the flag as unset *before* either write landed, so both
+// wrote and both notified — that's the duplicate "งานเสร็จสมบูรณ์"/"งานล่าช้า"
+// messages.
+// runTransaction fixes this: Firebase re-runs the update function against the
+// latest value straight from the server (and retries on conflict), so when
+// two clients race, only one of them ever gets a commit where `shouldClaim`
+// still returns true — the loser's function reruns against the winner's new
+// value and returns undefined, which aborts its write. Only the winner
+// should call the LINE notify function.
+async function claimNotifyFlag(jobNo, field, shouldClaim) {
+  const flagRef = ref(db, `jobs/${jobNo}/${field}`);
+  const result = await runTransaction(flagRef, (current) => {
+    if (!shouldClaim(current)) return; // undefined = abort, leave it alone
+    return nowTS();
+  });
+  return result.committed;
+}
+async function notifyLine(message) {
+  try {
+    await fetch("/api/notify-line", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+  } catch (e) {
+    // ไม่ต้อง block การทำงานหลักถ้าแจ้งเตือนพลาด
+    console.error("notify-line failed", e);
+  }
+}
+function notifyLineJobDone(job) {
+  return notifyLine(
+    [
+      `✅ งานเสร็จสมบูรณ์: ${job.jobNo}`,
+      `ประเภทตัวอย่าง: ${job.sample || "-"}`,
+    ].join("\n")
+  );
+}
+// Parse a free-typed list of registration numbers, split on comma/space/
+// newline/semicolon, trimmed, empties dropped, duplicates removed.
+function parseRegList(text) {
+  return Array.from(
+    new Set(
+      String(text || "")
+        .split(/[\s,;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  );
+}
+function notifyLineRepairFlag(job, param, regNos) {
+  return notifyLine(
+    [
+      `🔧 แจ้งซ่อมผล: ${job.jobNo}`,
+      `พารามิเตอร์: ${param.name || "-"}`,
+      `เลขทะเบียน: ${regNos.join(", ")}`,
+    ].join("\n")
+  );
+}
+function notifyLineRepairDone(job, param, regNos) {
+  return notifyLine(
+    [
+      `✅ ซ่อมผลเสร็จแล้ว: ${job.jobNo}`,
+      `พารามิเตอร์: ${param.name || "-"}`,
+      `เลขทะเบียน: ${regNos.join(", ")}`,
+    ].join("\n")
+  );
+}
+function notifyLineJobLate(job) {
+  const pendingParams = (job.parameters || [])
+    .filter((p) => p.status !== STATUS.DONE)
+    .map((p) => p.name)
+    .filter(Boolean);
+  return notifyLine(
+    [
+      `⏰ งานล่าช้า: ${job.jobNo}`,
+      `ประเภทตัวอย่าง: ${job.sample || "-"}`,
+      `พารามิเตอร์ที่ยังไม่เสร็จ: ${pendingParams.join(", ") || "-"}`,
+    ].join("\n")
+  );
+}
+function notifyLineNewJob(job) {
+  const paramNames = (job.parameters || []).map((p) => p.name).filter(Boolean).join(", ");
+  const regRange = job.regStart || job.regEnd ? `${job.regStart || "-"}–${job.regEnd || "-"}` : "-";
+  return notifyLine(
+    [
+      `🆕📥 งานใหม่: ${job.jobNo}`,
+      `ประเภทตัวอย่าง: ${job.sample || "-"}`,
+      `ช่วงเลขตัวอย่าง: ${regRange}`,
+      `จำนวนตัวอย่าง: ${job.sampleCount ? `${job.sampleCount} ตัวอย่าง` : "-"}`,
+      `พารามิเตอร์: ${paramNames || "-"}`,
+    ].join("\n")
+  );
+}
+async function deleteJobStorage(jobNo) {
+  await remove(ref(db, `jobs/${jobNo}`));
+}
+
+// ---------- New / Edit Job Form ----------
+function NewJobForm({ onCancel, onCreate, onSaveEdit, suggestedNo, suggestedRegStart = "", knownAnalysts, knownParams, knownSamples, editingJob, existingJobNos = [], lastAnalystByParam = {} }) {
+  const isEdit = !!editingJob;
+  const [jobNo, setJobNo] = useState(isEdit ? editingJob.jobNo : suggestedNo);
+  const [sample, setSample] = useState(isEdit ? editingJob.sample || "" : "");
+  const [rows, setRows] = useState(
+    isEdit
+      ? editingJob.parameters.map((p) => ({ id: p.id, name: p.name, analyst: p.analyst || lastAnalystByParam[(p.name || "").trim()] || "" }))
+      : [
+          { id: uid(), name: "", analyst: "" },
+          { id: uid(), name: "", analyst: "" },
+        ]
+  );
+
+  // Changing a row's parameter name auto-suggests the analyst who most
+  // recently ran that same parameter elsewhere in the system — only when
+  // the analyst field is still empty, so it never overwrites a manual pick.
+  const updateRow = (id, field, val) => {
+    setRows((rs) =>
+      rs.map((r) => {
+        if (r.id !== id) return r;
+        const next = { ...r, [field]: val };
+        if (field === "name" && !r.analyst.trim()) {
+          const suggestion = lastAnalystByParam[val.trim()];
+          if (suggestion) next.analyst = suggestion;
+        }
+        return next;
+      })
+    );
+  };
+  const addRow = () => setRows((rs) => [...rs, { id: uid(), name: "", analyst: "" }]);
+  const removeRow = (id) => setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.id !== id) : rs));
+
+  // Sample count + registration-number range for this job (e.g. 60 samples,
+  // เลขทะเบียน 05171-05230). Auto-generated from the latest registration
+  // number used across all jobs, but fully editable by hand.
+  // Backward compatibility: older jobs may only have an old per-sample
+  // "samples" array (no regStart/regEnd/sampleCount) — derive from that.
+  const legacySamples = isEdit && !editingJob.regStart && editingJob.samples && editingJob.samples.length > 0 ? editingJob.samples : null;
+  const [regCount, setRegCount] = useState(
+    isEdit ? editingJob.sampleCount ?? (legacySamples ? legacySamples.length : "") : ""
+  );
+  const [regStart, setRegStart] = useState(
+    isEdit ? editingJob.regStart || (legacySamples ? legacySamples[0].code : "") : suggestedRegStart
+  );
+  const [regEnd, setRegEnd] = useState(
+    isEdit
+      ? editingJob.regEnd || (legacySamples ? legacySamples[legacySamples.length - 1].code : "")
+      : computeRegEnd(suggestedRegStart, "")
+  );
+  const handleRegCountChange = (val) => {
+    const cleaned = val.replace(/[^\d]/g, "");
+    const n = cleaned === "" ? "" : parseInt(cleaned, 10);
+    setRegCount(n);
+    setRegEnd(computeRegEnd(regStart, n));
+  };
+  const handleRegStartChange = (val) => {
+    setRegStart(val);
+    setRegEnd(computeRegEnd(val, regCount));
+  };
+  const handleRegEndChange = (val) => setRegEnd(val);
+
+  // "Import from document" panel: paste raw text copied from a job-order
+  // sheet (PDF/Word) and auto-fill job no / parameters / samples from it.
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importInfo, setImportInfo] = useState(null);
+  const [createdTs, setCreatedTs] = useState(isEdit ? editingJob.createdAt || nowTS() : nowTS());
+
+  const handleParseImport = () => {
+    const parsed = parseImportText(importText);
+    const foundAnything = parsed.jobNo || parsed.parameters.length > 0 || parsed.sampleSummary;
+    if (!foundAnything) {
+      setImportInfo({ ok: false, msg: "ไม่พบรหัสงาน/พารามิเตอร์/ตัวอย่างในข้อความนี้ ลองวางข้อความทั้งหมดจากเอกสารอีกครั้ง" });
+      return;
+    }
+    if (!isEdit && parsed.jobNo) setJobNo(parsed.jobNo);
+    if (parsed.sampleSummary) setSample(parsed.sampleSummary);
+    if (parsed.parameters.length > 0) {
+      setRows(parsed.parameters.map((name) => ({ id: uid(), name, analyst: lastAnalystByParam[name.trim()] || "" })));
+    }
+    // Prefill the sample count / registration-number range from the
+    // document when found; otherwise leave the current values as-is so an
+    // existing auto-suggested/manually-edited range isn't clobbered.
+    let nextStart = regStart;
+    let nextCount = regCount;
+    const rangeMatch = importText.match(/(\d{4,7})[ \t]*-[ \t]*(\d{4,7})/);
+    if (rangeMatch) nextStart = rangeMatch[1];
+    const countMatch = importText.match(/(\d+)[ \t]*ตัวอย[่]?าง[่]?/);
+    if (countMatch) nextCount = parseInt(countMatch[1], 10);
+    else if (rangeMatch) nextCount = parseInt(rangeMatch[2], 10) - parseInt(rangeMatch[1], 10) + 1;
+    if (rangeMatch || countMatch) {
+      setRegStart(nextStart);
+      setRegCount(nextCount);
+      setRegEnd(rangeMatch ? rangeMatch[2] : computeRegEnd(nextStart, nextCount));
+    }
+    if (parsed.receivedDate) setCreatedTs(thaiDateToTs(parsed.receivedDate));
+    setImportInfo({
+      ok: true,
+      msg: `นำเข้าแล้ว — พารามิเตอร์ ${parsed.parameters.length} รายการ${parsed.sampleSummary ? `, ตัวอย่าง: ${parsed.sampleSummary}` : ""} ตรวจสอบและแก้ไขเพิ่มเติมได้ตามต้องการ`,
+    });
+  };
+
+  const isDuplicate = !isEdit && existingJobNos.includes(jobNo.trim());
+  const canSubmit = jobNo.trim() && rows.some((r) => r.name.trim()) && !isDuplicate;
+
+  const submit = () => {
+    if (isEdit) {
+      const existingById = Object.fromEntries(editingJob.parameters.map((p) => [p.id, p]));
+      const parameters = rows
+        .filter((r) => r.name.trim())
+        .map((r) => {
+          const prev = existingById[r.id];
+          if (prev) {
+            // keep status/timestamps of parameters that already existed; just
+            // update name/analyst — but if the analyst was reassigned, bump
+            // updatedTs so this counts as the newest assignment for that
+            // parameter (used to auto-suggest analysts on future jobs).
+            const newAnalyst = r.analyst.trim();
+            const reassigned = newAnalyst !== (prev.analyst || "");
+            return {
+              ...prev,
+              name: r.name.trim(),
+              analyst: newAnalyst,
+              ...(reassigned ? { updatedTs: nowTS(), updatedLabel: nowHM() } : {}),
+            };
+          }
+          // brand-new row added during edit
+          return {
+            id: r.id,
+            name: r.name.trim(),
+            analyst: r.analyst.trim(),
+            status: STATUS.WAIT,
+            start: null,
+            finish: null,
+            startTs: null,
+            updatedTs: nowTS(),
+            updatedLabel: nowHM(),
+          };
+        });
+      const { samples: _legacySamples, ...restEditingJob } = editingJob;
+      onSaveEdit({
+        ...restEditingJob,
+        sample: sample.trim(),
+        parameters,
+        createdAt: createdTs,
+        lateNotifiedAt: null,
+        regStart: regStart.trim(),
+        regEnd: regEnd.trim(),
+        sampleCount: regCount || 0,
+      });
+    } else {
+      const parameters = rows
+        .filter((r) => r.name.trim())
+        .map((r) => ({
+          id: uid(),
+          name: r.name.trim(),
+          analyst: r.analyst.trim(),
+          status: STATUS.WAIT,
+          start: null,
+          finish: null,
+          startTs: null,
+          updatedTs: nowTS(),
+          updatedLabel: nowHM(),
+        }));
+      onCreate({
+        jobNo: jobNo.trim(),
+        sample: sample.trim(),
+        createdAt: createdTs || nowTS(),
+        parameters,
+        regStart: regStart.trim(),
+        regEnd: regEnd.trim(),
+        sampleCount: regCount || 0,
+      });
+    }
+  };
+
+  const inputStyle = {
+    background: C.bg2,
+    border: `1px solid ${C.border}`,
+    color: C.text,
+    borderRadius: 5,
+    padding: "7px 9px",
+    fontSize: 13,
+    fontFamily: "inherit",
+    width: "100%",
+    outline: "none",
+  };
+
+  return (
+    <Panel style={{ padding: 18, marginBottom: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>
+          <FlaskConical size={16} color={C.cyan} />
+          {isEdit ? `แก้ไขรหัสงาน ${editingJob.jobNo}` : "สร้างรหัสงานใหม่"}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Btn small onClick={() => setShowImport((v) => !v)}>
+            <ClipboardPaste size={13} /> วางข้อความจากเอกสาร
+          </Btn>
+          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted }}>
+            <X size={18} />
+          </button>
+        </div>
+      </div>
+
+      {showImport && (
+        <div style={{ background: C.bg2, border: `1px dashed ${C.border}`, borderRadius: 6, padding: 12, marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>
+            วางข้อความที่คัดลอกจากใบแจกจ่ายงานวิเคราะห์ / ข้อมูลทะเบียนและรายชื่อ ระบบจะพยายามดึงรหัสงาน พารามิเตอร์ และเลขทะเบียนตัวอย่างให้อัตโนมัติ — ตรวจสอบและแก้ไขเพิ่มลดเองได้ก่อนบันทึก
+          </div>
+          <textarea
+            value={importText}
+            onChange={(e) => { setImportText(e.target.value); setImportInfo(null); }}
+            placeholder="วางข้อความทั้งหมดจากเอกสารตรงนี้..."
+            rows={6}
+            style={{ ...inputStyle, fontFamily: "monospace", fontSize: 12, resize: "vertical", marginBottom: 8 }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <Btn small kind="primary" onClick={handleParseImport} disabled={!importText.trim()}>
+              <Sparkles size={13} /> แยกข้อมูลอัตโนมัติ
+            </Btn>
+            {importInfo && (
+              <div style={{ fontSize: 12, color: importInfo.ok ? C.green : C.red, maxWidth: 420, textAlign: "right" }}>
+                {importInfo.msg}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+        <div>
+          <label style={{ fontSize: 11, color: C.textMuted, display: "block", marginBottom: 4 }}>รหัสงาน (Job No)</label>
+          <input
+            style={{ ...inputStyle, fontFamily: "monospace", opacity: isEdit ? 0.6 : 1 }}
+            value={jobNo}
+            onChange={(e) => setJobNo(e.target.value)}
+            disabled={isEdit}
+            readOnly={isEdit}
+          />
+          {isDuplicate && (
+            <div style={{ fontSize: 11, color: C.red, marginTop: 4 }}>รหัสงานนี้มีอยู่แล้ว กรุณาใช้เลขอื่น</div>
+          )}
+        </div>
+        <div>
+          <label style={{ fontSize: 11, color: C.textMuted, display: "block", marginBottom: 4 }}>ตัวอย่าง (Sample)</label>
+          <input
+            style={inputStyle}
+            list="sample-list"
+            value={sample}
+            onChange={(e) => setSample(e.target.value)}
+            placeholder="พิมพ์หรือเลือกตัวอย่าง เช่น Soil-01"
+          />
+          <datalist id="sample-list">
+            {knownSamples.map((s) => <option key={s} value={s} />)}
+          </datalist>
+        </div>
+        <div>
+          <label style={{ fontSize: 11, color: C.textMuted, display: "block", marginBottom: 4 }}>วันที่สร้าง (Created)</label>
+          <input
+            type="date"
+            style={{ ...inputStyle, fontFamily: "monospace" }}
+            value={tsToDateInputValue(createdTs)}
+            onChange={(e) => setCreatedTs(dateInputValueToTs(e.target.value, createdTs))}
+          />
+        </div>
+      </div>
+
+
+      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+        พารามิเตอร์ ({rows.filter((r) => r.name.trim()).length})
+      </div>
+      <datalist id="analyst-list">
+        {knownAnalysts.map((a) => <option key={a} value={a} />)}
+      </datalist>
+      <datalist id="param-list">
+        {knownParams.map((p) => <option key={p} value={p} />)}
+      </datalist>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+        {rows.map((r, i) => (
+          <div key={r.id} style={{ display: "grid", gridTemplateColumns: "20px 1.5fr 1fr 26px", gap: 8, alignItems: "center" }}>
+            <div style={{ fontSize: 11, color: C.textFaint, fontFamily: "monospace" }}>{i + 1}</div>
+            <input style={inputStyle} placeholder="พารามิเตอร์ เช่น pH" list="param-list" value={r.name} onChange={(e) => updateRow(r.id, "name", e.target.value)} />
+            <input style={inputStyle} placeholder="ผู้วิเคราะห์" list="analyst-list" value={r.analyst} onChange={(e) => updateRow(r.id, "analyst", e.target.value)} />
+            <button onClick={() => removeRow(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textFaint }}>
+              <Trash2 size={15} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <Btn small onClick={addRow}><Plus size={14} /> เพิ่มพารามิเตอร์</Btn>
+      </div>
+
+      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+        จำนวนตัวอย่าง / เลขทะเบียน
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 6 }}>
+        <div>
+          <label style={{ fontSize: 11, color: C.textMuted, display: "block", marginBottom: 4 }}>จำนวนตัวอย่าง</label>
+          <input
+            style={{ ...inputStyle, fontFamily: "monospace" }}
+            placeholder="เช่น 60"
+            inputMode="numeric"
+            value={regCount}
+            onChange={(e) => handleRegCountChange(e.target.value)}
+          />
+        </div>
+        <div>
+          <label style={{ fontSize: 11, color: C.textMuted, display: "block", marginBottom: 4 }}>เลขทะเบียนเริ่มต้น</label>
+          <input
+            style={{ ...inputStyle, fontFamily: "monospace" }}
+            placeholder="เช่น 05171"
+            value={regStart}
+            onChange={(e) => handleRegStartChange(e.target.value)}
+          />
+        </div>
+        <div>
+          <label style={{ fontSize: 11, color: C.textMuted, display: "block", marginBottom: 4 }}>เลขทะเบียนสิ้นสุด</label>
+          <input
+            style={{ ...inputStyle, fontFamily: "monospace" }}
+            placeholder="คำนวณอัตโนมัติ"
+            value={regEnd}
+            onChange={(e) => handleRegEndChange(e.target.value)}
+          />
+        </div>
+      </div>
+      {regStart && regEnd && (
+        <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14, fontFamily: "monospace" }}>
+          เลขทะเบียน {regStart} - {regEnd}
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginTop: 14 }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn onClick={onCancel}>ยกเลิก</Btn>
+          <Btn kind="primary" onClick={submit} disabled={!canSubmit}>{isEdit ? "บันทึกการแก้ไข" : "บันทึกรหัสงาน"}</Btn>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+// Action button(s) for one parameter row in the job detail table. "ยกเลิก"
+// (reset a completed parameter back to Waiting) needs a second, deliberate
+// tap before it fires — it sits in the exact same spot as "เริ่ม"/"เสร็จ" on
+// neighboring rows, so a single misclick while scanning down the list
+// should never silently undo a finished result. The confirm auto-cancels
+// after a few seconds if left untouched.
+function ParamActions({ jobNo, p, onUpdateParam }) {
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+
+  if (p.status === STATUS.WAIT) {
+    return <Btn small kind="amber" onClick={() => onUpdateParam(jobNo, p.id, "start")}><Play size={12} /> เริ่ม</Btn>;
+  }
+  if (p.status === STATUS.RUN) {
+    return <Btn small kind="green" onClick={() => onUpdateParam(jobNo, p.id, "complete")}><CheckCircle2 size={12} /> เสร็จ</Btn>;
+  }
+  if (p.status === STATUS.DONE) {
+    if (confirming) {
+      return (
+        <>
+          <Btn small onClick={() => setConfirming(false)}>ไม่ใช่</Btn>
+          <Btn small kind="danger" onClick={() => { onUpdateParam(jobNo, p.id, "reset"); setConfirming(false); }}>ยืนยันยกเลิก</Btn>
+        </>
+      );
+    }
+    return (
+      <Btn small kind="danger" onClick={() => setConfirming(true)} title="ยกเลิกผลที่เสร็จแล้ว — ต้องกดยืนยันอีกครั้ง">ยกเลิก</Btn>
+    );
+  }
+  return null;
+}
+
+// Shows any registration numbers flagged as "needs repair" for a single
+// parameter (independent of the parameter's own WAIT/RUN/DONE status), and
+// a small inline form to flag new ones. Renders as an extra table row.
+function ParamRepairs({ jobNo, p, onFlagRepair, onResolveRepair }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const pending = (p.repairs || []).filter((r) => !r.resolvedAt);
+
+  const submit = () => {
+    if (!text.trim()) return;
+    onFlagRepair(jobNo, p.id, text);
+    setText("");
+    setOpen(false);
+  };
+
+  if (!open && pending.length === 0) {
+    return (
+      <tr style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+        <td></td>
+        <td colSpan={6} style={{ padding: "0 8px 8px" }}>
+          <button
+            onClick={() => setOpen(true)}
+            style={{ fontSize: 11, color: C.textFaint, background: "none", border: "none", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}
+          >
+            <Wrench size={11} /> แจ้งซ่อมผล
+          </button>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+      <td></td>
+      <td colSpan={6} style={{ padding: "0 8px 10px" }}>
+        {pending.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+            {pending.map((r) => (
+              <span
+                key={r.id}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 600, color: C.amber, background: C.amberDim, padding: "3px 6px 3px 8px", borderRadius: 5 }}
+              >
+                <Wrench size={11} /> {r.regNo}
+                <button
+                  onClick={() => onResolveRepair(jobNo, p.id, r.id)}
+                  title="ซ่อมเสร็จแล้ว"
+                  style={{ marginLeft: 2, border: "none", background: "rgba(255,255,255,0.6)", borderRadius: 4, width: 16, height: 16, lineHeight: "16px", cursor: "pointer", color: C.green, fontSize: 11, fontWeight: 800, padding: 0 }}
+                >
+                  ✓
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {open ? (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              autoFocus
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") { setOpen(false); setText(""); } }}
+              placeholder="เลขทะเบียนที่ต้องซ่อม เช่น 5233 5265 5266"
+              style={{ flex: 1, maxWidth: 320, padding: "5px 8px", fontSize: 12, borderRadius: 5, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontFamily: "monospace" }}
+            />
+            <Btn small onClick={submit}>บันทึก</Btn>
+            <Btn small onClick={() => { setOpen(false); setText(""); }}>ยกเลิก</Btn>
+          </div>
+        ) : (
+          <button
+            onClick={() => setOpen(true)}
+            style={{ fontSize: 11, color: C.textFaint, background: "none", border: "none", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}
+          >
+            <Wrench size={11} /> แจ้งซ่อมเพิ่ม
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+// ---------- Job Detail ----------
+function JobDetail({ job, onBack, onUpdateParam, onDeleteJob, onEditJob, onFlagRepair, onResolveRepair }) {
+  const stats = computeJobStats(job);
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+        <div>
+          <button onClick={onBack} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 12, cursor: "pointer", padding: 0, marginBottom: 8 }}>
+            ‹ กลับไปที่รายการรหัสงาน
+          </button>
+          <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "monospace", color: C.text, letterSpacing: 0.5 }}>{job.jobNo}</div>
+          <div style={{ fontSize: 13, color: C.textMuted, marginTop: 2 }}>
+            {job.sample || "-"}
+          </div>
+          <div style={{ fontSize: 12, color: C.textFaint, marginTop: 4 }}>
+            สร้างเมื่อ {fmtDate(job.createdAt)}
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginBottom: 6 }}>
+            <StatusBadge status={stats.status} />
+            <DeadlineBadge job={job} />
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: C.text, marginTop: 6, fontFamily: "monospace" }}>{stats.progress}%</div>
+          <div style={{ fontSize: 11, color: C.textMuted }}>{stats.complete} / {stats.total} parameters</div>
+        </div>
+      </div>
+
+      <div style={{ margin: "14px 0 18px" }}>
+        <ProgressBar job={job} />
+      </div>
+
+      {(job.regStart || job.regEnd) ? (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            จำนวนตัวอย่าง{job.sampleCount ? ` (${job.sampleCount})` : ""}
+          </div>
+          <div style={{ display: "inline-block", background: C.panel2, border: `1px solid ${C.borderSoft}`, borderRadius: 5, padding: "5px 10px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.cyan }}>
+            {job.regStart}{job.regEnd && job.regEnd !== job.regStart ? ` - ${job.regEnd}` : ""}
+          </div>
+        </div>
+      ) : job.samples && job.samples.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            ตัวอย่างย่อย ({job.samples.length})
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {job.samples.map((s) => (
+              <div key={s.code} style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, borderRadius: 5, padding: "5px 10px", fontSize: 12 }}>
+                <span style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan }}>{s.code}</span>
+                {s.name && <span style={{ color: C.textMuted }}> · {s.name}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {["", "Parameter", "Analyst", "Status", "Start", "Finish", ""].map((h) => (
+                <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.textMuted, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {job.parameters.map((p) => (
+              <React.Fragment key={p.id}>
+                <tr style={{ borderBottom: (p.repairs || []).some((r) => !r.resolvedAt) ? "none" : `1px solid ${C.borderSoft}` }}>
+                  <td style={{ padding: "8px" }}><StatusGlyph status={p.status} /></td>
+                  <td style={{ padding: "8px", fontWeight: 600, color: C.text }}>{p.name}</td>
+                  <td style={{ padding: "8px", color: C.textMuted }}>{p.analyst || "-"}</td>
+                  <td style={{ padding: "8px" }}><StatusBadge status={p.status} /></td>
+                  <td style={{ padding: "8px", color: C.textMuted, fontFamily: "monospace" }}>{tsLabel(p.startTs, p.start)}</td>
+                  <td style={{ padding: "8px", color: C.textMuted, fontFamily: "monospace" }}>{tsLabel(p.finishTs, p.finish)}</td>
+                  <td style={{ padding: "8px" }}>
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <ParamActions jobNo={job.jobNo} p={p} onUpdateParam={onUpdateParam} />
+                    </div>
+                  </td>
+                </tr>
+                <ParamRepairs jobNo={job.jobNo} p={p} onFlagRepair={onFlagRepair} onResolveRepair={onResolveRepair} />
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn small onClick={() => onEditJob(job)}>แก้ไขรหัสงานนี้</Btn>
+        <Btn kind="danger" small onClick={() => onDeleteJob(job.jobNo)}><Trash2 size={13} /> ลบรหัสงานนี้</Btn>
+      </div>
+    </Panel>
+  );
+}
+
+// ---------- Jobs List ----------
+// Checks a job against a free-text search query: matches on job number or
+// sample name (substring, case-insensitive), OR — if the query is purely
+// numeric — matches when it falls inside (or equals an endpoint of) the
+// job's registration-number range, so searching e.g. "05423" finds the
+// job whose range covers that sample even if it's not the start/end number.
+function jobMatchesSearch(job, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if ((job.jobNo || "").toLowerCase().includes(q)) return true;
+  if ((job.sample || "").toLowerCase().includes(q)) return true;
+  if (/^\d+$/.test(q)) {
+    const start = parseRegNo(job.regStart);
+    const end = parseRegNo(job.regEnd);
+    const target = parseInt(q, 10);
+    if (start && end && target >= start.num && target <= end.num) return true;
+    if (start && !end && target === start.num) return true;
+  } else {
+    if ((job.regStart || "").toLowerCase().includes(q)) return true;
+    if ((job.regEnd || "").toLowerCase().includes(q)) return true;
+  }
+  return false;
+}
+
+function JobsList({ jobs, onOpen }) {
+  const [view, setView] = useState("active");
+  const [query, setQuery] = useState("");
+  const activeJobs = jobs.filter((job) => computeJobStats(job).status !== STATUS.DONE);
+  const doneJobs = jobs.filter((job) => computeJobStats(job).status === STATUS.DONE);
+  // A job can need repair even after every parameter shows Complete, so this
+  // filter cuts across active/complete rather than being a sub-set of one.
+  const repairJobs = jobs.filter((job) => jobPendingRepairs(job).length > 0);
+  const base = view === "repair" ? repairJobs : view === "active" ? activeJobs : doneJobs;
+  const shown = query.trim() ? base.filter((job) => jobMatchesSearch(job, query)) : base;
+
+  const chip = (key, label, count, accent) => (
+    <button
+      onClick={() => setView(key)}
+      style={{
+        display: "flex", alignItems: "center", gap: 6,
+        background: view === key ? (accent ? C.redDim : C.panel2) : "transparent",
+        border: `1px solid ${view === key ? (accent || C.cyan) : accent ? C.red : C.border}`,
+        color: view === key ? (accent || C.text) : accent ? C.red : C.textMuted,
+        borderRadius: 999, padding: "6px 14px", fontSize: 12.5, fontWeight: 600,
+        cursor: "pointer", fontFamily: "inherit",
+      }}
+    >
+      {accent && <Wrench size={12} />} {label} <span style={{ fontFamily: "monospace", opacity: 0.8 }}>({count})</span>
+    </button>
+  );
+
+  return (
+    <Panel style={{ overflow: "hidden" }}>
+      <div style={{ display: "flex", gap: 12, padding: "14px 16px", borderBottom: `1px solid ${C.borderSoft}`, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          {chip("active", "กำลังดำเนินการ", activeJobs.length)}
+          {chip("complete", "เสร็จสมบูรณ์", doneJobs.length)}
+          {repairJobs.length > 0 && chip("repair", "ต้องซ่อม", repairJobs.length, C.red)}
+        </div>
+        <div style={{ position: "relative", minWidth: 240 }}>
+          <Search size={14} color={C.textFaint} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="ค้นหาเลขงาน, ตัวอย่าง, หรือเลขทะเบียน..."
+            style={{
+              width: "100%", background: C.bg2, border: `1px solid ${C.border}`, color: C.text,
+              borderRadius: 6, padding: "7px 10px 7px 30px", fontSize: 13, fontFamily: "inherit", outline: "none",
+            }}
+          />
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: C.textFaint, display: "flex" }}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {["Job No", "Sample", "Created", "Params", "Complete", "Progress", "Status", "", "Deadline", ""].map((h) => (
+                <th key={h} style={{ textAlign: "left", padding: "10px 12px", color: C.textMuted, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((job) => {
+              const stats = computeJobStats(job);
+              return (
+                <tr key={job.jobNo} onClick={() => onOpen(job.jobNo)} style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = C.panel2)}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", fontWeight: 700, color: C.cyan }}>{job.jobNo}</td>
+                  <td style={{ padding: "10px 12px", color: C.text }}>{job.sample || "-"}</td>
+                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace", whiteSpace: "nowrap" }}>{fmtDate(job.createdAt)}</td>
+                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace" }}>{stats.total}</td>
+                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace" }}>{stats.complete}</td>
+                  <td style={{ padding: "10px 12px", width: 140 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ flex: 1 }}><ProgressBar job={job} /></div>
+                      <span style={{ fontFamily: "monospace", fontSize: 12, color: C.textMuted, minWidth: 32, textAlign: "right" }}>{stats.progress}%</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: "10px 12px" }}><StatusBadge status={stats.status} /></td>
+                  <td style={{ padding: "10px 12px" }}>
+                    {jobPendingRepairs(job).length > 0 && (
+                      <span
+                        title={`มีรายการต้องซ่อม ${jobPendingRepairs(job).length} รายการ`}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: C.red, background: C.redDim, padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap" }}
+                      >
+                        <Wrench size={11} /> {jobPendingRepairs(job).length}
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: "10px 12px" }}><DeadlineBadge job={job} /></td>
+                  <td style={{ padding: "10px 12px" }}><ChevronRight size={15} color={C.textFaint} /></td>
+                </tr>
+              );
+            })}
+            {shown.length === 0 && (
+              <tr><td colSpan={10} style={{ padding: 30, textAlign: "center", color: C.textFaint }}>
+                {query.trim()
+                  ? `ไม่พบงานที่ตรงกับ "${query.trim()}"`
+                  : view === "active" ? "ไม่มีงานที่กำลังดำเนินการ" : view === "repair" ? "ไม่มีงานที่ต้องซ่อม" : "ยังไม่มีงานที่เสร็จสมบูรณ์"}
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+// ---------- Analysts Tab ----------
+// A single row for one queued/waiting parameter, shown inside an analyst's
+// expanded section. Clicking the row (outside the checkbox/job-no link)
+// toggles its selection for bulk actions; clicking the job number opens
+// that job's detail view instead.
+function QueueRow({ p, onOpenJob, tone, checked, onToggle }) {
+  return (
+    <div
+      onClick={() => onToggle(`${p.jobNo}__${p.id}`)}
+      style={{
+        display: "grid", gridTemplateColumns: "24px 110px 1fr 1fr 90px",
+        gap: 10, alignItems: "center", padding: "8px 10px",
+        background: checked ? C.cyanDim : C.panel,
+        border: `1px solid ${checked ? C.cyan : C.borderSoft}`, borderRadius: 6, cursor: "pointer",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onClick={(e) => e.stopPropagation()}
+        onChange={() => onToggle(`${p.jobNo}__${p.id}`)}
+        style={{ cursor: "pointer" }}
+      />
+      <span
+        onClick={(e) => { e.stopPropagation(); onOpenJob(p.jobNo); }}
+        style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12, cursor: "pointer", textDecoration: "underline", textDecorationColor: "transparent" }}
+        onMouseEnter={(e) => (e.currentTarget.style.textDecorationColor = C.cyan)}
+        onMouseLeave={(e) => (e.currentTarget.style.textDecorationColor = "transparent")}
+        title="เปิดดูรายละเอียดงานนี้"
+      >
+        {p.jobNo}
+      </span>
+      <span style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
+        <StatusGlyph status={p.status} size={12} /> {p.name}
+      </span>
+      <span style={{ fontSize: 11.5, fontWeight: 700, color: tone === "amber" ? C.amber : C.textMuted }}>
+        {tone === "amber" ? "กำลังวิเคราะห์" : "รอคิว"}
+      </span>
+    </div>
+  );
+}
+
+// A repair-flagged item shown inside an analyst's "ต้องซ่อม" section. Unlike
+// QueueRow it isn't selectable — start/complete/reset bulk actions don't
+// apply to a repair flag, which is resolved item-by-item from Job Detail —
+// so the whole row just opens the job instead.
+function RepairQueueRow({ p, onOpenJob }) {
+  const pendingCount = (p.repairs || []).filter((r) => !r.resolvedAt).length;
+  return (
+    <div
+      onClick={() => onOpenJob(p.jobNo)}
+      style={{
+        display: "grid", gridTemplateColumns: "110px 1fr 1fr 90px",
+        gap: 10, alignItems: "center", padding: "8px 10px",
+        background: C.panel, border: `1px solid ${C.redDim}`, borderRadius: 6, cursor: "pointer",
+      }}
+    >
+      <span style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12 }}>{p.jobNo}</span>
+      <span style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
+        <Wrench size={12} color={C.red} /> {p.name}
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.red, background: C.redDim, padding: "1px 6px", borderRadius: 999, fontFamily: "monospace" }}>
+          {pendingCount} รายการ
+        </span>
+      </span>
+      <span style={{ fontSize: 11.5, fontWeight: 700, color: C.red }}>ต้องซ่อม</span>
+    </div>
+  );
+}
+
+// One analyst's row: collapsed shows what they're running right now and
+// how many items are queued; expanded splits their work into "running",
+// "not yet queued", and a collapsible "done" section. Both the "running"
+// and "not yet queued" groups share one selection set and one row of bulk
+// action buttons, so items across both groups can be started/finished/
+// reset together in a single tap.
+function AnalystRow({ a, onOpenJob, onBulkUpdate }) {
+  const [open, setOpen] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState(new Set());
+  const current = a.running[0];
+
+  const toggleOpen = () => {
+    setOpen((v) => !v);
+    setSelectedKeys(new Set());
+    setShowDone(false);
+  };
+  const toggleKey = (key) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const runningKeys = a.running.map((p) => `${p.jobNo}__${p.id}`);
+  const waitingKeys = a.waiting.map((p) => `${p.jobNo}__${p.id}`);
+  const selectedRunningKeys = runningKeys.filter((k) => selectedKeys.has(k));
+  const selectedWaitingKeys = waitingKeys.filter((k) => selectedKeys.has(k));
+  const runningAllSelected = runningKeys.length > 0 && runningKeys.every((k) => selectedKeys.has(k));
+  const waitingAllSelected = waitingKeys.length > 0 && waitingKeys.every((k) => selectedKeys.has(k));
+
+  const toggleGroupAll = (groupKeys, allSelected) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (allSelected) groupKeys.forEach((k) => next.delete(k));
+      else groupKeys.forEach((k) => next.add(k));
+      return next;
+    });
+  };
+
+  // Only acts on the subset of the current selection that's actually
+  // eligible for this action (start -> waiting items only, complete/reset
+  // -> running items only), so a stray selection from the "wrong" group
+  // never gets silently mis-applied.
+  const runBulk = (action, keys) => {
+    const items = keys.map((key) => {
+      const [jobNo, paramId] = key.split("__");
+      return { jobNo, paramId };
+    });
+    if (items.length === 0) return;
+    onBulkUpdate(items, action);
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      keys.forEach((k) => next.delete(k));
+      return next;
+    });
+  };
+
+  return (
+    <div style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+      <div
+        onClick={toggleOpen}
+        style={{ display: "grid", gridTemplateColumns: "20px 1.2fr 1fr 1.4fr 150px", gap: 10, alignItems: "center", padding: "12px 10px", cursor: "pointer" }}
+      >
+        {open ? <ChevronDown size={15} color={C.textFaint} /> : <ChevronRight size={15} color={C.textFaint} />}
+        <span style={{ fontWeight: 700, color: C.text, fontSize: 13.5 }}>{a.name}</span>
+        <span style={{ fontFamily: "monospace", color: current ? C.cyan : C.textFaint, fontSize: 12.5 }}>{current ? current.jobNo : "ว่าง"}</span>
+        <span style={{ fontSize: 13, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
+          {current ? <><CircleDot size={12} color={C.amber} /> {current.name}</> : "-"}
+        </span>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {a.repair.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.red, background: C.redDim, padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 4 }}><Wrench size={11} /> {a.repair.length} ต้องซ่อม</span>}
+          {a.running.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.amber, background: C.amberDim, padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap" }}>{a.running.length} กำลังทำ</span>}
+          {a.waiting.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, background: C.panel2, padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap" }}>{a.waiting.length} รอคิว</span>}
+        </div>
+      </div>
+      {open && (
+        <div style={{ padding: "4px 12px 16px 42px", background: C.bg2 }}>
+          {selectedKeys.size > 0 && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+              <div style={{ fontSize: 12, color: C.cyan, fontWeight: 600 }}>เลือกแล้ว {selectedKeys.size} รายการ</div>
+              <div style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                {selectedWaitingKeys.length > 0 && (
+                  <Btn small kind="amber" onClick={() => runBulk("start", selectedWaitingKeys)}><Play size={12} /> เริ่มพร้อมกัน ({selectedWaitingKeys.length})</Btn>
+                )}
+                {selectedRunningKeys.length > 0 && (
+                  <>
+                    <Btn small kind="green" onClick={() => runBulk("complete", selectedRunningKeys)}><CheckCircle2 size={12} /> เสร็จพร้อมกัน ({selectedRunningKeys.length})</Btn>
+                    <Btn small onClick={() => runBulk("reset", selectedRunningKeys)}>ยกเลิก ({selectedRunningKeys.length})</Btn>
+                  </>
+                )}
+                <Btn small onClick={() => setSelectedKeys(new Set())}>ล้างการเลือก</Btn>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {a.repair.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.red, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+                  <Wrench size={12} /> ต้องซ่อม ({a.repair.length})
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {a.repair.map((p) => (
+                    <RepairQueueRow key={`${p.jobNo}-${p.id}`} p={p} onOpenJob={onOpenJob} />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.amber, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+                {runningKeys.length > 0 && (
+                  <input
+                    type="checkbox"
+                    checked={runningAllSelected}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => toggleGroupAll(runningKeys, runningAllSelected)}
+                    style={{ cursor: "pointer" }}
+                  />
+                )}
+                <CircleDot size={12} /> เข้าคิววิเคราะห์แล้ว ({a.running.length})
+              </div>
+              {a.running.length === 0 ? (
+                <div style={{ color: C.textFaint, fontSize: 12.5 }}>ไม่มีงานที่กำลังวิเคราะห์อยู่</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {a.running.map((p) => (
+                    <QueueRow key={`${p.jobNo}-${p.id}`} p={p} onOpenJob={onOpenJob} tone="amber"
+                      checked={selectedKeys.has(`${p.jobNo}__${p.id}`)} onToggle={toggleKey} />
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+                {waitingKeys.length > 0 && (
+                  <input
+                    type="checkbox"
+                    checked={waitingAllSelected}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => toggleGroupAll(waitingKeys, waitingAllSelected)}
+                    style={{ cursor: "pointer" }}
+                  />
+                )}
+                <Circle size={12} /> ยังไม่เข้าคิว ({a.waiting.length})
+              </div>
+              {a.waiting.length === 0 ? (
+                <div style={{ color: C.textFaint, fontSize: 12.5 }}>ไม่มีงานค้างคิว</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {a.waiting.map((p) => (
+                    <QueueRow key={`${p.jobNo}-${p.id}`} p={p} onOpenJob={onOpenJob} tone="gray"
+                      checked={selectedKeys.has(`${p.jobNo}__${p.id}`)} onToggle={toggleKey} />
+                  ))}
+                </div>
+              )}
+            </div>
+            {a.done.length > 0 && (
+              <div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowDone((v) => !v); }}
+                  style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 11, color: C.green, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, fontFamily: "inherit" }}
+                >
+                  {showDone ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  <CheckCircle2 size={13} /> เสร็จแล้ว ({a.done.length})
+                </button>
+                {showDone && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                    {a.done.map((p) => (
+                      <div
+                        key={`${p.jobNo}-${p.id}`}
+                        style={{
+                          display: "grid", gridTemplateColumns: "24px 110px 1fr 1fr 90px",
+                          gap: 10, alignItems: "center", padding: "8px 10px",
+                          background: C.greenDim, border: `1px solid ${C.greenDim}`, borderRadius: 6, opacity: 0.85,
+                        }}
+                      >
+                        <span />
+                        <span
+                          onClick={() => onOpenJob(p.jobNo)}
+                          style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12, cursor: "pointer", textDecoration: "underline", textDecorationColor: "transparent" }}
+                          onMouseEnter={(e) => (e.currentTarget.style.textDecorationColor = C.cyan)}
+                          onMouseLeave={(e) => (e.currentTarget.style.textDecorationColor = "transparent")}
+                          title="เปิดดูรายละเอียดงานนี้"
+                        >
+                          {p.jobNo}
+                        </span>
+                        <span style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
+                          <StatusGlyph status={p.status} size={12} /> {p.name}
+                        </span>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: C.green }}>เสร็จแล้ว</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalystsTable({ jobs, onOpenJob, onBulkUpdate }) {
+  const analysts = useMemo(() => computeAnalysts(jobs), [jobs]);
+  return (
+    <Panel style={{ overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "20px 1.2fr 1fr 1.4fr 150px", gap: 10, padding: "10px 10px", borderBottom: `1px solid ${C.border}` }}>
+        {["", "ผู้วิเคราะห์", "งานปัจจุบัน", "พารามิเตอร์ที่ทำอยู่", "คิว"].map((h) => (
+          <span key={h} style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{h}</span>
+        ))}
+      </div>
+      {analysts.map((a) => <AnalystRow key={a.name} a={a} onOpenJob={onOpenJob} onBulkUpdate={onBulkUpdate} />)}
+      {analysts.length === 0 && (
+        <div style={{ padding: 30, textAlign: "center", color: C.textFaint }}>ยังไม่มีข้อมูลผู้วิเคราะห์</div>
+      )}
+    </Panel>
+  );
+}
+
+
+// ---------- Parameters Tab (queue grouped by parameter) ----------
+function ParametersTable({ jobs, onOpenJob }) {
+  const groups = useMemo(() => computeParamQueue(jobs), [jobs]);
+  const [expanded, setExpanded] = useState(null);
+
+  return (
+    <Panel style={{ overflow: "hidden" }}>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {["", "Parameter", "Waiting", "Running", "Complete", "Total", "Analysts"].map((h) => (
+                <th key={h} style={{ textAlign: "left", padding: "10px 12px", color: C.textMuted, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => {
+              const isOpen = expanded === g.name;
+              const rows = isOpen ? paramJobs(jobs, g.name) : [];
+              return (
+                <React.Fragment key={g.name}>
+                  <tr
+                    onClick={() => setExpanded(isOpen ? null : g.name)}
+                    style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = C.panel2)}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <td style={{ padding: "10px 12px", width: 20 }}>
+                      {isOpen ? <ChevronDown size={15} color={C.textFaint} /> : <ChevronRight size={15} color={C.textFaint} />}
+                    </td>
+                    <td style={{ padding: "10px 12px", fontWeight: 700, color: C.text }}>{g.name}</td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {g.waiting > 0 ? <Badge color={C.textMuted} bg={C.panel2}>{g.waiting}</Badge> : <span style={{ color: C.textFaint }}>0</span>}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {g.running > 0 ? <Badge color={C.amber} bg={C.amberDim}>{g.running}</Badge> : <span style={{ color: C.textFaint }}>0</span>}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {g.complete > 0 ? <Badge color={C.green} bg={C.greenDim}>{g.complete}</Badge> : <span style={{ color: C.textFaint }}>0</span>}
+                    </td>
+                    <td style={{ padding: "10px 12px", fontFamily: "monospace", color: C.textMuted }}>{g.total}</td>
+                    <td style={{ padding: "10px 12px", color: C.textMuted, fontSize: 12 }}>
+                      {g.analysts.length > 0 ? g.analysts.join(", ") : "-"}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr>
+                      <td colSpan={7} style={{ padding: 0, background: C.bg2 }}>
+                        <div style={{ padding: "10px 16px 16px 42px" }}>
+                          <div style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                            คิวของ "{g.name}" ({rows.length})
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {rows.map((p) => (
+                              <div
+                                key={`${p.jobNo}-${p.id}`}
+                                onClick={(e) => { e.stopPropagation(); onOpenJob(p.jobNo); }}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "110px 1fr 1fr 90px 70px 70px",
+                                  gap: 10,
+                                  alignItems: "center",
+                                  padding: "8px 10px",
+                                  background: C.panel,
+                                  border: `1px solid ${C.borderSoft}`,
+                                  borderRadius: 6,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <span style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12 }}>{p.jobNo}</span>
+                                <span style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
+                                <span style={{ color: C.text, fontSize: 13 }}>{p.analyst || "-"}</span>
+                                <span><StatusBadge status={p.status} /></span>
+                                <span style={{ fontFamily: "monospace", fontSize: 12, color: C.textMuted }}>{tsLabel(p.startTs, p.start)}</span>
+                                <span style={{ fontFamily: "monospace", fontSize: 12, color: C.textMuted }}>{tsLabel(p.finishTs, p.finish)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+            {groups.length === 0 && (
+              <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: C.textFaint }}>ยังไม่มีพารามิเตอร์ในระบบ</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+// ---------- Dashboard ----------
+function Dashboard({ jobs, onOpen }) {
+  const allParams = jobs.flatMap((j) => j.parameters);
+  const running = allParams.filter((p) => p.status === STATUS.RUN).length;
+  const complete = allParams.filter((p) => p.status === STATUS.DONE).length;
+  const dueSoonCount = jobs.filter((j) => deadlineInfo(j).level === "warn").length;
+  const lateCount = jobs.filter((j) => deadlineInfo(j).level === "late").length;
+
+  // Active (not-yet-complete) jobs, sorted most urgent first: late -> due
+  // soon -> on track. Within the same urgency level, newest first.
+  const activeJobs = useMemo(() => {
+    const active = jobs.filter((j) => computeJobStats(j).status !== STATUS.DONE);
+    const rank = { late: 0, warn: 1, ok: 2, done: 3 };
+    return [...active].sort((a, b) => {
+      const da = deadlineInfo(a), db = deadlineInfo(b);
+      if (rank[da.level] !== rank[db.level]) return rank[da.level] - rank[db.level];
+      return (b.createdAt || 0) - (a.createdAt || 0);
+    });
+  }, [jobs]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <MetricCard label="งานทั้งหมด" value={jobs.length} color={C.text} />
+        <MetricCard label="กำลังดำเนินการ" value={running} color={C.amber} icon={CircleDot} />
+        <MetricCard label="เสร็จสิ้นแล้ว" value={complete} color={C.green} icon={CheckCircle2} />
+        <MetricCard label="ใกล้ครบกำหนด" value={dueSoonCount} color={C.amber} icon={Clock} />
+        <MetricCard label="ล่าช้า (15+ วัน)" value={lateCount} color={C.red} icon={AlertTriangle} />
+      </div>
+
+      <Panel style={{ padding: "8px 16px" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 4px 2px" }}>
+          งานที่กำลังดำเนินการ — เรียงตามความเร่งด่วน
+        </div>
+        {activeJobs.map((job) => <JobRow key={job.jobNo} job={job} onOpen={onOpen} />)}
+        {activeJobs.length === 0 && (
+          <div style={{ padding: "20px 4px", color: C.textFaint, fontSize: 13 }}>ไม่มีงานที่กำลังดำเนินการ</div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+// ---------- Main App ----------
+export default function App() {
+  const [jobs, setJobs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("dashboard");
+  const [selected, setSelected] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [editingJob, setEditingJob] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const unsubscribe = subscribeJobs(
+      (data) => {
+        setJobs(data);
+        setLoading(false);
+        setError(null);
+      },
+      () => {
+        setError("เชื่อมต่อฐานข้อมูลไม่สำเร็จ ตรวจสอบ Firebase config และ Rules");
+        setLoading(false);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // แจ้งเตือนงานล่าช้า: เมื่อรหัสงานใดครบกำหนด LATE_DAYS และยังไม่เสร็จ
+  // จะยิงแจ้งเตือนซ้ำทุก LATE_REPEAT_MS จนกว่างานจะเสร็จ (เก็บเวลาแจ้งเตือน
+  // ล่าสุดไว้ที่ lateNotifiedAt ใน Firebase เพื่อกันยิงถี่เกินไป)
+  useEffect(() => {
+    jobs.forEach((job) => {
+      if (computeJobStats(job).status === STATUS.DONE) return;
+      if (deadlineInfo(job).level !== "late") return;
+      if (job.lateNotifiedAt && nowTS() - job.lateNotifiedAt < LATE_REPEAT_MS) return;
+      claimNotifyFlag(
+        job.jobNo,
+        "lateNotifiedAt",
+        (current) => !current || nowTS() - current >= LATE_REPEAT_MS
+      )
+        .then((claimed) => {
+          // Only the client that actually wins the transaction sends the
+          // LINE message — everyone else who raced against it gets
+          // claimed:false and stays quiet.
+          if (claimed) notifyLineJobLate(job);
+        })
+        .catch((e) => console.error("claim lateNotifiedAt failed", e));
+    });
+  }, [jobs]);
+
+  // แจ้งเตือนงานเสร็จ: เช็คจากข้อมูลกลาง (jobs ที่ sync มาจาก Firebase) แทน
+  // การเช็ค state ในเครื่อง ณ ตอนกดปุ่ม — เพราะถ้ากดเสร็จพารามิเตอร์ 2 ตัว
+  // ติดกันเร็วๆ การเช็คตอนกดปุ่มอาจอ่าน state เก่าที่ยังไม่ทันอัปเดตจาก
+  // Firebase ทำให้พลาดจังหวะแจ้งเตือน วิธีนี้ใช้ flag doneNotifiedAt กันยิงซ้ำ
+  // และเคลียร์ flag อัตโนมัติถ้างานถูกเปิดใหม่ (เช่น กด reset พารามิเตอร์)
+  // เพื่อให้แจ้งเตือนได้อีกครั้งเมื่อเสร็จรอบถัดไป
+  //
+  // รอบแรกที่โหลดข้อมูล (ก่อนหน้านี้งานเก่าที่เสร็จแล้วไม่เคยมี flag นี้เลย)
+  // จะแค่ติด flag เงียบๆ ให้งานที่เสร็จอยู่แล้วก่อนหน้า โดยไม่ยิงแจ้งเตือน
+  // ย้อนหลัง — ป้องกันข้อความแจ้งเตือนงานเก่าส่งรัวๆ ตอนเปิดแอปครั้งแรก
+  const doneNotifyInitializedRef = useRef(false);
+  useEffect(() => {
+    const isFirstRun = !doneNotifyInitializedRef.current;
+    doneNotifyInitializedRef.current = true;
+    jobs.forEach((job) => {
+      const isDoneNow = computeJobStats(job).status === STATUS.DONE;
+      if (isDoneNow && !job.doneNotifiedAt) {
+        if (isFirstRun) {
+          // Backfill only — claim the flag so it's set, but never notify for
+          // jobs that were already done before this tab was opened.
+          claimNotifyFlag(job.jobNo, "doneNotifiedAt", (current) => !current)
+            .catch((e) => console.error("backfill doneNotifiedAt failed", e));
+        } else {
+          claimNotifyFlag(job.jobNo, "doneNotifiedAt", (current) => !current)
+            .then((claimed) => {
+              // Same race as lateNotifiedAt above: with several tabs open,
+              // only the transaction winner should fire the LINE message.
+              if (claimed) notifyLineJobDone(job);
+            })
+            .catch((e) => console.error("claim doneNotifiedAt failed", e));
+        }
+      } else if (!isDoneNow && job.doneNotifiedAt) {
+        saveJob({ ...job, doneNotifiedAt: null }).catch((e) => console.error("clear doneNotifiedAt failed", e));
+      }
+    });
+  }, [jobs]);
+
+  // Data is live via onValue, so "refresh" just re-affirms the connection —
+  // kept mainly so the button still gives visible feedback.
+  const refresh = useCallback(() => {
+    setLoading(true);
+    setTimeout(() => setLoading(false), 300);
+  }, []);
+
+  const knownAnalysts = useMemo(() => [...new Set(jobs.flatMap(j => j.parameters.map(p => p.analyst).filter(Boolean)))], [jobs]);
+  const knownParams = useMemo(() => [...new Set(jobs.flatMap(j => j.parameters.map(p => p.name).filter(Boolean)))].sort((a, b) => a.localeCompare(b, "th")), [jobs]);
+  const knownSamples = useMemo(
+    () => [...new Set(jobs.map((j) => j.sample).filter(Boolean))].sort((a, b) => a.localeCompare(b, "th")),
+    [jobs]
+  );
+  const lastAnalystByParam = useMemo(() => computeLastAnalystByParam(jobs), [jobs]);
+  const suggestedRegStart = useMemo(() => nextRegStart(jobs), [jobs]);
+
+  // Note: we don't need to manually update local state after these calls —
+  // the onValue subscription above fires as soon as Firebase confirms the
+  // write, for every connected user (including this one).
+  const handleCreate = async (job) => {
+    setShowForm(false);
+    try {
+      await saveJob(job);
+      notifyLineNewJob(job);
+    } catch (e) {
+      setError("บันทึกรหัสงานไม่สำเร็จ");
+    }
+  };
+
+  const handleSaveEdit = async (updatedJob) => {
+    setEditingJob(null);
+    try {
+      await saveJob(updatedJob);
+    } catch (e) {
+      setError("บันทึกการแก้ไขไม่สำเร็จ");
+    }
+  };
+
+  const handleUpdateParam = async (jobNo, paramId, action) => {
+    const job = jobs.find((j) => j.jobNo === jobNo);
+    if (!job) return;
+    const parameters = job.parameters.map((p) => {
+      if (p.id !== paramId) return p;
+      if (action === "start") return { ...p, status: STATUS.RUN, start: nowHM(), startTs: nowTS(), updatedTs: nowTS(), updatedLabel: nowHM() };
+      if (action === "complete") return { ...p, status: STATUS.DONE, finish: nowHM(), finishTs: nowTS(), updatedTs: nowTS(), updatedLabel: nowHM() };
+      if (action === "reset") return { ...p, status: STATUS.WAIT, start: null, finish: null, startTs: null, finishTs: null, updatedTs: nowTS(), updatedLabel: nowHM() };
+      return p;
+    });
+    const updatedJob = { ...job, parameters };
+    try {
+      await saveJob(updatedJob);
+    } catch (e) {
+      setError("อัปเดตสถานะไม่สำเร็จ");
+    }
+  };
+
+  // Flags specific registration numbers within one parameter as needing
+  // rework, without touching the parameter's own WAIT/RUN/DONE status or
+  // any other registration number in the same parameter.
+  const handleFlagRepair = async (jobNo, paramId, regNosText) => {
+    const job = jobs.find((j) => j.jobNo === jobNo);
+    if (!job) return;
+    const regNos = parseRegList(regNosText);
+    if (regNos.length === 0) return;
+    let targetParam = null;
+    const parameters = job.parameters.map((p) => {
+      if (p.id !== paramId) return p;
+      const newRepairs = regNos.map((regNo) => ({
+        id: `${nowTS()}-${regNo}-${Math.random().toString(36).slice(2, 7)}`,
+        regNo,
+        flaggedAt: nowTS(),
+        resolvedAt: null,
+      }));
+      targetParam = { ...p, repairs: [...(p.repairs || []), ...newRepairs] };
+      return targetParam;
+    });
+    const updatedJob = { ...job, parameters };
+    try {
+      await saveJob(updatedJob);
+      if (targetParam) notifyLineRepairFlag(updatedJob, targetParam, regNos);
+    } catch (e) {
+      setError("บันทึกการแจ้งซ่อมไม่สำเร็จ");
+    }
+  };
+
+  // Marks one flagged registration number as repaired. Doesn't notify per
+  // item — waits until every pending repair on that parameter is cleared,
+  // then sends a single LINE message listing every registration number
+  // resolved in that round (so 3 fixes on the same parameter = 1 message).
+  const handleResolveRepair = async (jobNo, paramId, repairId) => {
+    const job = jobs.find((j) => j.jobNo === jobNo);
+    if (!job) return;
+    let targetParam = null;
+    let batchToNotify = null;
+    const parameters = job.parameters.map((p) => {
+      if (p.id !== paramId) return p;
+      const repairs = (p.repairs || []).map((r) =>
+        r.id === repairId && !r.resolvedAt ? { ...r, resolvedAt: nowTS() } : r
+      );
+      const stillPending = repairs.some((r) => !r.resolvedAt);
+      let finalRepairs = repairs;
+      if (!stillPending) {
+        const toNotify = repairs.filter((r) => r.resolvedAt && !r.resolvedNotifiedAt);
+        if (toNotify.length > 0) {
+          batchToNotify = toNotify.map((r) => r.regNo);
+          finalRepairs = repairs.map((r) =>
+            r.resolvedAt && !r.resolvedNotifiedAt ? { ...r, resolvedNotifiedAt: nowTS() } : r
+          );
+        }
+      }
+      targetParam = { ...p, repairs: finalRepairs };
+      return targetParam;
+    });
+    const updatedJob = { ...job, parameters };
+    try {
+      await saveJob(updatedJob);
+      if (targetParam && batchToNotify && batchToNotify.length > 0) {
+        notifyLineRepairDone(updatedJob, targetParam, batchToNotify);
+      }
+    } catch (e) {
+      setError("บันทึกการซ่อมเสร็จไม่สำเร็จ");
+    }
+  };
+
+  // Applies the same action (start/complete/reset) to many parameters at
+  // once, possibly spanning several jobs — used by the multi-select bulk
+  // actions in AnalystsTable. Groups by job first and writes each affected
+  // job exactly once, so selecting two parameters that belong to the same
+  // job doesn't have the second write clobber the first (which would
+  // happen if we just called handleUpdateParam in a loop, since each call
+  // would read the same stale `jobs` snapshot).
+  const handleBulkUpdateParams = async (items, action) => {
+    const byJob = {};
+    for (const it of items) {
+      if (!byJob[it.jobNo]) byJob[it.jobNo] = new Set();
+      byJob[it.jobNo].add(it.paramId);
+    }
+    try {
+      await Promise.all(
+        Object.entries(byJob).map(async ([jobNo, paramIds]) => {
+          const job = jobs.find((j) => j.jobNo === jobNo);
+          if (!job) return null;
+          const parameters = job.parameters.map((p) => {
+            if (!paramIds.has(p.id)) return p;
+            if (action === "start") return { ...p, status: STATUS.RUN, start: nowHM(), startTs: nowTS(), updatedTs: nowTS(), updatedLabel: nowHM() };
+            if (action === "complete") return { ...p, status: STATUS.DONE, finish: nowHM(), finishTs: nowTS(), updatedTs: nowTS(), updatedLabel: nowHM() };
+            if (action === "reset") return { ...p, status: STATUS.WAIT, start: null, finish: null, startTs: null, finishTs: null, updatedTs: nowTS(), updatedLabel: nowHM() };
+            return p;
+          });
+          const updatedJob = { ...job, parameters };
+          await saveJob(updatedJob);
+        })
+      );
+    } catch (e) {
+      setError("อัปเดตสถานะไม่สำเร็จ");
+    }
+  };
+
+  const handleDeleteJob = async (jobNo) => {
+    setSelected(null);
+    setTab("jobs");
+    try {
+      await deleteJobStorage(jobNo);
+    } catch (e) {
+      setError("ลบรหัสงานไม่สำเร็จ");
+    }
+  };
+
+  const openJob = (jobNo) => { setSelected(jobNo); setTab("jobs"); };
+  const selectedJob = jobs.find((j) => j.jobNo === selected);
+
+  const tabBtn = (key, label, Icon) => (
+    <button
+      onClick={() => { setTab(key); setSelected(null); }}
+      style={{
+        display: "flex", alignItems: "center", gap: 7,
+        background: tab === key ? C.panel2 : "transparent",
+        border: "none", borderBottom: tab === key ? `2px solid ${C.cyan}` : "2px solid transparent",
+        color: tab === key ? C.text : C.textMuted,
+        padding: "10px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+      }}
+    >
+      <Icon size={15} /> {label}
+    </button>
+  );
+
+  return (
+    <div style={{ background: C.bg, minHeight: 500, borderRadius: 10, fontFamily: "'Prompt', system-ui, sans-serif", color: C.text, padding: 0, border: `1px solid ${C.border}`, boxShadow: "0 2px 18px rgba(14, 111, 186, 0.08)" }}>
+      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 6, background: C.cyanDim, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <FlaskConical size={17} color={C.cyan} />
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Lab Analysis Tracker</div>
+            <div style={{ fontSize: 11, color: C.textFaint }}>ระบบติดตามความคืบหน้างานวิเคราะห์ · แชร์ร่วมกันทั้งทีม</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn small onClick={refresh}><RefreshCw size={13} /> รีเฟรช</Btn>
+          <Btn kind="primary" small onClick={() => { setShowForm(true); setTab("jobs"); setSelected(null); }}><Plus size={13} /> สร้างรหัสงาน</Btn>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", borderBottom: `1px solid ${C.borderSoft}`, padding: "0 12px" }}>
+        {tabBtn("dashboard", "Dashboard", LayoutGrid)}
+        {tabBtn("jobs", "Jobs", ListChecks)}
+        {tabBtn("analysts", "Analysts", Users)}
+        {tabBtn("parameters", "Parameters", Layers)}
+      </div>
+
+      <div style={{ padding: 20 }}>
+        {error && (
+          <div style={{ marginBottom: 14, padding: "8px 12px", background: C.redDim, border: `1px solid ${C.red}`, borderRadius: 6, color: "#7A2D22", fontSize: 12, display: "flex", alignItems: "center", gap: 8 }}>
+            <AlertCircle size={14} /> {error}
+          </div>
+        )}
+        {loading ? (
+          <div style={{ padding: 40, textAlign: "center", color: C.textFaint }}>กำลังโหลดข้อมูล...</div>
+        ) : (
+          <>
+            {tab === "dashboard" && <Dashboard jobs={jobs} onOpen={openJob} />}
+            {tab === "jobs" && (
+              <>
+                {showForm && (
+                  <NewJobForm
+                    onCancel={() => setShowForm(false)}
+                    onCreate={handleCreate}
+                    suggestedNo={genJobNo(jobs)}
+                    suggestedRegStart={suggestedRegStart}
+                    knownAnalysts={knownAnalysts}
+                    knownParams={knownParams}
+                    knownSamples={knownSamples}
+                    existingJobNos={jobs.map((j) => j.jobNo)}
+                    lastAnalystByParam={lastAnalystByParam}
+                  />
+                )}
+                {editingJob && (
+                  <NewJobForm
+                    editingJob={editingJob}
+                    onCancel={() => setEditingJob(null)}
+                    onSaveEdit={handleSaveEdit}
+                    knownAnalysts={knownAnalysts}
+                    knownParams={knownParams}
+                    knownSamples={knownSamples}
+                    lastAnalystByParam={lastAnalystByParam}
+                  />
+                )}
+                {selectedJob && !editingJob ? (
+                  <JobDetail job={selectedJob} onBack={() => setSelected(null)} onUpdateParam={handleUpdateParam} onDeleteJob={handleDeleteJob} onEditJob={setEditingJob} onFlagRepair={handleFlagRepair} onResolveRepair={handleResolveRepair} />
+                ) : (
+                  !editingJob && <JobsList jobs={jobs} onOpen={openJob} />
+                )}
+              </>
+            )}
+            {tab === "analysts" && <AnalystsTable jobs={jobs} onOpenJob={openJob} onBulkUpdate={handleBulkUpdateParams} />}
+            {tab === "parameters" && <ParametersTable jobs={jobs} onOpenJob={openJob} />}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
