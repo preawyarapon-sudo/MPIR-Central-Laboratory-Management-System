@@ -216,10 +216,10 @@ export default function App() {
 function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
   const activeCount = equipment.filter(e => e.status === "active").length;
   const stats = [
-    { label: "เครื่องมือทั้งหมด", value: equipment.length, sub: `${activeCount} ใช้งานอยู่`, icon: Wrench, tint: "#E9F1FB", color: "var(--teal)" },
-    { label: "รายการสารเคมี", value: chemicals.length, sub: `${alerts.expiry.length} ใกล้/เลยหมดอายุ`, icon: FlaskConical, tint: "#FBE9E4", color: "#D9622E" },
-    { label: "พัสดุสิ้นเปลือง", value: consumables.length, sub: `${alerts.lowStock.length} ใกล้หมด`, icon: Package, tint: "#F0EAFB", color: "#7A4FC2" },
-    { label: "รายการที่ต้องติดตาม", value: alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length, sub: "รวมทุกประเภท", icon: AlertTriangle, tint: "#FBE4E1", color: "var(--red)" },
+    { label: "เครื่องมือทั้งหมด", value: equipment.length, sub: `${activeCount} ใช้งานอยู่`, icon: Wrench, tint: "#E9F1FB", color: "var(--teal)", goto: "equipment" },
+    { label: "รายการสารเคมี", value: chemicals.length, sub: `${alerts.expiry.length} ใกล้/เลยหมดอายุ`, icon: FlaskConical, tint: "#FBE9E4", color: "#D9622E", goto: "chemicals" },
+    { label: "พัสดุสิ้นเปลือง", value: consumables.length, sub: `${alerts.lowStock.length} ใกล้หมด`, icon: Package, tint: "#F0EAFB", color: "#7A4FC2", goto: "consumables" },
+    { label: "รายการที่ต้องติดตาม", value: alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length, sub: "รวมทุกประเภท", icon: AlertTriangle, tint: "#FBE4E1", color: "var(--red)", goto: null },
   ];
 
   const calibOk = equipment.filter(e => statusOf(daysUntil(e.nextDue)) === "ok" && e.nextDue).length;
@@ -241,7 +241,13 @@ function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
         {stats.map((s, i) => {
           const Icon = s.icon;
           return (
-            <div key={i} style={S.statCard} className="statCard">
+            <div
+              key={i}
+              style={{ ...S.statCard, cursor: s.goto ? "pointer" : "default" }}
+              className="statCard"
+              onClick={s.goto ? () => goto(s.goto) : undefined}
+              role={s.goto ? "button" : undefined}
+            >
               <div className="statIconTile" style={{ width: 38, height: 38, borderRadius: 10, background: s.tint, display: "none", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <Icon size={18} color={s.color} />
               </div>
@@ -426,7 +432,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
           <option value="maintenance">ซ่อมบำรุง</option>
           <option value="inactive">ปิดใช้งาน</option>
         </select>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", type: "", location: "", status: "active", lastCalibration: "", nextDue: "", notes: "" })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", type: "", location: "", status: "active", lastCalibration: "", nextDue: "", notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
@@ -436,18 +442,24 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
           const days = daysUntil(e.nextDue);
           const st = statusOf(days);
           return (
-            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0 }} onClick={() => setSelected(e.id)}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                <div style={S.eqCardTop}>
-                  <span style={{ ...S.beacon, background: STATUS_COLOR[st] }} />
-                  <span style={S.eqCode}>{e.code}</span>
+            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: e.imageUrl ? 0 : S.eqCard.padding, overflow: "hidden" }} onClick={() => setSelected(e.id)}>
+              {e.imageUrl && (
+                <img src={e.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+                  style={{ width: "100%", height: 110, objectFit: "cover", display: "block" }} />
+              )}
+              <div style={{ padding: e.imageUrl ? "10px 14px 12px" : 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                  <div style={S.eqCardTop}>
+                    <span style={{ ...S.beacon, background: STATUS_COLOR[st] }} />
+                    <span style={S.eqCode}>{e.code}</span>
+                  </div>
+                  {e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
                 </div>
-                {e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
-              </div>
-              <div style={S.eqName}>{e.name}</div>
-              <div style={S.eqMeta}><MapPin size={11} /> {e.location || "-"} · {e.type || "-"}</div>
-              <div style={{ ...S.eqDue, color: STATUS_COLOR[st] }}>
-                {e.nextDue ? `กำหนดถัดไป ${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "ไม่มีกำหนดสอบเทียบ"}
+                <div style={S.eqName}>{e.name}</div>
+                <div style={S.eqMeta}><MapPin size={11} /> {e.location || "-"} · {e.type || "-"}</div>
+                <div style={{ ...S.eqDue, color: STATUS_COLOR[st] }}>
+                  {e.nextDue ? `กำหนดถัดไป ${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "ไม่มีกำหนดสอบเทียบ"}
+                </div>
               </div>
             </div>
           );
@@ -475,6 +487,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
 function EquipmentForm({ item, onCancel, onSave }) {
   const [f, setF] = useState(item);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [imgError, setImgError] = useState(false);
   return (
     <Modal onClose={onCancel} title={item.code ? "แก้ไขเครื่องมือ" : "เพิ่มเครื่องมือใหม่"}>
       <div style={S.formGrid} className="ltFormGrid">
@@ -491,6 +504,26 @@ function EquipmentForm({ item, onCancel, onSave }) {
         </Field>
         <Field label="สอบเทียบล่าสุด"><input type="date" style={S.input} value={f.lastCalibration} onChange={set("lastCalibration")} /></Field>
         <Field label="กำหนดสอบเทียบถัดไป"><input type="date" style={S.input} value={f.nextDue} onChange={set("nextDue")} /></Field>
+        <Field label="ลิงก์รูปภาพเครื่องมือ" full>
+          <input
+            style={S.input}
+            value={f.imageUrl || ""}
+            onChange={(e) => { setImgError(false); setF({ ...f, imageUrl: e.target.value }); }}
+            placeholder="วางลิงก์รูปภาพ เช่น https://..."
+          />
+          {f.imageUrl && (
+            imgError ? (
+              <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>โหลดรูปภาพจากลิงก์นี้ไม่ได้ กรุณาตรวจสอบลิงก์</div>
+            ) : (
+              <img
+                src={f.imageUrl}
+                alt=""
+                onError={() => setImgError(true)}
+                style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 8, marginTop: 8, border: "1px solid var(--line)" }}
+              />
+            )
+          )}
+        </Field>
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.notes} onChange={set("notes")} /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.code || !f.name} />
@@ -505,6 +538,10 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
   const typeLabel = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ" };
   return (
     <Modal onClose={onClose} title={item.code} wide>
+      {item.imageUrl && (
+        <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+          style={{ width: "100%", maxHeight: 220, objectFit: "cover", borderRadius: 10, marginBottom: 14 }} />
+      )}
       <div style={S.detailHead}>
         <div>
           <div style={S.detailName}>{item.name}</div>
