@@ -304,7 +304,7 @@ function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
           empty="สต็อคทุกรายการยังเพียงพอ"
           onSeeAll={() => goto("consumables")}
           items={[
-            ...alerts.lowStock.map(s => ({ key: s.id, st: s.quantity <= 0 ? "danger" : "warn", title: s.name, detail: `เหลือ ${s.quantity} ${s.unit} (ขั้นต่ำ ${s.minThreshold})` })),
+            ...alerts.lowStock.map(s => ({ key: s.id, st: s.quantity <= 0 ? "danger" : "warn", title: s.name, detail: `เหลือ ${s.quantity} ${s.unit}` })),
             ...alerts.lowChem.map(c => ({ key: "chem-" + c.id, st: c.quantity <= 0 ? "danger" : "warn", title: c.name + " (สารเคมี)", detail: `เหลือ ${c.quantity} ${c.unit} (ขั้นต่ำ ${c.minThreshold})` })),
           ]}
         />
@@ -393,13 +393,17 @@ function AlertPanel({ title, icon: Icon, items, empty, onSeeAll }) {
 function EquipmentTab({ equipment, setEquipment, activities, setActivities, notify }) {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
+
+  const types = useMemo(() => [...new Set(equipment.map(e => e.type).filter(Boolean))].sort(), [equipment]);
 
   const filtered = equipment.filter(e => {
     const matchQ = (e.code + e.name + e.location + e.type).toLowerCase().includes(q.toLowerCase());
     const matchS = statusFilter === "all" || e.status === statusFilter;
-    return matchQ && matchS;
+    const matchT = typeFilter === "all" || e.type === typeFilter;
+    return matchQ && matchS && matchT;
   });
 
   function upsert(item) {
@@ -426,6 +430,10 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
       <TabHeader title="เครื่องมือ" sub="รายการเครื่องมือทั้งหมดและกำหนดสอบเทียบ" />
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหารหัส, ชื่อ, ตำแหน่ง..." />
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={S.select}>
+          <option value="all">ทุกประเภท</option>
+          {types.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={S.select}>
           <option value="all">ทุกสถานะ</option>
           <option value="active">ใช้งานอยู่</option>
@@ -680,7 +688,7 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState(null);
-  const filtered = consumables.filter(s => (s.name + s.location).toLowerCase().includes(q.toLowerCase()));
+  const filtered = consumables.filter(s => s.name.toLowerCase().includes(q.toLowerCase()));
 
   function upsert(item) {
     if (consumables.find(s => s.id === item.id)) setConsumables(consumables.map(s => s.id === item.id ? item : s));
@@ -699,27 +707,56 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
     notify(tx.type === "receive" ? "บันทึกรับเข้าแล้ว" : "บันทึกเบิกใช้แล้ว");
   }
 
+  function editTransaction(itemId, tx) {
+    setConsumables(consumables.map(s => {
+      if (s.id !== itemId) return s;
+      const old = (s.transactions || []).find(t => t.id === tx.id);
+      if (!old) return s;
+      const oldDelta = old.type === "receive" ? old.qty : -old.qty;
+      const newDelta = tx.type === "receive" ? tx.qty : -tx.qty;
+      return {
+        ...s,
+        quantity: Math.max(0, (s.quantity || 0) - oldDelta + newDelta),
+        transactions: (s.transactions || []).map(t => t.id === tx.id ? { ...tx } : t),
+      };
+    }));
+    notify("แก้ไขรายการแล้ว");
+  }
+
+  function deleteTransaction(itemId, txId) {
+    setConsumables(consumables.map(s => {
+      if (s.id !== itemId) return s;
+      const old = (s.transactions || []).find(t => t.id === txId);
+      if (!old) return s;
+      const reverseDelta = old.type === "receive" ? -old.qty : old.qty;
+      return {
+        ...s,
+        quantity: Math.max(0, (s.quantity || 0) + reverseDelta),
+        transactions: (s.transactions || []).filter(t => t.id !== txId),
+      };
+    }));
+    notify("ลบรายการแล้ว");
+  }
+
   const selectedItem = consumables.find(s => s.id === selected);
 
   return (
     <div>
       <TabHeader title="พัสดุสิ้นเปลือง" sub="ติดตามปริมาณคงเหลือของวัสดุใช้แล้วหมดไป" />
       <Toolbar>
-        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อพัสดุ, ตำแหน่ง..." />
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", minThreshold: 0, location: "", transactions: [] })}>
+        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อพัสดุ..." />
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", minThreshold: 0, transactions: [] })}>
           <Plus size={15} /> เพิ่มพัสดุ
         </button>
       </Toolbar>
       <Table
-        cols={["ชื่อพัสดุ", "คงเหลือ", "ขั้นต่ำ", "ตำแหน่ง", ""]}
+        cols={["ชื่อพัสดุ", "คงเหลือ", ""]}
         onRowClick={(i) => setSelected(filtered[i].id)}
         rows={filtered.map(s => {
           const low = s.quantity <= s.minThreshold;
           return [
             <RowTitle beacon={low ? (s.quantity <= 0 ? "var(--red)" : "var(--amber)") : "transparent"} text={s.name} />,
             <span>{s.quantity} {s.unit}{low && <span style={S.lowTag}>{s.quantity <= 0 ? "หมด" : "ใกล้หมด"}</span>}</span>,
-            `${s.minThreshold} ${s.unit}`,
-            s.location || "-",
             <RowActions onEdit={() => setEditing(s)} onDelete={() => remove(s.id)} />,
           ];
         })}
@@ -733,14 +770,17 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
           onEdit={() => { setEditing(selectedItem); setSelected(null); }}
           onDelete={() => { remove(selectedItem.id); setSelected(null); }}
           onAddTransaction={(tx) => addTransaction(selectedItem.id, tx)}
+          onEditTransaction={(tx) => editTransaction(selectedItem.id, tx)}
+          onDeleteTransaction={(txId) => deleteTransaction(selectedItem.id, txId)}
         />
       )}
     </div>
   );
 }
 
-function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction }) {
+function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onEditTransaction, onDeleteTransaction }) {
   const [showForm, setShowForm] = useState(null); // "receive" | "withdraw" | null
+  const [editingTx, setEditingTx] = useState(null); // transaction being edited, or null
   const [historyFilter, setHistoryFilter] = useState("all"); // "all" | "receive" | "withdraw"
   const low = item.quantity <= item.minThreshold;
   const txs = item.transactions || [];
@@ -768,10 +808,7 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
   return (
     <Modal onClose={onClose} title={item.name} wide>
       <div style={S.detailHead}>
-        <div>
-          <div style={S.detailName}>{item.name}</div>
-          <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"}</div>
-        </div>
+        <div style={S.detailName}>{item.name}</div>
         <div style={{ display: "flex", gap: 8 }}>
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
           <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={onDelete}><Trash2 size={14} /></button>
@@ -781,7 +818,6 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
         <Tag color={low ? (item.quantity <= 0 ? "var(--red)" : "var(--amber)") : "var(--green)"}>
           คงเหลือ {item.quantity} {item.unit} {low ? (item.quantity <= 0 ? "· หมด" : "· ใกล้หมด") : ""}
         </Tag>
-        <Tag color="var(--muted)">ขั้นต่ำ {item.minThreshold} {item.unit}</Tag>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -803,7 +839,7 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
         <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
           {shownTxs.length === 0 && <EmptyState text="ยังไม่มีรายการในหมวดนี้" small />}
           {shownTxs.map(t => (
-            <div key={t.id} style={S.activityRow}>
+            <div key={t.id} style={{ ...S.activityRow, alignItems: "center" }}>
               <div style={S.activityDate}>{fmtDate(t.date)}</div>
               <div style={{ flex: 1 }}>
                 <div style={S.activityType}>
@@ -815,6 +851,10 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
                   {t.type === "receive" && t.poNo ? `PO: ${t.poNo}` : t.type === "withdraw" && t.by ? `ผู้เบิก: ${t.by}` : ""}
                   {t.note ? ` · ${t.note}` : ""}
                 </div>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button style={S.iconBtnSm} onClick={() => setEditingTx(t)}><Pencil size={12} /></button>
+                <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => onDeleteTransaction(t.id)}><Trash2 size={12} /></button>
               </div>
             </div>
           ))}
@@ -829,18 +869,32 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
           onSave={(tx) => { onAddTransaction(tx); setShowForm(null); }}
         />
       )}
+      {editingTx && (
+        <ConsumableTxForm
+          type={editingTx.type}
+          item={item}
+          initial={editingTx}
+          onCancel={() => setEditingTx(null)}
+          onSave={(tx) => { onEditTransaction(tx); setEditingTx(null); }}
+        />
+      )}
     </Modal>
   );
 }
 
-function ConsumableTxForm({ type, item, onCancel, onSave }) {
+function ConsumableTxForm({ type, item, initial, onCancel, onSave }) {
   const isReceive = type === "receive";
-  const [f, setF] = useState({ date: todayISO(), qty: "", poNo: "", by: "", note: "" });
+  const isEdit = !!initial;
+  const [f, setF] = useState(initial
+    ? { date: initial.date, qty: String(initial.qty), poNo: initial.poNo || "", by: initial.by || "", note: initial.note || "" }
+    : { date: todayISO(), qty: "", poNo: "", by: "", note: "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const qtyNum = Number(f.qty) || 0;
-  const wouldGoNegative = !isReceive && qtyNum > item.quantity;
+  // When editing, check against the item's quantity as if this transaction's old effect were reversed first.
+  const baseQty = initial ? item.quantity - (initial.type === "receive" ? initial.qty : -initial.qty) : item.quantity;
+  const wouldGoNegative = !isReceive && qtyNum > baseQty;
   return (
-    <Modal onClose={onCancel} title={isReceive ? "บันทึกรับเข้าพัสดุ (PO)" : "บันทึกเบิกใช้พัสดุ"}>
+    <Modal onClose={onCancel} title={isReceive ? (isEdit ? "แก้ไขรายการรับเข้า (PO)" : "บันทึกรับเข้าพัสดุ (PO)") : (isEdit ? "แก้ไขรายการเบิกใช้" : "บันทึกเบิกใช้พัสดุ")}>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label={isReceive ? "จำนวนที่รับเข้า" : "จำนวนที่เบิกใช้"}>
@@ -855,12 +909,12 @@ function ConsumableTxForm({ type, item, onCancel, onSave }) {
       </div>
       {wouldGoNegative && (
         <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>
-          จำนวนที่เบิกมากกว่าคงเหลือ ({item.quantity} {item.unit}) — ระบบจะปรับคงเหลือเป็น 0
+          จำนวนที่เบิกมากกว่าคงเหลือ ({baseQty} {item.unit}) — ระบบจะปรับคงเหลือเป็น 0
         </div>
       )}
       <ModalFooter
         onCancel={onCancel}
-        onSave={() => onSave({ type, date: f.date, qty: qtyNum, poNo: f.poNo, by: f.by, note: f.note })}
+        onSave={() => onSave({ id: initial?.id, type, date: f.date, qty: qtyNum, poNo: f.poNo, by: f.by, note: f.note })}
         disabled={!f.date || qtyNum <= 0}
       />
     </Modal>
@@ -874,7 +928,6 @@ function ConsumableForm({ item, onCancel, onSave }) {
     <Modal onClose={onCancel} title={item.name ? "แก้ไขพัสดุ" : "เพิ่มพัสดุ"}>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="ชื่อพัสดุ" full><input style={S.input} value={f.name} onChange={set("name")} /></Field>
-        <Field label="ตำแหน่งจัดเก็บ"><input style={S.input} value={f.location} onChange={set("location")} /></Field>
         <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} placeholder="เช่น กล่อง, ห่อ, ชิ้น" /></Field>
         <Field label="ปริมาณคงเหลือ"><input type="number" style={S.input} value={f.quantity} onChange={set("quantity", true)} /></Field>
         <Field label="ขั้นต่ำที่ควรมี"><input type="number" style={S.input} value={f.minThreshold} onChange={set("minThreshold", true)} /></Field>
@@ -910,8 +963,8 @@ function ReportsTab({ equipment, activities, chemicals, consumables }) {
     ["ชื่อ", "Lot No.", "คงเหลือ", "หน่วย", "วันหมดอายุ", "ตำแหน่ง", "ขั้นต่ำ"]
   ));
   const exportConsumables = () => download("consumables.csv", toCSV(
-    consumables.map(s => [s.name, s.quantity, s.unit, s.minThreshold, s.location]),
-    ["ชื่อ", "คงเหลือ", "หน่วย", "ขั้นต่ำ", "ตำแหน่ง"]
+    consumables.map(s => [s.name, s.quantity, s.unit, s.minThreshold]),
+    ["ชื่อ", "คงเหลือ", "หน่วย", "ขั้นต่ำ"]
   ));
   const exportMonthlySummary = () => {
     const map = {};
@@ -919,15 +972,19 @@ function ReportsTab({ equipment, activities, chemicals, consumables }) {
       (s.transactions || []).forEach(t => {
         const month = (t.date || "").slice(0, 7) || "ไม่ระบุเดือน";
         const key = `${month}|${s.name}`;
-        if (!map[key]) map[key] = { month, name: s.name, unit: s.unit, received: 0, withdrawn: 0 };
-        if (t.type === "receive") map[key].received += Number(t.qty) || 0;
-        else map[key].withdrawn += Number(t.qty) || 0;
+        if (!map[key]) map[key] = { month, name: s.name, unit: s.unit, received: 0, withdrawn: 0, poNos: new Set() };
+        if (t.type === "receive") {
+          map[key].received += Number(t.qty) || 0;
+          if (t.poNo) map[key].poNos.add(t.poNo);
+        } else {
+          map[key].withdrawn += Number(t.qty) || 0;
+        }
       });
     });
     const rows = Object.values(map).sort((a, b) => a.month.localeCompare(b.month) || a.name.localeCompare(b.name));
     download("consumables-monthly-summary.csv", toCSV(
-      rows.map(r => [r.month, r.name, r.received, r.withdrawn, r.received - r.withdrawn, r.unit]),
-      ["เดือน", "ชื่อพัสดุ", "รวมรับเข้า", "รวมเบิกใช้", "สุทธิ (รับ-เบิก)", "หน่วย"]
+      rows.map(r => [r.month, r.name, r.received, r.withdrawn, r.received - r.withdrawn, r.unit, [...r.poNos].join("; ")]),
+      ["เดือน", "ชื่อพัสดุ", "รวมรับเข้า", "รวมเบิกใช้", "สุทธิ (รับ-เบิก)", "หน่วย", "เลขที่ PO"]
     ));
   };
 
