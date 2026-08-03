@@ -445,7 +445,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
             <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: e.imageUrl ? 0 : S.eqCard.padding, overflow: "hidden" }} onClick={() => setSelected(e.id)}>
               {e.imageUrl && (
                 <img src={e.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-                  style={{ width: "100%", height: 110, objectFit: "cover", display: "block" }} />
+                  style={{ width: "100%", height: 140, objectFit: "contain", background: "#EEF2F6", display: "block" }} />
               )}
               <div style={{ padding: e.imageUrl ? "10px 14px 12px" : 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -519,7 +519,7 @@ function EquipmentForm({ item, onCancel, onSave }) {
                 src={f.imageUrl}
                 alt=""
                 onError={() => setImgError(true)}
-                style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 8, marginTop: 8, border: "1px solid var(--line)" }}
+                style={{ width: "100%", maxHeight: 160, objectFit: "contain", background: "#EEF2F6", borderRadius: 8, marginTop: 8, border: "1px solid var(--line)" }}
               />
             )
           )}
@@ -540,7 +540,7 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
     <Modal onClose={onClose} title={item.code} wide>
       {item.imageUrl && (
         <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-          style={{ width: "100%", maxHeight: 220, objectFit: "cover", borderRadius: 10, marginBottom: 14 }} />
+          style={{ width: "100%", maxHeight: 260, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, marginBottom: 14 }} />
       )}
       <div style={S.detailHead}>
         <div>
