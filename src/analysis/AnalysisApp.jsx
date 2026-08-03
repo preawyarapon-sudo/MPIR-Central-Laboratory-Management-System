@@ -461,15 +461,15 @@ function JobRow({ job, onOpen }) {
       onClick={() => onOpen(job.jobNo)}
       style={{ padding: "14px 4px", borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }} className="jobRowHead">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flexWrap: "wrap" }}>
           <span style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 14 }}>{job.jobNo}</span>
           <span style={{ fontSize: 12, background: C.panel2, color: C.textMuted, padding: "2px 8px", borderRadius: 4, fontWeight: 600 }}>{job.sample || "-"}</span>
           {(job.regStart || job.regEnd) && (
             <span style={{ fontSize: 11.5, color: C.textFaint, fontFamily: "monospace" }}>{job.regStart}–{job.regEnd}{job.sampleCount ? ` (${job.sampleCount})` : ""}</span>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }} className="jobRowMeta">
           <DeadlinePill job={job} />
           <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.text, minWidth: 34, textAlign: "right" }}>{stats.progress}%</span>
           <ChevronRight size={15} color={C.textFaint} />
@@ -1296,7 +1296,7 @@ function JobsList({ jobs, onOpen }) {
         </div>
       </div>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }} className="jobsTable">
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
               {["Job No", "Sample", "Created", "Params", "Complete", "Progress", "Status", "", "Deadline", ""].map((h) => (
@@ -1307,24 +1307,26 @@ function JobsList({ jobs, onOpen }) {
           <tbody>
             {shown.map((job) => {
               const stats = computeJobStats(job);
+              const cols = ["Job No", "Sample", "Created", "Params", "Complete", "Progress", "Status", "", "Deadline", ""];
               return (
                 <tr key={job.jobNo} onClick={() => onOpen(job.jobNo)} style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}
+                  className="jobsTableRow"
                   onMouseEnter={(e) => (e.currentTarget.style.background = C.panel2)}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                 >
-                  <td style={{ padding: "10px 12px", fontFamily: "monospace", fontWeight: 700, color: C.cyan }}>{job.jobNo}</td>
-                  <td style={{ padding: "10px 12px", color: C.text }}>{job.sample || "-"}</td>
-                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace", whiteSpace: "nowrap" }}>{fmtDate(job.createdAt)}</td>
-                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace" }}>{stats.total}</td>
-                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace" }}>{stats.complete}</td>
-                  <td style={{ padding: "10px 12px", width: 140 }}>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", fontWeight: 700, color: C.cyan }} data-label={cols[0]} className="jobsTableTitleCell">{job.jobNo}</td>
+                  <td style={{ padding: "10px 12px", color: C.text }} data-label={cols[1]} className="jobsTableCell">{job.sample || "-"}</td>
+                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace", whiteSpace: "nowrap" }} data-label={cols[2]} className="jobsTableCell">{fmtDate(job.createdAt)}</td>
+                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace" }} data-label={cols[3]} className="jobsTableCell">{stats.total}</td>
+                  <td style={{ padding: "10px 12px", color: C.textMuted, fontFamily: "monospace" }} data-label={cols[4]} className="jobsTableCell">{stats.complete}</td>
+                  <td style={{ padding: "10px 12px", width: 140 }} data-label={cols[5]} className="jobsTableCell">
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div style={{ flex: 1 }}><ProgressBar job={job} /></div>
                       <span style={{ fontFamily: "monospace", fontSize: 12, color: C.textMuted, minWidth: 32, textAlign: "right" }}>{stats.progress}%</span>
                     </div>
                   </td>
-                  <td style={{ padding: "10px 12px" }}><StatusBadge status={stats.status} /></td>
-                  <td style={{ padding: "10px 12px" }}>
+                  <td style={{ padding: "10px 12px" }} data-label={cols[6]} className="jobsTableCell"><StatusBadge status={stats.status} /></td>
+                  <td style={{ padding: "10px 12px" }} data-label={cols[7]} className="jobsTableCell">
                     {jobPendingRepairs(job).length > 0 && (
                       <span
                         title={`มีรายการต้องซ่อม ${jobPendingRepairs(job).length} รายการ`}
@@ -1334,8 +1336,8 @@ function JobsList({ jobs, onOpen }) {
                       </span>
                     )}
                   </td>
-                  <td style={{ padding: "10px 12px" }}><DeadlineBadge job={job} /></td>
-                  <td style={{ padding: "10px 12px" }}><ChevronRight size={15} color={C.textFaint} /></td>
+                  <td style={{ padding: "10px 12px" }} data-label={cols[8]} className="jobsTableCell"><DeadlineBadge job={job} /></td>
+                  <td style={{ padding: "10px 12px" }} data-label={cols[9]} className="jobsTableCell"><ChevronRight size={15} color={C.textFaint} /></td>
                 </tr>
               );
             })}
@@ -1663,7 +1665,7 @@ function ParametersTable({ jobs, onOpenJob }) {
   return (
     <Panel style={{ overflow: "hidden" }}>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }} className="paramsTable">
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
               {["", "Parameter", "Waiting", "Running", "Complete", "Total", "Analysts"].map((h) => (
@@ -1675,36 +1677,38 @@ function ParametersTable({ jobs, onOpenJob }) {
             {groups.map((g) => {
               const isOpen = expanded === g.name;
               const rows = isOpen ? paramJobs(jobs, g.name) : [];
+              const cols = ["", "Parameter", "Waiting", "Running", "Complete", "Total", "Analysts"];
               return (
                 <React.Fragment key={g.name}>
                   <tr
                     onClick={() => setExpanded(isOpen ? null : g.name)}
                     style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}
+                    className="paramsTableRow"
                     onMouseEnter={(e) => (e.currentTarget.style.background = C.panel2)}
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
-                    <td style={{ padding: "10px 12px", width: 20 }}>
+                    <td style={{ padding: "10px 12px", width: 20 }} className="paramsTableChevron">
                       {isOpen ? <ChevronDown size={15} color={C.textFaint} /> : <ChevronRight size={15} color={C.textFaint} />}
                     </td>
-                    <td style={{ padding: "10px 12px", fontWeight: 700, color: C.text }}>{g.name}</td>
-                    <td style={{ padding: "10px 12px" }}>
+                    <td style={{ padding: "10px 12px", fontWeight: 700, color: C.text }} data-label={cols[1]} className="paramsTableTitleCell">{g.name}</td>
+                    <td style={{ padding: "10px 12px" }} data-label={cols[2]} className="paramsTableCell">
                       {g.waiting > 0 ? <Badge color={C.textMuted} bg={C.panel2}>{g.waiting}</Badge> : <span style={{ color: C.textFaint }}>0</span>}
                     </td>
-                    <td style={{ padding: "10px 12px" }}>
+                    <td style={{ padding: "10px 12px" }} data-label={cols[3]} className="paramsTableCell">
                       {g.running > 0 ? <Badge color={C.amber} bg={C.amberDim}>{g.running}</Badge> : <span style={{ color: C.textFaint }}>0</span>}
                     </td>
-                    <td style={{ padding: "10px 12px" }}>
+                    <td style={{ padding: "10px 12px" }} data-label={cols[4]} className="paramsTableCell">
                       {g.complete > 0 ? <Badge color={C.green} bg={C.greenDim}>{g.complete}</Badge> : <span style={{ color: C.textFaint }}>0</span>}
                     </td>
-                    <td style={{ padding: "10px 12px", fontFamily: "monospace", color: C.textMuted }}>{g.total}</td>
-                    <td style={{ padding: "10px 12px", color: C.textMuted, fontSize: 12 }}>
+                    <td style={{ padding: "10px 12px", fontFamily: "monospace", color: C.textMuted }} data-label={cols[5]} className="paramsTableCell">{g.total}</td>
+                    <td style={{ padding: "10px 12px", color: C.textMuted, fontSize: 12 }} data-label={cols[6]} className="paramsTableCell">
                       {g.analysts.length > 0 ? g.analysts.join(", ") : "-"}
                     </td>
                   </tr>
                   {isOpen && (
                     <tr>
                       <td colSpan={7} style={{ padding: 0, background: C.bg2 }}>
-                        <div style={{ padding: "10px 16px 16px 42px" }}>
+                        <div style={{ padding: "10px 16px 16px 42px" }} className="paramsQueuePanel">
                           <div style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
                             คิวของ "{g.name}" ({rows.length})
                           </div>
@@ -1713,6 +1717,7 @@ function ParametersTable({ jobs, onOpenJob }) {
                               <div
                                 key={`${p.jobNo}-${p.id}`}
                                 onClick={(e) => { e.stopPropagation(); onOpenJob(p.jobNo); }}
+                                className="paramQueueRowGrid"
                                 style={{
                                   display: "grid",
                                   gridTemplateColumns: "110px 1fr 1fr 90px 70px 70px",
@@ -1725,12 +1730,12 @@ function ParametersTable({ jobs, onOpenJob }) {
                                   cursor: "pointer",
                                 }}
                               >
-                                <span style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12 }}>{p.jobNo}</span>
-                                <span style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
-                                <span style={{ color: C.text, fontSize: 13 }}>{p.analyst || "-"}</span>
-                                <span><StatusBadge status={p.status} /></span>
-                                <span style={{ fontFamily: "monospace", fontSize: 12, color: C.textMuted }}>{tsLabel(p.startTs, p.start)}</span>
-                                <span style={{ fontFamily: "monospace", fontSize: 12, color: C.textMuted }}>{tsLabel(p.finishTs, p.finish)}</span>
+                                <span className="pqJobNo" style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12 }}>{p.jobNo}</span>
+                                <span className="pqSample" style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
+                                <span className="pqAnalyst" style={{ color: C.text, fontSize: 13 }}>{p.analyst || "-"}</span>
+                                <span className="pqStatus"><StatusBadge status={p.status} /></span>
+                                <span className="pqStart" style={{ fontFamily: "monospace", fontSize: 12, color: C.textMuted }}>{tsLabel(p.startTs, p.start)}</span>
+                                <span className="pqFinish" style={{ fontFamily: "monospace", fontSize: 12, color: C.textMuted }}>{tsLabel(p.finishTs, p.finish)}</span>
                               </div>
                             ))}
                           </div>
@@ -2072,6 +2077,45 @@ export default function App() {
         @media (max-width: 640px) {
           .latApp { border-radius: 0 !important; }
           .grid3col { grid-template-columns: 1fr !important; }
+
+          /* Dashboard: job row deadline/progress group drops to its own line */
+          .jobRowMeta { width: 100% !important; justify-content: space-between !important; margin-top: 2px !important; }
+
+          /* Jobs tab table + Parameters tab table: collapse into stacked cards */
+          .jobsTable thead, .paramsTable thead { display: none !important; }
+          .jobsTable, .jobsTable tbody, .jobsTableRow,
+          .paramsTable, .paramsTable tbody, .paramsTableRow { display: block !important; width: 100% !important; }
+          .jobsTableRow, .paramsTableRow { padding: 10px 12px !important; position: relative; }
+          .jobsTableCell, .jobsTableTitleCell,
+          .paramsTableCell, .paramsTableTitleCell {
+            display: flex !important; justify-content: space-between !important; align-items: center !important;
+            gap: 10px !important; padding: 3px 0 !important; text-align: right !important; width: auto !important;
+          }
+          .jobsTableTitleCell, .paramsTableTitleCell {
+            font-size: 14px !important; justify-content: flex-start !important; text-align: left !important;
+            border-bottom: 1px solid ${C.borderSoft} !important; padding-bottom: 6px !important; margin-bottom: 4px !important;
+          }
+          .jobsTableCell::before, .paramsTableCell::before {
+            content: attr(data-label); font-size: 10.5px; font-weight: 600; color: ${C.textMuted};
+            text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0; text-align: left;
+          }
+          .paramsTableChevron { position: absolute; top: 10px; right: 12px; padding: 0 !important; }
+          .paramsQueuePanel { padding: 10px 12px 14px 22px !important; }
+
+          /* Nested queue rows inside Parameters tab */
+          .paramQueueRowGrid {
+            grid-template-columns: 22px 1fr !important;
+            grid-template-areas: "chk jobno" "chk sample" "chk analyst" "chk status" "chk start" "chk finish" !important;
+            row-gap: 4px !important;
+          }
+          .pqJobNo { grid-area: jobno !important; }
+          .pqSample { grid-area: sample !important; }
+          .pqAnalyst { grid-area: analyst !important; }
+          .pqStatus { grid-area: status !important; }
+          .pqStart { grid-area: start !important; }
+          .pqStart::before { content: "เริ่ม: "; color: ${C.textFaint}; }
+          .pqFinish { grid-area: finish !important; }
+          .pqFinish::before { content: "เสร็จ: "; color: ${C.textFaint}; }
 
           /* Analysts tab: collapse the 5-column table into stacked cards */
           .analystsHeaderRow { display: none !important; }
