@@ -688,6 +688,7 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [showImport, setShowImport] = useState(false);
   const filtered = consumables.filter(s => s.name.toLowerCase().includes(q.toLowerCase()));
 
   function upsert(item) {
@@ -697,6 +698,13 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
     setEditing(null);
   }
   function remove(id) { setConsumables(consumables.filter(s => s.id !== id)); notify("ลบรายการแล้ว"); }
+
+  function importItems(items) {
+    const newItems = items.map(it => ({ id: uid(), name: it.name, unit: it.unit || "", quantity: it.quantity || 0, minThreshold: 0, transactions: [] }));
+    setConsumables([...newItems, ...consumables]);
+    notify(`นำเข้า ${newItems.length} รายการแล้ว`);
+    setShowImport(false);
+  }
 
   function addTransaction(itemId, tx) {
     setConsumables(consumables.map(s => {
@@ -745,6 +753,9 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
       <TabHeader title="พัสดุสิ้นเปลือง" sub="ติดตามปริมาณคงเหลือของวัสดุใช้แล้วหมดไป" />
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อพัสดุ..." />
+        <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
+          <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
+        </button>
         <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", minThreshold: 0, transactions: [] })}>
           <Plus size={15} /> เพิ่มพัสดุ
         </button>
@@ -763,6 +774,7 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
         empty="ยังไม่มีข้อมูลพัสดุสิ้นเปลือง"
       />
       {editing && <ConsumableForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {showImport && <ConsumablesImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
       {selectedItem && (
         <ConsumableDetail
           item={selectedItem}
@@ -775,6 +787,32 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
         />
       )}
     </div>
+  );
+}
+
+function ConsumablesImportForm({ onCancel, onImport }) {
+  const [text, setText] = useState("");
+  const parsed = text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
+    const parts = line.split("|").map(p => p.trim());
+    return { name: parts[0] || "", unit: parts[1] || "", quantity: Number(parts[2]) || 0 };
+  }).filter(r => r.name);
+
+  return (
+    <Modal onClose={onCancel} title="นำเข้ารายการพัสดุ" wide>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>
+        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>ชื่อพัสดุ | หน่วย | จำนวน</b> (คั่นด้วยเครื่องหมาย | )
+      </div>
+      <textarea
+        style={{ ...S.input, minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={"ตัวอย่าง:\nกระดาษกรอง No.1 (150 mm) | กล่อง | 49\nถุงมือแพทย์ Size L | กล่อง | 23"}
+      />
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 8 }}>
+        ตรวจพบ <b>{parsed.length}</b> รายการที่จะนำเข้า (รายการเดิมจะไม่ถูกลบหรือทับ — รายการใหม่จะถูกเพิ่มเข้าไป)
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onImport(parsed)} disabled={parsed.length === 0} />
+    </Modal>
   );
 }
 
