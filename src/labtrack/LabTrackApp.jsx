@@ -136,7 +136,7 @@ export default function App() {
     <div style={S.app} className="ltApp">
       <style>{CSS}</style>
       <div style={S.shell} className="ltShell">
-        {/* sidebar */}
+        {/* sidebar (becomes a compact top header on mobile; nav moves to the bottom bar below) */}
         <aside style={S.sidebar} className="ltSidebar">
           <div style={S.brand}>
             <div style={S.brandMark}>
@@ -186,6 +186,27 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* App-style bottom navigation bar, shown only on mobile (see .ltBottomNav in CSS) */}
+      <div className="ltBottomNav">
+        {NAV.map(n => {
+          const Icon = n.icon;
+          const active = tab === n.key;
+          const count = n.key === "dashboard"
+            ? alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length
+            : 0;
+          return (
+            <button key={n.key} onClick={() => setTab(n.key)} className="ltBottomNavBtn" style={{ color: active ? "var(--teal-dark)" : "var(--muted)" }}>
+              <span style={{ position: "relative" }}>
+                <Icon size={19} strokeWidth={active ? 2.4 : 2} />
+                {count > 0 && <span className="ltBottomNavBadge">{count}</span>}
+              </span>
+              <span style={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{n.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {toast && <div style={S.toast}>{toast}</div>}
     </div>
   );
@@ -195,11 +216,15 @@ export default function App() {
 function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
   const activeCount = equipment.filter(e => e.status === "active").length;
   const stats = [
-    { label: "เครื่องมือทั้งหมด", value: equipment.length, sub: `${activeCount} ใช้งานอยู่`, icon: Wrench },
-    { label: "รายการสารเคมี", value: chemicals.length, sub: `${alerts.expiry.length} ใกล้/เลยหมดอายุ`, icon: FlaskConical },
-    { label: "พัสดุสิ้นเปลือง", value: consumables.length, sub: `${alerts.lowStock.length} ใกล้หมด`, icon: Package },
-    { label: "รายการที่ต้องติดตาม", value: alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length, sub: "รวมทุกประเภท", icon: AlertTriangle },
+    { label: "เครื่องมือทั้งหมด", value: equipment.length, sub: `${activeCount} ใช้งานอยู่`, icon: Wrench, tint: "#E9F1FB", color: "var(--teal)" },
+    { label: "รายการสารเคมี", value: chemicals.length, sub: `${alerts.expiry.length} ใกล้/เลยหมดอายุ`, icon: FlaskConical, tint: "#FBE9E4", color: "#D9622E" },
+    { label: "พัสดุสิ้นเปลือง", value: consumables.length, sub: `${alerts.lowStock.length} ใกล้หมด`, icon: Package, tint: "#F0EAFB", color: "#7A4FC2" },
+    { label: "รายการที่ต้องติดตาม", value: alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length, sub: "รวมทุกประเภท", icon: AlertTriangle, tint: "#FBE4E1", color: "var(--red)" },
   ];
+
+  const calibOk = equipment.filter(e => statusOf(daysUntil(e.nextDue)) === "ok" && e.nextDue).length;
+  const calibWarn = alerts.calib.filter(x => x.st === "warn").length;
+  const calibDanger = alerts.calib.filter(x => x.st === "danger").length;
 
   return (
     <div>
@@ -216,17 +241,35 @@ function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
         {stats.map((s, i) => {
           const Icon = s.icon;
           return (
-            <div key={i} style={S.statCard}>
-              <div style={S.statTop}>
-                <Icon size={16} color="var(--teal)" />
-                <span style={S.statLabel}>{s.label}</span>
+            <div key={i} style={S.statCard} className="statCard">
+              <div className="statIconTile" style={{ width: 38, height: 38, borderRadius: 10, background: s.tint, display: "none", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <Icon size={18} color={s.color} />
               </div>
-              <div style={S.statValue}>{s.value}</div>
-              <div style={S.statSub}>{s.sub}</div>
+              <div>
+                <div style={S.statTop} className="statTop">
+                  <Icon size={16} color="var(--teal)" className="statTopIcon" />
+                  <span style={S.statLabel}>{s.label}</span>
+                </div>
+                <div style={S.statValue}>{s.value}</div>
+                <div style={S.statSub}>{s.sub}</div>
+              </div>
             </div>
           );
         })}
       </div>
+
+      {equipment.length > 0 && (
+        <div style={{ ...S.panel, marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={S.panelHead}>
+              <CalendarClock size={15} color="var(--ink)" />
+              <span style={S.panelTitle}>การสอบเทียบเครื่องมือ</span>
+            </div>
+            <button onClick={() => goto("equipment")} style={S.panelLink}>ดูทั้งหมด <ChevronRight size={13} /></button>
+          </div>
+          <CalibrationDonut ok={calibOk} warn={calibWarn} danger={calibDanger} />
+        </div>
+      )}
 
       <div style={S.alertCols}>
         <AlertPanel
@@ -259,6 +302,54 @@ function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
             ...alerts.lowChem.map(c => ({ key: "chem-" + c.id, st: c.quantity <= 0 ? "danger" : "warn", title: c.name + " (สารเคมี)", detail: `เหลือ ${c.quantity} ${c.unit} (ขั้นต่ำ ${c.minThreshold})` })),
           ]}
         />
+      </div>
+    </div>
+  );
+}
+
+function CalibrationDonut({ ok, warn, danger }) {
+  const total = ok + warn + danger;
+  const segs = [
+    { value: ok, color: "var(--green)", label: "ปกติ" },
+    { value: warn, color: "var(--amber)", label: "ใกล้ถึงกำหนด" },
+    { value: danger, color: "var(--red)", label: "เลยกำหนด" },
+  ];
+  const R = 42, C_ = 2 * Math.PI * R;
+  let offset = 0;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 22, marginTop: 12, flexWrap: "wrap" }}>
+      <svg width={110} height={110} viewBox="0 0 110 110" style={{ flexShrink: 0 }}>
+        <circle cx="55" cy="55" r={R} fill="none" stroke="var(--line)" strokeWidth="14" />
+        {total > 0 && segs.map((s, i) => {
+          if (s.value === 0) return null;
+          const frac = s.value / total;
+          const dash = frac * C_;
+          const circle = (
+            <circle
+              key={i}
+              cx="55" cy="55" r={R} fill="none" stroke={s.color} strokeWidth="14"
+              strokeDasharray={`${dash} ${C_ - dash}`}
+              strokeDashoffset={-offset}
+              transform="rotate(-90 55 55)"
+              strokeLinecap="butt"
+            />
+          );
+          offset += dash;
+          return circle;
+        })}
+        <text x="55" y="51" textAnchor="middle" fontSize="22" fontWeight="700" fontFamily="var(--font-mono)" fill="var(--ink)">{total}</text>
+        <text x="55" y="67" textAnchor="middle" fontSize="9" fill="var(--muted)">ทั้งหมด</text>
+      </svg>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {segs.map((s, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5 }}>
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
+            <span style={{ color: "var(--muted)" }}>{s.label}</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, color: "var(--ink)" }}>
+              {s.value} {total > 0 ? `(${Math.round((s.value / total) * 100)}%)` : ""}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -345,10 +436,13 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
           const days = daysUntil(e.nextDue);
           const st = statusOf(days);
           return (
-            <div key={e.id} style={S.eqCard} onClick={() => setSelected(e.id)}>
-              <div style={S.eqCardTop}>
-                <span style={{ ...S.beacon, background: STATUS_COLOR[st] }} />
-                <span style={S.eqCode}>{e.code}</span>
+            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0 }} onClick={() => setSelected(e.id)}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <div style={S.eqCardTop}>
+                  <span style={{ ...S.beacon, background: STATUS_COLOR[st] }} />
+                  <span style={S.eqCode}>{e.code}</span>
+                </div>
+                {e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
               </div>
               <div style={S.eqName}>{e.name}</div>
               <div style={S.eqMeta}><MapPin size={11} /> {e.location || "-"} · {e.type || "-"}</div>
@@ -757,7 +851,7 @@ button { cursor: pointer; }
 ::-webkit-scrollbar-thumb { background: #D3DBD9; border-radius: 8px; }
 
 @media (max-width: 760px) {
-  .ltApp { border-radius: 0 !important; }
+  .ltApp { border-radius: 0 !important; padding-bottom: 0 !important; }
   .ltShell { flex-direction: column !important; min-height: 0 !important; }
   .ltSidebar {
     width: 100% !important;
@@ -765,23 +859,10 @@ button { cursor: pointer; }
     border-right: none !important;
     border-bottom: 1px solid var(--line) !important;
   }
-  .ltNav {
-    margin-top: 10px !important;
-    display: flex !important;
-    flex-direction: row !important;
-    overflow-x: auto !important;
-    gap: 4px !important;
-    -webkit-overflow-scrolling: touch;
-  }
-  .ltNavBtn {
-    width: auto !important;
-    flex: 0 0 auto !important;
-    white-space: nowrap !important;
-    margin-bottom: 0 !important;
-  }
-  .ltNavBtnLabel { flex: none !important; }
+  /* Nav moves out of the sidebar into the fixed bottom bar on mobile */
+  .ltNav { display: none !important; }
   .ltSidebarFoot { display: none !important; }
-  .ltMain { padding: 14px 14px !important; max-height: none !important; }
+  .ltMain { padding: 14px 14px 76px !important; max-height: none !important; }
   .ltHero { padding: 18px 16px !important; border-radius: 12px !important; }
   .ltH1 { font-size: 20px !important; }
   .ltFormGrid { grid-template-columns: 1fr !important; }
@@ -803,6 +884,31 @@ button { cursor: pointer; }
     content: attr(data-label); font-size: 11px; font-weight: 600; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0; text-align: left;
   }
+
+  /* Colorful icon tiles on the dashboard stat cards, like a native app */
+  .statCard { display: flex !important; align-items: center !important; gap: 12px !important; }
+  .statIconTile { display: flex !important; }
+  .statTop { gap: 0 !important; }
+  .statTopIcon { display: none !important; }
+
+  .ltBottomNav {
+    display: flex !important;
+    position: sticky; bottom: 0; left: 0; right: 0; z-index: 20;
+    background: #fff; border-top: 1px solid var(--line);
+    padding: 2px 4px calc(4px + env(safe-area-inset-bottom));
+    box-shadow: 0 -2px 10px rgba(18,37,59,0.06);
+  }
+}
+
+.ltBottomNav { display: none; }
+.ltBottomNavBtn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; background: none; border: none; padding: 7px 2px 6px; font-family: var(--font-body);
+}
+.ltBottomNavBadge {
+  position: absolute; top: -4px; right: -8px; background: var(--red); color: #fff;
+  font-size: 9px; font-weight: 700; border-radius: 20px; padding: 1px 4px; min-width: 14px;
+  text-align: center; line-height: 1.3; font-family: var(--font-mono);
 }
 `;
 
