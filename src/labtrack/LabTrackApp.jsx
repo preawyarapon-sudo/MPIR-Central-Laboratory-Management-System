@@ -553,9 +553,36 @@ function EquipmentForm({ item, onCancel, onSave }) {
 
 function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddActivity }) {
   const [showAct, setShowAct] = useState(false);
+  const [activityFilter, setActivityFilter] = useState("all");
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
   const typeLabel = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ" };
+  const typeCounts = {
+    all: activities.length,
+    calibration: activities.filter(a => a.type === "calibration").length,
+    repair: activities.filter(a => a.type === "repair").length,
+    request: activities.filter(a => a.type === "request").length,
+    other: activities.filter(a => a.type === "other").length,
+  };
+  const shownActivities = activityFilter === "all" ? activities : activities.filter(a => a.type === activityFilter);
+
+  const filterTab = (key, label) => (
+    <button
+      key={key}
+      onClick={() => setActivityFilter(key)}
+      style={{
+        display: "flex", alignItems: "center", gap: 6,
+        background: activityFilter === key ? "#E9F1FB" : "transparent",
+        border: `1px solid ${activityFilter === key ? "var(--teal)" : "var(--line)"}`,
+        color: activityFilter === key ? "var(--teal-dark)" : "var(--muted)",
+        borderRadius: 999, padding: "5px 11px", fontSize: 12, fontWeight: 600,
+        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+      }}
+    >
+      {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({typeCounts[key]})</span>
+    </button>
+  );
+
   return (
     <Modal onClose={onClose} title={item.code} wide>
       {item.imageUrl && (
@@ -584,14 +611,28 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
         <div style={S.panelTitle}>ประวัติกิจกรรม</div>
         <button style={S.smallBtn} onClick={() => setShowAct(true)}><Plus size={13} /> บันทึกกิจกรรม</button>
       </div>
-      <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8, maxHeight: 260, overflowY: "auto" }}>
-        {activities.length === 0 && <EmptyState text="ยังไม่มีประวัติกิจกรรม" small />}
-        {activities.map(a => (
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+        {filterTab("all", "ทั้งหมด")}
+        {filterTab("calibration", "สอบเทียบ")}
+        {filterTab("repair", "ซ่อม")}
+        {filterTab("request", "แจ้งซ่อม")}
+        {filterTab("other", "อื่นๆ")}
+      </div>
+      <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+        {shownActivities.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
+        {shownActivities.map(a => (
           <div key={a.id} style={S.activityRow}>
             <div style={S.activityDate}>{fmtDate(a.date)}</div>
             <div style={{ flex: 1 }}>
               <div style={S.activityType}>{typeLabel[a.type] || a.type}</div>
-              <div style={S.activityDetail}>{a.detail}{a.by ? ` · โดย ${a.by}` : ""}</div>
+              <div style={S.activityDetail}>
+                {a.detail}{a.by ? ` · โดย ${a.by}` : ""}{a.poNo ? ` · PO: ${a.poNo}` : ""}
+              </div>
+              {a.certUrl && (
+                <a href={a.certUrl} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal)", marginTop: 4 }}>
+                  <FileDown size={11} /> ดูใบ Certificate
+                </a>
+              )}
             </div>
           </div>
         ))}
@@ -605,7 +646,7 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
 }
 
 function ActivityForm({ onCancel, onSave }) {
-  const [f, setF] = useState({ date: todayISO(), type: "calibration", detail: "", by: "" });
+  const [f, setF] = useState({ date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", certUrl: "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
     <Modal onClose={onCancel} title="บันทึกกิจกรรม">
@@ -620,7 +661,11 @@ function ActivityForm({ onCancel, onSave }) {
           </select>
         </Field>
         <Field label="ผู้ดำเนินการ / บริษัท"><input style={S.input} value={f.by} onChange={set("by")} /></Field>
+        <Field label="เลขที่ PO"><input style={S.input} value={f.poNo} onChange={set("poNo")} placeholder="เช่น PO-2569-0123" /></Field>
         <Field label="รายละเอียด" full><textarea style={{ ...S.input, minHeight: 70 }} value={f.detail} onChange={set("detail")} /></Field>
+        <Field label="ลิงก์ใบ Certificate" full>
+          <input style={S.input} value={f.certUrl} onChange={set("certUrl")} placeholder="วางลิงก์ใบรับรองผลสอบเทียบ เช่น SharePoint, Google Drive" />
+        </Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.detail} />
     </Modal>
@@ -1282,8 +1327,8 @@ function ReportsTab({ equipment, activities, chemicals, consumables }) {
     ["รหัส", "ชื่อ", "ประเภท", "ตำแหน่ง", "สถานะ", "สอบเทียบล่าสุด", "กำหนดถัดไป", "หมายเหตุ"]
   ));
   const exportActivities = () => download("activities.csv", toCSV(
-    activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, a.type, a.detail, a.by]),
-    ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ"]
+    activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, a.type, a.detail, a.by, a.poNo || "", a.certUrl || ""]),
+    ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ Certificate"]
   ));
   const exportChemicals = () => download("chemicals.csv", toCSV(
     chemicals.map(c => [c.name, c.formula || "", c.brand || "", c.quantity, c.unit, earliestExpiry(c), c.location, c.minThreshold]),
