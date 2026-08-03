@@ -1362,6 +1362,7 @@ function QueueRow({ p, onOpenJob, tone, checked, onToggle }) {
   return (
     <div
       onClick={() => onToggle(`${p.jobNo}__${p.id}`)}
+      className="queueRowGrid"
       style={{
         display: "grid", gridTemplateColumns: "24px 110px 1fr 1fr 90px",
         gap: 10, alignItems: "center", padding: "8px 10px",
@@ -1374,10 +1375,12 @@ function QueueRow({ p, onOpenJob, tone, checked, onToggle }) {
         checked={checked}
         onClick={(e) => e.stopPropagation()}
         onChange={() => onToggle(`${p.jobNo}__${p.id}`)}
+        className="qrCheck"
         style={{ cursor: "pointer" }}
       />
       <span
         onClick={(e) => { e.stopPropagation(); onOpenJob(p.jobNo); }}
+        className="qrJobNo"
         style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12, cursor: "pointer", textDecoration: "underline", textDecorationColor: "transparent" }}
         onMouseEnter={(e) => (e.currentTarget.style.textDecorationColor = C.cyan)}
         onMouseLeave={(e) => (e.currentTarget.style.textDecorationColor = "transparent")}
@@ -1385,11 +1388,11 @@ function QueueRow({ p, onOpenJob, tone, checked, onToggle }) {
       >
         {p.jobNo}
       </span>
-      <span style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
+      <span className="qrSample" style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
+      <span className="qrName" style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
         <StatusGlyph status={p.status} size={12} /> {p.name}
       </span>
-      <span style={{ fontSize: 11.5, fontWeight: 700, color: tone === "amber" ? C.amber : C.textMuted }}>
+      <span className="qrTone" style={{ fontSize: 11.5, fontWeight: 700, color: tone === "amber" ? C.amber : C.textMuted }}>
         {tone === "amber" ? "กำลังวิเคราะห์" : "รอคิว"}
       </span>
     </div>
@@ -1405,21 +1408,22 @@ function RepairQueueRow({ p, onOpenJob }) {
   return (
     <div
       onClick={() => onOpenJob(p.jobNo)}
+      className="repairRowGrid"
       style={{
         display: "grid", gridTemplateColumns: "110px 1fr 1fr 90px",
         gap: 10, alignItems: "center", padding: "8px 10px",
         background: C.panel, border: `1px solid ${C.redDim}`, borderRadius: 6, cursor: "pointer",
       }}
     >
-      <span style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12 }}>{p.jobNo}</span>
-      <span style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
+      <span className="rqJobNo" style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12 }}>{p.jobNo}</span>
+      <span className="rqSample" style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
+      <span className="rqName" style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
         <Wrench size={12} color={C.red} /> {p.name}
         <span style={{ fontSize: 10.5, fontWeight: 700, color: C.red, background: C.redDim, padding: "1px 6px", borderRadius: 999, fontFamily: "monospace" }}>
           {pendingCount} รายการ
         </span>
       </span>
-      <span style={{ fontSize: 11.5, fontWeight: 700, color: C.red }}>ต้องซ่อม</span>
+      <span className="rqTone" style={{ fontSize: 11.5, fontWeight: 700, color: C.red }}>ต้องซ่อม</span>
     </div>
   );
 }
@@ -1487,22 +1491,23 @@ function AnalystRow({ a, onOpenJob, onBulkUpdate }) {
     <div style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
       <div
         onClick={toggleOpen}
+        className="analystRowMain"
         style={{ display: "grid", gridTemplateColumns: "20px 1.2fr 1fr 1.4fr 150px", gap: 10, alignItems: "center", padding: "12px 10px", cursor: "pointer" }}
       >
-        {open ? <ChevronDown size={15} color={C.textFaint} /> : <ChevronRight size={15} color={C.textFaint} />}
-        <span style={{ fontWeight: 700, color: C.text, fontSize: 13.5 }}>{a.name}</span>
-        <span style={{ fontFamily: "monospace", color: current ? C.cyan : C.textFaint, fontSize: 12.5 }}>{current ? current.jobNo : "ว่าง"}</span>
-        <span style={{ fontSize: 13, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
+        <span className="arChevron">{open ? <ChevronDown size={15} color={C.textFaint} /> : <ChevronRight size={15} color={C.textFaint} />}</span>
+        <span className="arName" style={{ fontWeight: 700, color: C.text, fontSize: 13.5 }}>{a.name}</span>
+        <span className="arJobNo" style={{ fontFamily: "monospace", color: current ? C.cyan : C.textFaint, fontSize: 12.5 }}>{current ? current.jobNo : "ว่าง"}</span>
+        <span className="arParam" style={{ fontSize: 13, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
           {current ? <><CircleDot size={12} color={C.amber} /> {current.name}</> : "-"}
         </span>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div className="arBadges" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {a.repair.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.red, background: C.redDim, padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 4 }}><Wrench size={11} /> {a.repair.length} ต้องซ่อม</span>}
           {a.running.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.amber, background: C.amberDim, padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap" }}>{a.running.length} กำลังทำ</span>}
           {a.waiting.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, background: C.panel2, padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap" }}>{a.waiting.length} รอคิว</span>}
         </div>
       </div>
       {open && (
-        <div style={{ padding: "4px 12px 16px 42px", background: C.bg2 }}>
+        <div className="analystRowDetail" style={{ padding: "4px 12px 16px 42px", background: C.bg2 }}>
           {selectedKeys.size > 0 && (
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
               <div style={{ fontSize: 12, color: C.cyan, fontWeight: 600 }}>เลือกแล้ว {selectedKeys.size} รายการ</div>
@@ -1596,15 +1601,17 @@ function AnalystRow({ a, onOpenJob, onBulkUpdate }) {
                     {a.done.map((p) => (
                       <div
                         key={`${p.jobNo}-${p.id}`}
+                        className="queueRowGrid"
                         style={{
                           display: "grid", gridTemplateColumns: "24px 110px 1fr 1fr 90px",
                           gap: 10, alignItems: "center", padding: "8px 10px",
                           background: C.greenDim, border: `1px solid ${C.greenDim}`, borderRadius: 6, opacity: 0.85,
                         }}
                       >
-                        <span />
+                        <span className="qrCheck" />
                         <span
                           onClick={() => onOpenJob(p.jobNo)}
+                          className="qrJobNo"
                           style={{ fontFamily: "monospace", fontWeight: 700, color: C.cyan, fontSize: 12, cursor: "pointer", textDecoration: "underline", textDecorationColor: "transparent" }}
                           onMouseEnter={(e) => (e.currentTarget.style.textDecorationColor = C.cyan)}
                           onMouseLeave={(e) => (e.currentTarget.style.textDecorationColor = "transparent")}
@@ -1612,11 +1619,11 @@ function AnalystRow({ a, onOpenJob, onBulkUpdate }) {
                         >
                           {p.jobNo}
                         </span>
-                        <span style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
+                        <span className="qrSample" style={{ color: C.textMuted, fontSize: 12 }}>{p.sample || "-"}</span>
+                        <span className="qrName" style={{ display: "inline-flex", alignItems: "center", gap: 6, color: C.text, fontSize: 13, fontWeight: 600 }}>
                           <StatusGlyph status={p.status} size={12} /> {p.name}
                         </span>
-                        <span style={{ fontSize: 11.5, fontWeight: 700, color: C.green }}>เสร็จแล้ว</span>
+                        <span className="qrTone" style={{ fontSize: 11.5, fontWeight: 700, color: C.green }}>เสร็จแล้ว</span>
                       </div>
                     ))}
                   </div>
@@ -1634,7 +1641,7 @@ function AnalystsTable({ jobs, onOpenJob, onBulkUpdate }) {
   const analysts = useMemo(() => computeAnalysts(jobs), [jobs]);
   return (
     <Panel style={{ overflow: "hidden" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "20px 1.2fr 1fr 1.4fr 150px", gap: 10, padding: "10px 10px", borderBottom: `1px solid ${C.border}` }}>
+      <div className="analystsHeaderRow" style={{ display: "grid", gridTemplateColumns: "20px 1.2fr 1fr 1.4fr 150px", gap: 10, padding: "10px 10px", borderBottom: `1px solid ${C.border}` }}>
         {["", "ผู้วิเคราะห์", "งานปัจจุบัน", "พารามิเตอร์ที่ทำอยู่", "คิว"].map((h) => (
           <span key={h} style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{h}</span>
         ))}
@@ -2065,6 +2072,43 @@ export default function App() {
         @media (max-width: 640px) {
           .latApp { border-radius: 0 !important; }
           .grid3col { grid-template-columns: 1fr !important; }
+
+          /* Analysts tab: collapse the 5-column table into stacked cards */
+          .analystsHeaderRow { display: none !important; }
+          .analystRowDetail { padding: 4px 10px 14px 22px !important; }
+
+          .analystRowMain {
+            grid-template-columns: 20px 1fr !important;
+            grid-template-areas: "chev name" "chev jobno" "chev param" "chev badges" !important;
+            row-gap: 5px !important;
+            padding: 12px 8px !important;
+          }
+          .arChevron { grid-area: chev !important; align-self: start !important; padding-top: 2px !important; }
+          .arName { grid-area: name !important; font-size: 14.5px !important; }
+          .arJobNo { grid-area: jobno !important; font-size: 12px !important; }
+          .arParam { grid-area: param !important; font-size: 12.5px !important; }
+          .arBadges { grid-area: badges !important; margin-top: 2px !important; }
+
+          .queueRowGrid {
+            grid-template-columns: 22px 1fr !important;
+            grid-template-areas: "chk jobno" "chk sample" "chk name" "chk tone" !important;
+            row-gap: 4px !important;
+          }
+          .qrCheck { grid-area: chk !important; align-self: start !important; }
+          .qrJobNo { grid-area: jobno !important; }
+          .qrSample { grid-area: sample !important; }
+          .qrName { grid-area: name !important; }
+          .qrTone { grid-area: tone !important; }
+
+          .repairRowGrid {
+            grid-template-columns: 1fr !important;
+            grid-template-areas: "jobno" "sample" "name" "tone" !important;
+            row-gap: 4px !important;
+          }
+          .rqJobNo { grid-area: jobno !important; }
+          .rqSample { grid-area: sample !important; }
+          .rqName { grid-area: name !important; }
+          .rqTone { grid-area: tone !important; }
         }
       `}</style>
       <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
