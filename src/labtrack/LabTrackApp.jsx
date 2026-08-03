@@ -675,6 +675,7 @@ function ChemicalForm({ item, onCancel, onSave }) {
 function ConsumablesTab({ consumables, setConsumables, notify }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState(null);
+  const [selected, setSelected] = useState(null);
   const filtered = consumables.filter(s => (s.name + s.location).toLowerCase().includes(q.toLowerCase()));
 
   function upsert(item) {
@@ -685,17 +686,29 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
   }
   function remove(id) { setConsumables(consumables.filter(s => s.id !== id)); notify("ลบรายการแล้ว"); }
 
+  function addTransaction(itemId, tx) {
+    setConsumables(consumables.map(s => {
+      if (s.id !== itemId) return s;
+      const delta = tx.type === "receive" ? tx.qty : -tx.qty;
+      return { ...s, quantity: Math.max(0, (s.quantity || 0) + delta), transactions: [{ ...tx, id: uid() }, ...(s.transactions || [])] };
+    }));
+    notify(tx.type === "receive" ? "บันทึกรับเข้าแล้ว" : "บันทึกเบิกใช้แล้ว");
+  }
+
+  const selectedItem = consumables.find(s => s.id === selected);
+
   return (
     <div>
       <TabHeader title="พัสดุสิ้นเปลือง" sub="ติดตามปริมาณคงเหลือของวัสดุใช้แล้วหมดไป" />
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อพัสดุ, ตำแหน่ง..." />
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", minThreshold: 0, location: "" })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", minThreshold: 0, location: "", transactions: [] })}>
           <Plus size={15} /> เพิ่มพัสดุ
         </button>
       </Toolbar>
       <Table
         cols={["ชื่อพัสดุ", "คงเหลือ", "ขั้นต่ำ", "ตำแหน่ง", ""]}
+        onRowClick={(i) => setSelected(filtered[i].id)}
         rows={filtered.map(s => {
           const low = s.quantity <= s.minThreshold;
           return [
@@ -709,7 +722,117 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
         empty="ยังไม่มีข้อมูลพัสดุสิ้นเปลือง"
       />
       {editing && <ConsumableForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {selectedItem && (
+        <ConsumableDetail
+          item={selectedItem}
+          onClose={() => setSelected(null)}
+          onEdit={() => { setEditing(selectedItem); setSelected(null); }}
+          onDelete={() => { remove(selectedItem.id); setSelected(null); }}
+          onAddTransaction={(tx) => addTransaction(selectedItem.id, tx)}
+        />
+      )}
     </div>
+  );
+}
+
+function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction }) {
+  const [showForm, setShowForm] = useState(null); // "receive" | "withdraw" | null
+  const low = item.quantity <= item.minThreshold;
+  const txs = item.transactions || [];
+  return (
+    <Modal onClose={onClose} title={item.name} wide>
+      <div style={S.detailHead}>
+        <div>
+          <div style={S.detailName}>{item.name}</div>
+          <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
+          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={onDelete}><Trash2 size={14} /></button>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 10, margin: "12px 0 6px", flexWrap: "wrap" }}>
+        <Tag color={low ? (item.quantity <= 0 ? "var(--red)" : "var(--amber)") : "var(--green)"}>
+          คงเหลือ {item.quantity} {item.unit} {low ? (item.quantity <= 0 ? "· หมด" : "· ใกล้หมด") : ""}
+        </Tag>
+        <Tag color="var(--muted)">ขั้นต่ำ {item.minThreshold} {item.unit}</Tag>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button style={{ ...S.primaryBtn, flex: 1, justifyContent: "center" }} onClick={() => setShowForm("receive")}>
+          <Plus size={14} /> บันทึกรับเข้า (PO)
+        </button>
+        <button style={{ ...S.ghostBtn, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => setShowForm("withdraw")}>
+          <Package size={14} /> บันทึกเบิกใช้
+        </button>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20 }}>
+        <div style={S.panelTitle}>ประวัติรับเข้า / เบิกใช้</div>
+      </div>
+      <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
+        {txs.length === 0 && <EmptyState text="ยังไม่มีประวัติรับเข้าหรือเบิกใช้" small />}
+        {txs.map(t => (
+          <div key={t.id} style={S.activityRow}>
+            <div style={S.activityDate}>{fmtDate(t.date)}</div>
+            <div style={{ flex: 1 }}>
+              <div style={S.activityType}>
+                <span style={{ color: t.type === "receive" ? "var(--green)" : "var(--red)" }}>
+                  {t.type === "receive" ? `รับเข้า +${t.qty} ${item.unit}` : `เบิกใช้ -${t.qty} ${item.unit}`}
+                </span>
+              </div>
+              <div style={S.activityDetail}>
+                {t.type === "receive" && t.poNo ? `PO: ${t.poNo}` : t.type === "withdraw" && t.by ? `ผู้เบิก: ${t.by}` : ""}
+                {t.note ? ` · ${t.note}` : ""}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showForm && (
+        <ConsumableTxForm
+          type={showForm}
+          item={item}
+          onCancel={() => setShowForm(null)}
+          onSave={(tx) => { onAddTransaction(tx); setShowForm(null); }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function ConsumableTxForm({ type, item, onCancel, onSave }) {
+  const isReceive = type === "receive";
+  const [f, setF] = useState({ date: todayISO(), qty: "", poNo: "", by: "", note: "" });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const qtyNum = Number(f.qty) || 0;
+  const wouldGoNegative = !isReceive && qtyNum > item.quantity;
+  return (
+    <Modal onClose={onCancel} title={isReceive ? "บันทึกรับเข้าพัสดุ (PO)" : "บันทึกเบิกใช้พัสดุ"}>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
+        <Field label={isReceive ? "จำนวนที่รับเข้า" : "จำนวนที่เบิกใช้"}>
+          <input type="number" style={S.input} value={f.qty} onChange={set("qty")} placeholder={`หน่วย: ${item.unit || "-"}`} />
+        </Field>
+        {isReceive ? (
+          <Field label="เลขที่ใบสั่งซื้อ (PO)" full><input style={S.input} value={f.poNo} onChange={set("poNo")} placeholder="เช่น PO-2569-0123" /></Field>
+        ) : (
+          <Field label="ผู้เบิก / แผนก" full><input style={S.input} value={f.by} onChange={set("by")} placeholder="เช่น สมชาย / ฝ่ายควบคุมคุณภาพ" /></Field>
+        )}
+        <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.note} onChange={set("note")} /></Field>
+      </div>
+      {wouldGoNegative && (
+        <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>
+          จำนวนที่เบิกมากกว่าคงเหลือ ({item.quantity} {item.unit}) — ระบบจะปรับคงเหลือเป็น 0
+        </div>
+      )}
+      <ModalFooter
+        onCancel={onCancel}
+        onSave={() => onSave({ type, date: f.date, qty: qtyNum, poNo: f.poNo, by: f.by, note: f.note })}
+        disabled={!f.date || qtyNum <= 0}
+      />
+    </Modal>
   );
 }
 
@@ -836,7 +959,7 @@ function ModalFooter({ onCancel, onSave, disabled }) {
 function Tag({ children, color }) {
   return <span style={{ ...S.tag, color, borderColor: color + "55", background: color + "14" }}>{children}</span>;
 }
-function Table({ cols, rows, empty }) {
+function Table({ cols, rows, empty, onRowClick }) {
   return (
     <div style={S.tableWrap}>
       <table style={S.table} className="ltTable">
@@ -844,7 +967,12 @@ function Table({ cols, rows, empty }) {
         <tbody>
           {rows.length === 0 && <tr><td colSpan={cols.length}><EmptyState text={empty} /></td></tr>}
           {rows.map((r, i) => (
-            <tr key={i} style={S.tr} className="ltTableRow">
+            <tr
+              key={i}
+              style={{ ...S.tr, cursor: onRowClick ? "pointer" : "default" }}
+              className="ltTableRow"
+              onClick={onRowClick ? () => onRowClick(i) : undefined}
+            >
               {r.map((c, j) => (
                 <td key={j} style={S.td} data-label={cols[j]} className={j === 0 ? "ltTableTitleCell" : "ltTableCell"}>
                   {c}
@@ -864,7 +992,7 @@ function RowTitle({ text, beacon }) {
 }
 function Mono({ children }) { return <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{children}</span>; }
 function RowActions({ onEdit, onDelete }) {
-  return <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+  return <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
     <button style={S.iconBtnSm} onClick={onEdit}><Pencil size={13} /></button>
     <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={onDelete}><Trash2 size={13} /></button>
   </div>;
