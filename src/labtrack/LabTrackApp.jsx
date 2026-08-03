@@ -770,25 +770,8 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20 }}>
         <div style={S.panelTitle}>ประวัติรับเข้า / เบิกใช้</div>
       </div>
-      <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
-        {txs.length === 0 && <EmptyState text="ยังไม่มีประวัติรับเข้าหรือเบิกใช้" small />}
-        {txs.map(t => (
-          <div key={t.id} style={S.activityRow}>
-            <div style={S.activityDate}>{fmtDate(t.date)}</div>
-            <div style={{ flex: 1 }}>
-              <div style={S.activityType}>
-                <span style={{ color: t.type === "receive" ? "var(--green)" : "var(--red)" }}>
-                  {t.type === "receive" ? `รับเข้า +${t.qty} ${item.unit}` : `เบิกใช้ -${t.qty} ${item.unit}`}
-                </span>
-              </div>
-              <div style={S.activityDetail}>
-                {t.type === "receive" && t.poNo ? `PO: ${t.poNo}` : t.type === "withdraw" && t.by ? `ผู้เบิก: ${t.by}` : ""}
-                {t.note ? ` · ${t.note}` : ""}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+      <TxHistoryGroup title="รับเข้า" color="var(--green)" txs={txs.filter(t => t.type === "receive")} unit={item.unit} />
+      <TxHistoryGroup title="เบิกใช้" color="var(--red)" txs={txs.filter(t => t.type === "withdraw")} unit={item.unit} />
 
       {showForm && (
         <ConsumableTxForm
@@ -799,6 +782,33 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
         />
       )}
     </Modal>
+  );
+}
+
+function TxHistoryGroup({ title, color, txs, unit }) {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+        {title} ({txs.length})
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 220, overflowY: "auto" }}>
+        {txs.length === 0 && <EmptyState text={`ยังไม่มีรายการ${title}`} small />}
+        {txs.map(t => (
+          <div key={t.id} style={S.activityRow}>
+            <div style={S.activityDate}>{fmtDate(t.date)}</div>
+            <div style={{ flex: 1 }}>
+              <div style={S.activityType}>
+                <span style={{ color }}>{t.type === "receive" ? `+${t.qty} ${unit}` : `-${t.qty} ${unit}`}</span>
+              </div>
+              <div style={S.activityDetail}>
+                {t.type === "receive" && t.poNo ? `PO: ${t.poNo}` : t.type === "withdraw" && t.by ? `ผู้เบิก: ${t.by}` : ""}
+                {t.note ? ` · ${t.note}` : ""}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -882,12 +892,32 @@ function ReportsTab({ equipment, activities, chemicals, consumables }) {
     consumables.map(s => [s.name, s.quantity, s.unit, s.minThreshold, s.location]),
     ["ชื่อ", "คงเหลือ", "หน่วย", "ขั้นต่ำ", "ตำแหน่ง"]
   ));
+  const exportMonthlySummary = () => {
+    const map = {};
+    consumables.forEach(s => {
+      (s.transactions || []).forEach(t => {
+        const month = (t.date || "").slice(0, 7) || "ไม่ระบุเดือน";
+        const key = `${month}|${s.name}`;
+        if (!map[key]) map[key] = { month, name: s.name, unit: s.unit, received: 0, withdrawn: 0 };
+        if (t.type === "receive") map[key].received += Number(t.qty) || 0;
+        else map[key].withdrawn += Number(t.qty) || 0;
+      });
+    });
+    const rows = Object.values(map).sort((a, b) => a.month.localeCompare(b.month) || a.name.localeCompare(b.name));
+    download("consumables-monthly-summary.csv", toCSV(
+      rows.map(r => [r.month, r.name, r.received, r.withdrawn, r.received - r.withdrawn, r.unit]),
+      ["เดือน", "ชื่อพัสดุ", "รวมรับเข้า", "รวมเบิกใช้", "สุทธิ (รับ-เบิก)", "หน่วย"]
+    ));
+  };
+
+  const txCount = consumables.reduce((sum, s) => sum + (s.transactions || []).length, 0);
 
   const cards = [
     { title: "เครื่องมือทั้งหมด", desc: `${equipment.length} รายการ พร้อมกำหนดสอบเทียบ`, action: exportEquipment, icon: Wrench },
     { title: "ประวัติกิจกรรม", desc: `${activities.length} รายการ สอบเทียบ/ซ่อม/แจ้งซ่อม`, action: exportActivities, icon: CalendarClock },
     { title: "สต็อคสารเคมี", desc: `${chemicals.length} รายการ พร้อมวันหมดอายุ`, action: exportChemicals, icon: FlaskConical },
     { title: "พัสดุสิ้นเปลือง", desc: `${consumables.length} รายการ พร้อมปริมาณคงเหลือ`, action: exportConsumables, icon: Package },
+    { title: "สรุปรับเข้า-เบิกใช้รายเดือน", desc: `${txCount} รายการรับเข้า/เบิกใช้ สรุปตามเดือนและรายการ`, action: exportMonthlySummary, icon: CalendarClock },
   ];
 
   return (
@@ -1131,7 +1161,7 @@ const S = {
   iconBtn: { background: "transparent", border: "1px solid var(--line)", borderRadius: 7, padding: 6, display: "flex" },
   iconBtnSm: { background: "transparent", border: "1px solid var(--line)", borderRadius: 6, padding: 5, display: "flex" },
 
-  cardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px,1fr))", gap: 12 },
+  cardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px,1fr))", gap: 12, alignItems: "start" },
   eqCard: { background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10, padding: "12px 14px" },
   eqCardTop: { display: "flex", alignItems: "center", gap: 7 },
   eqCode: { fontFamily: "var(--font-mono)", fontSize: 12.5, fontWeight: 500 },
