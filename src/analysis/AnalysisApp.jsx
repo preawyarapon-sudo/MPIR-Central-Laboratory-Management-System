@@ -1257,14 +1257,16 @@ function JobsList({ jobs, onOpen }) {
 
   const chip = (key, label, count, accent) => (
     <button
+      key={key}
       onClick={() => setView(key)}
+      className="filterChip"
       style={{
         display: "flex", alignItems: "center", gap: 6,
         background: view === key ? (accent ? C.redDim : C.panel2) : "transparent",
         border: `1px solid ${view === key ? (accent || C.cyan) : accent ? C.red : C.border}`,
         color: view === key ? (accent || C.text) : accent ? C.red : C.textMuted,
         borderRadius: 999, padding: "6px 14px", fontSize: 12.5, fontWeight: 600,
-        cursor: "pointer", fontFamily: "inherit",
+        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0,
       }}
     >
       {accent && <Wrench size={12} />} {label} <span style={{ fontFamily: "monospace", opacity: 0.8 }}>({count})</span>
@@ -1274,7 +1276,7 @@ function JobsList({ jobs, onOpen }) {
   return (
     <Panel style={{ overflow: "hidden" }}>
       <div style={{ display: "flex", gap: 12, padding: "14px 16px", borderBottom: `1px solid ${C.borderSoft}`, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, minWidth: 0, maxWidth: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch" }} className="filterChipRow">
           {chip("active", "กำลังดำเนินการ", activeJobs.length)}
           {chip("complete", "เสร็จสมบูรณ์", doneJobs.length)}
           {repairJobs.length > 0 && chip("repair", "ต้องซ่อม", repairJobs.length, C.red)}
@@ -2136,6 +2138,11 @@ export default function App() {
              scrollable (and start scrolled) whenever any cell was a hair
              wider than the screen, clipping text on the left. */
           .tableScrollWrap { overflow-x: hidden !important; }
+
+          /* Filter chips (Jobs tab): keep them compact and single-line;
+             scroll horizontally instead of wrapping text into an oval */
+          .filterChipRow { flex-wrap: nowrap !important; }
+          .filterChip { font-size: 12px !important; padding: 6px 11px !important; }
           .jobsTable thead, .paramsTable thead { display: none !important; }
           .jobsTable, .jobsTable tbody, .jobsTableRow,
           .paramsTable, .paramsTable tbody, .paramsTableRow { display: block !important; width: 100% !important; }
