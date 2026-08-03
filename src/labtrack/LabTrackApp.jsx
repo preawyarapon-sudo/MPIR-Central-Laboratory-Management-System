@@ -1457,7 +1457,7 @@ function Tag({ children, color }) {
 }
 function Table({ cols, rows, empty, onRowClick }) {
   return (
-    <div style={S.tableWrap}>
+    <div style={S.tableWrap} className="ltTableWrap">
       <table style={S.table} className="ltTable">
         <thead><tr>{cols.map((c, i) => <th key={i} style={S.th}>{c}</th>)}</tr></thead>
         <tbody>
@@ -1531,12 +1531,17 @@ button { cursor: pointer; }
   /* Chemicals / Consumables tables: collapse into stacked cards.
      Cells flow inline (wrapping) instead of one row per cell, so short
      cells like quantity and the edit/delete actions end up sharing a
-     line instead of each getting their own row. */
+     line instead of each getting their own row. Each row also gets its
+     own card (background, border, spacing) instead of a flat list with
+     only hairlines between items, which read as too cramped/joined-up. */
+  .ltTableWrap { background: transparent !important; border: none !important; border-radius: 0 !important; }
   .ltTable thead { display: none !important; }
   .ltTable, .ltTable tbody { display: block !important; width: 100% !important; }
   .ltTableRow {
     display: flex !important; flex-wrap: wrap !important; align-items: center !important;
-    gap: 4px 14px !important; padding: 12px 14px !important; width: 100% !important; box-sizing: border-box !important;
+    gap: 4px 14px !important; padding: 14px 16px !important; width: 100% !important; box-sizing: border-box !important;
+    background: #fff !important; border: 1px solid var(--line) !important; border-radius: 12px !important;
+    margin-bottom: 10px !important; box-shadow: 0 1px 3px rgba(18,37,59,0.05) !important;
   }
   .ltTableCell, .ltTableTitleCell {
     display: flex !important; align-items: center !important; gap: 6px !important;
@@ -1544,7 +1549,7 @@ button { cursor: pointer; }
   }
   .ltTableTitleCell {
     flex: 1 1 100% !important; font-weight: 600 !important; font-size: 13.5px !important;
-    border-bottom: 1px solid var(--line) !important; padding-bottom: 6px !important; margin-bottom: 2px !important;
+    border-bottom: 1px solid var(--line) !important; padding-bottom: 8px !important; margin-bottom: 4px !important;
   }
   .ltTableCell { font-size: 12.5px !important; }
   .ltTableCell::before {
