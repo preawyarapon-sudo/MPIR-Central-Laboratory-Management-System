@@ -27,6 +27,14 @@ function statusOf(days) {
 }
 const STATUS_COLOR = { ok: "var(--green)", warn: "var(--amber)", danger: "var(--red)", none: "var(--muted)" };
 const STATUS_LABEL = { ok: "ปกติ", warn: "ใกล้ถึงกำหนด", danger: "เลยกำหนด", none: "-" };
+// Soonest expiry date for a chemical, considering both the legacy single
+// expiryDate field and any per-batch expiry dates recorded on "receive"
+// transactions — so items with any near-expiry stock surface first.
+function earliestExpiry(item) {
+  const dates = [item.expiryDate, ...((item.transactions || []).filter(t => t.type === "receive" && t.expiryDate).map(t => t.expiryDate))].filter(Boolean);
+  if (dates.length === 0) return null;
+  return dates.sort()[0];
+}
 
 async function loadList(key, seed) {
   try {
@@ -111,7 +119,7 @@ export default function App() {
       .filter(x => x.st === "warn" || x.st === "danger")
       .sort((a, b) => a.days - b.days);
     const expiry = chemicals
-      .map(c => ({ c, days: daysUntil(c.expiryDate), st: statusOf(daysUntil(c.expiryDate)) }))
+      .map(c => ({ c, days: daysUntil(earliestExpiry(c)), st: statusOf(daysUntil(earliestExpiry(c))) }))
       .filter(x => x.st === "warn" || x.st === "danger")
       .sort((a, b) => a.days - b.days);
     const lowStock = consumables
@@ -294,8 +302,8 @@ function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
           empty="ไม่มีสารเคมีที่ใกล้หมดอายุ"
           onSeeAll={() => goto("chemicals")}
           items={alerts.expiry.map(({ c, days, st }) => ({
-            key: c.id, st, title: `${c.name} (Lot ${c.lotNo || "-"})`,
-            detail: days < 0 ? `หมดอายุแล้ว ${Math.abs(days)} วัน` : `เหลือ ${days} วัน (${fmtDate(c.expiryDate)})`,
+            key: c.id, st, title: c.name,
+            detail: days < 0 ? `หมดอายุแล้ว ${Math.abs(days)} วัน` : `เหลือ ${days} วัน (${fmtDate(earliestExpiry(c))})`,
           }))}
         />
         <AlertPanel
@@ -623,7 +631,17 @@ function ActivityForm({ onCancel, onSave }) {
 function ChemicalsTab({ chemicals, setChemicals, notify }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState(null);
-  const filtered = chemicals.filter(c => (c.name + c.lotNo + c.location).toLowerCase().includes(q.toLowerCase()));
+  const [selected, setSelected] = useState(null);
+  const filtered = chemicals
+    .filter(c => (c.name + c.location).toLowerCase().includes(q.toLowerCase()))
+    .slice()
+    .sort((a, b) => {
+      const ea = earliestExpiry(a), eb = earliestExpiry(b);
+      if (!ea && !eb) return 0;
+      if (!ea) return 1; // no expiry date sorts last
+      if (!eb) return -1;
+      return ea.localeCompare(eb); // soonest expiry first
+    });
 
   function upsert(item) {
     if (chemicals.find(c => c.id === item.id)) setChemicals(chemicals.map(c => c.id === item.id ? item : c));
@@ -633,26 +651,69 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
   }
   function remove(id) { setChemicals(chemicals.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
 
+  function addTransaction(itemId, tx) {
+    setChemicals(chemicals.map(c => {
+      if (c.id !== itemId) return c;
+      const delta = tx.type === "receive" ? tx.qty : -tx.qty;
+      return { ...c, quantity: Math.max(0, (c.quantity || 0) + delta), transactions: [{ ...tx, id: uid() }, ...(c.transactions || [])] };
+    }));
+    notify(tx.type === "receive" ? "บันทึกรับเข้าแล้ว" : "บันทึกเบิกใช้แล้ว");
+  }
+
+  function editTransaction(itemId, tx) {
+    setChemicals(chemicals.map(c => {
+      if (c.id !== itemId) return c;
+      const old = (c.transactions || []).find(t => t.id === tx.id);
+      if (!old) return c;
+      const oldDelta = old.type === "receive" ? old.qty : -old.qty;
+      const newDelta = tx.type === "receive" ? tx.qty : -tx.qty;
+      return {
+        ...c,
+        quantity: Math.max(0, (c.quantity || 0) - oldDelta + newDelta),
+        transactions: (c.transactions || []).map(t => t.id === tx.id ? { ...tx } : t),
+      };
+    }));
+    notify("แก้ไขรายการแล้ว");
+  }
+
+  function deleteTransaction(itemId, txId) {
+    setChemicals(chemicals.map(c => {
+      if (c.id !== itemId) return c;
+      const old = (c.transactions || []).find(t => t.id === txId);
+      if (!old) return c;
+      const reverseDelta = old.type === "receive" ? -old.qty : old.qty;
+      return {
+        ...c,
+        quantity: Math.max(0, (c.quantity || 0) + reverseDelta),
+        transactions: (c.transactions || []).filter(t => t.id !== txId),
+      };
+    }));
+    notify("ลบรายการแล้ว");
+  }
+
+  const selectedItem = chemicals.find(c => c.id === selected);
+
   return (
     <div>
-      <TabHeader title="สต็อคสารเคมี" sub="ติดตามปริมาณคงเหลือและวันหมดอายุ" />
+      <TabHeader title="สต็อคสารเคมี" sub="ติดตามปริมาณคงเหลือและวันหมดอายุ · เรียงตามใกล้หมดอายุที่สุดก่อน" />
       <Toolbar>
-        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อสาร, Lot, ตำแหน่ง..." />
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", lotNo: "", quantity: 0, unit: "", expiryDate: "", location: "", minThreshold: 0 })}>
+        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อสาร, ตำแหน่ง..." />
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", expiryDate: "", location: "", minThreshold: 0, transactions: [] })}>
           <Plus size={15} /> เพิ่มสารเคมี
         </button>
       </Toolbar>
       <Table
-        cols={["ชื่อสารเคมี", "Lot No.", "คงเหลือ", "หมดอายุ", "ตำแหน่ง", ""]}
+        cols={["ชื่อสารเคมี", "คงเหลือ", "หมดอายุ", "ตำแหน่ง", ""]}
+        onRowClick={(i) => setSelected(filtered[i].id)}
         rows={filtered.map(c => {
-          const days = daysUntil(c.expiryDate);
+          const exp = earliestExpiry(c);
+          const days = daysUntil(exp);
           const st = statusOf(days);
           const low = c.quantity <= c.minThreshold;
           return [
             <RowTitle beacon={low ? "var(--amber)" : "transparent"} text={c.name} />,
-            <Mono>{c.lotNo || "-"}</Mono>,
             <span>{c.quantity} {c.unit}{low && <span style={S.lowTag}>ใกล้หมด</span>}</span>,
-            <span style={{ color: STATUS_COLOR[st] }}>{c.expiryDate ? `${fmtDate(c.expiryDate)}` : "-"}</span>,
+            <span style={{ color: STATUS_COLOR[st] }}>{exp ? fmtDate(exp) : "-"}</span>,
             c.location || "-",
             <RowActions onEdit={() => setEditing(c)} onDelete={() => remove(c.id)} />,
           ];
@@ -660,7 +721,172 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
         empty="ยังไม่มีข้อมูลสารเคมี"
       />
       {editing && <ChemicalForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {selectedItem && (
+        <ChemicalDetail
+          item={selectedItem}
+          onClose={() => setSelected(null)}
+          onEdit={() => { setEditing(selectedItem); setSelected(null); }}
+          onDelete={() => { remove(selectedItem.id); setSelected(null); }}
+          onAddTransaction={(tx) => addTransaction(selectedItem.id, tx)}
+          onEditTransaction={(tx) => editTransaction(selectedItem.id, tx)}
+          onDeleteTransaction={(txId) => deleteTransaction(selectedItem.id, txId)}
+        />
+      )}
     </div>
+  );
+}
+
+function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onEditTransaction, onDeleteTransaction }) {
+  const [showForm, setShowForm] = useState(null); // "receive" | "withdraw" | null
+  const [editingTx, setEditingTx] = useState(null);
+  const [historyFilter, setHistoryFilter] = useState("all");
+  const low = item.quantity <= item.minThreshold;
+  const exp = earliestExpiry(item);
+  const days = daysUntil(exp);
+  const st = statusOf(days);
+  const txs = item.transactions || [];
+  const receiveTxs = txs.filter(t => t.type === "receive");
+  const withdrawTxs = txs.filter(t => t.type === "withdraw");
+  const shownTxs = historyFilter === "receive" ? receiveTxs : historyFilter === "withdraw" ? withdrawTxs : txs;
+
+  const filterTab = (key, label, count) => (
+    <button
+      key={key}
+      onClick={() => setHistoryFilter(key)}
+      style={{
+        flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+        background: historyFilter === key ? "#E9F1FB" : "transparent",
+        border: `1px solid ${historyFilter === key ? "var(--teal)" : "var(--line)"}`,
+        color: historyFilter === key ? "var(--teal-dark)" : "var(--muted)",
+        borderRadius: 8, padding: "7px 8px", fontSize: 12.5, fontWeight: 600,
+        cursor: "pointer", fontFamily: "inherit",
+      }}
+    >
+      {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({count})</span>
+    </button>
+  );
+
+  return (
+    <Modal onClose={onClose} title={item.name} wide>
+      <div style={S.detailHead}>
+        <div>
+          <div style={S.detailName}>{item.name}</div>
+          <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
+          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={onDelete}><Trash2 size={14} /></button>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 10, margin: "12px 0 6px", flexWrap: "wrap" }}>
+        <Tag color={low ? "var(--amber)" : "var(--green)"}>
+          คงเหลือ {item.quantity} {item.unit} {low ? "· ใกล้หมด" : ""}
+        </Tag>
+        <Tag color={STATUS_COLOR[st]}>{exp ? `${STATUS_LABEL[st]} · ${fmtDate(exp)}` : "ไม่มีวันหมดอายุ"}</Tag>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button style={{ ...S.primaryBtn, flex: 1, justifyContent: "center" }} onClick={() => setShowForm("receive")}>
+          <Plus size={14} /> บันทึกรับเข้า (PO)
+        </button>
+        <button style={{ ...S.ghostBtn, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => setShowForm("withdraw")}>
+          <FlaskConical size={14} /> บันทึกเบิกใช้
+        </button>
+      </div>
+
+      <div style={{ marginTop: 20 }}>
+        <div style={S.panelTitle}>ประวัติรับเข้า / เบิกใช้</div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          {filterTab("all", "ทั้งหมด", txs.length)}
+          {filterTab("receive", "รับเข้า", receiveTxs.length)}
+          {filterTab("withdraw", "เบิกใช้", withdrawTxs.length)}
+        </div>
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
+          {shownTxs.length === 0 && <EmptyState text="ยังไม่มีรายการในหมวดนี้" small />}
+          {shownTxs.map(t => (
+            <div key={t.id} style={{ ...S.activityRow, alignItems: "center" }}>
+              <div style={S.activityDate}>{fmtDate(t.date)}</div>
+              <div style={{ flex: 1 }}>
+                <div style={S.activityType}>
+                  <span style={{ color: t.type === "receive" ? "var(--green)" : "var(--red)" }}>
+                    {t.type === "receive" ? `รับเข้า +${t.qty} ${item.unit}` : `เบิกใช้ -${t.qty} ${item.unit}`}
+                  </span>
+                </div>
+                <div style={S.activityDetail}>
+                  {t.type === "receive"
+                    ? [t.poNo ? `PO: ${t.poNo}` : null, t.expiryDate ? `หมดอายุ: ${fmtDate(t.expiryDate)}` : null].filter(Boolean).join(" · ")
+                    : (t.by ? `ผู้เบิก: ${t.by}` : "")}
+                  {t.note ? ` · ${t.note}` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button style={S.iconBtnSm} onClick={() => setEditingTx(t)}><Pencil size={12} /></button>
+                <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => onDeleteTransaction(t.id)}><Trash2 size={12} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {showForm && (
+        <ChemicalTxForm
+          type={showForm}
+          item={item}
+          onCancel={() => setShowForm(null)}
+          onSave={(tx) => { onAddTransaction(tx); setShowForm(null); }}
+        />
+      )}
+      {editingTx && (
+        <ChemicalTxForm
+          type={editingTx.type}
+          item={item}
+          initial={editingTx}
+          onCancel={() => setEditingTx(null)}
+          onSave={(tx) => { onEditTransaction(tx); setEditingTx(null); }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function ChemicalTxForm({ type, item, initial, onCancel, onSave }) {
+  const isReceive = type === "receive";
+  const isEdit = !!initial;
+  const [f, setF] = useState(initial
+    ? { date: initial.date, qty: String(initial.qty), poNo: initial.poNo || "", expiryDate: initial.expiryDate || "", by: initial.by || "", note: initial.note || "" }
+    : { date: todayISO(), qty: "", poNo: "", expiryDate: "", by: "", note: "" });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const qtyNum = Number(f.qty) || 0;
+  const baseQty = initial ? item.quantity - (initial.type === "receive" ? initial.qty : -initial.qty) : item.quantity;
+  const wouldGoNegative = !isReceive && qtyNum > baseQty;
+  return (
+    <Modal onClose={onCancel} title={isReceive ? (isEdit ? "แก้ไขรายการรับเข้า (PO)" : "บันทึกรับเข้าสารเคมี (PO)") : (isEdit ? "แก้ไขรายการเบิกใช้" : "บันทึกเบิกใช้สารเคมี")}>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
+        <Field label={isReceive ? "จำนวนที่รับเข้า" : "จำนวนที่เบิกใช้"}>
+          <input type="number" style={S.input} value={f.qty} onChange={set("qty")} placeholder={`หน่วย: ${item.unit || "-"}`} />
+        </Field>
+        {isReceive ? (
+          <>
+            <Field label="เลขที่ใบสั่งซื้อ (PO)"><input style={S.input} value={f.poNo} onChange={set("poNo")} placeholder="เช่น PO-2569-0123" /></Field>
+            <Field label="วันหมดอายุ (ล็อตนี้)"><input type="date" style={S.input} value={f.expiryDate} onChange={set("expiryDate")} /></Field>
+          </>
+        ) : (
+          <Field label="ผู้เบิก / แผนก" full><input style={S.input} value={f.by} onChange={set("by")} placeholder="เช่น สมชาย / ฝ่ายควบคุมคุณภาพ" /></Field>
+        )}
+        <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.note} onChange={set("note")} /></Field>
+      </div>
+      {wouldGoNegative && (
+        <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>
+          จำนวนที่เบิกมากกว่าคงเหลือ ({baseQty} {item.unit}) — ระบบจะปรับคงเหลือเป็น 0
+        </div>
+      )}
+      <ModalFooter
+        onCancel={onCancel}
+        onSave={() => onSave({ id: initial?.id, type, date: f.date, qty: qtyNum, poNo: f.poNo, expiryDate: f.expiryDate, by: f.by, note: f.note })}
+        disabled={!f.date || qtyNum <= 0}
+      />
+    </Modal>
   );
 }
 
@@ -671,12 +897,11 @@ function ChemicalForm({ item, onCancel, onSave }) {
     <Modal onClose={onCancel} title={item.name ? "แก้ไขสารเคมี" : "เพิ่มสารเคมี"}>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="ชื่อสารเคมี" full><input style={S.input} value={f.name} onChange={set("name")} /></Field>
-        <Field label="Lot No."><input style={S.input} value={f.lotNo} onChange={set("lotNo")} /></Field>
         <Field label="ตำแหน่งจัดเก็บ"><input style={S.input} value={f.location} onChange={set("location")} /></Field>
         <Field label="ปริมาณคงเหลือ"><input type="number" style={S.input} value={f.quantity} onChange={set("quantity", true)} /></Field>
         <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} placeholder="เช่น ขวด, kg, L" /></Field>
         <Field label="ขั้นต่ำที่ควรมี"><input type="number" style={S.input} value={f.minThreshold} onChange={set("minThreshold", true)} /></Field>
-        <Field label="วันหมดอายุ"><input type="date" style={S.input} value={f.expiryDate} onChange={set("expiryDate")} /></Field>
+        <Field label="วันหมดอายุ (เริ่มต้น)"><input type="date" style={S.input} value={f.expiryDate} onChange={set("expiryDate")} /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.name} />
     </Modal>
@@ -997,8 +1222,8 @@ function ReportsTab({ equipment, activities, chemicals, consumables }) {
     ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ"]
   ));
   const exportChemicals = () => download("chemicals.csv", toCSV(
-    chemicals.map(c => [c.name, c.lotNo, c.quantity, c.unit, c.expiryDate, c.location, c.minThreshold]),
-    ["ชื่อ", "Lot No.", "คงเหลือ", "หน่วย", "วันหมดอายุ", "ตำแหน่ง", "ขั้นต่ำ"]
+    chemicals.map(c => [c.name, c.quantity, c.unit, earliestExpiry(c), c.location, c.minThreshold]),
+    ["ชื่อ", "คงเหลือ", "หน่วย", "วันหมดอายุ (ใกล้สุด)", "ตำแหน่ง", "ขั้นต่ำ"]
   ));
   const exportConsumables = () => download("consumables.csv", toCSV(
     consumables.map(s => [s.name, s.quantity, s.unit, s.minThreshold]),
