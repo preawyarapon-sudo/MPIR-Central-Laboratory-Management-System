@@ -632,6 +632,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [showImport, setShowImport] = useState(false);
   const filtered = chemicals
     .filter(c => (c.name + c.location).toLowerCase().includes(q.toLowerCase()))
     .slice()
@@ -650,6 +651,16 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
     setEditing(null);
   }
   function remove(id) { setChemicals(chemicals.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+
+  function importItems(items) {
+    const newItems = items.map(it => ({
+      id: uid(), name: it.name, unit: it.unit || "", quantity: it.quantity || 0,
+      location: it.location || "", expiryDate: it.expiryDate || "", minThreshold: 0, transactions: [],
+    }));
+    setChemicals([...newItems, ...chemicals]);
+    notify(`นำเข้า ${newItems.length} รายการแล้ว`);
+    setShowImport(false);
+  }
 
   function addTransaction(itemId, tx) {
     setChemicals(chemicals.map(c => {
@@ -698,6 +709,9 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
       <TabHeader title="สต็อคสารเคมี" sub="ติดตามปริมาณคงเหลือและวันหมดอายุ · เรียงตามใกล้หมดอายุที่สุดก่อน" />
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อสาร, ตำแหน่ง..." />
+        <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
+          <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
+        </button>
         <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), name: "", quantity: 0, unit: "", expiryDate: "", location: "", minThreshold: 0, transactions: [] })}>
           <Plus size={15} /> เพิ่มสารเคมี
         </button>
@@ -721,6 +735,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
         empty="ยังไม่มีข้อมูลสารเคมี"
       />
       {editing && <ChemicalForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {showImport && <ChemicalsImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
       {selectedItem && (
         <ChemicalDetail
           item={selectedItem}
@@ -904,6 +919,38 @@ function ChemicalForm({ item, onCancel, onSave }) {
         <Field label="วันหมดอายุ (เริ่มต้น)"><input type="date" style={S.input} value={f.expiryDate} onChange={set("expiryDate")} /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.name} />
+    </Modal>
+  );
+}
+
+function ChemicalsImportForm({ onCancel, onImport }) {
+  const [text, setText] = useState("");
+  const parsed = text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
+    const parts = line.split("|").map(p => p.trim());
+    return {
+      name: parts[0] || "",
+      unit: parts[1] || "",
+      quantity: Number(parts[2]) || 0,
+      location: parts[3] || "",
+      expiryDate: parts[4] || "",
+    };
+  }).filter(r => r.name);
+
+  return (
+    <Modal onClose={onCancel} title="นำเข้ารายการสารเคมี" wide>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>
+        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>ชื่อสารเคมี | หน่วย | จำนวน | ตำแหน่ง | วันหมดอายุ (YYYY-MM-DD)</b> (คั่นด้วย | — ตำแหน่งและวันหมดอายุใส่หรือเว้นว่างก็ได้)
+      </div>
+      <textarea
+        style={{ ...S.input, minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={"ตัวอย่าง:\nAcetonitrile HPLC grade | ขวด (2.5 L) | 4 | ตู้เก็บสารไวไฟ | 2026-09-10\nSodium Hydroxide | kg | 1 | ชั้นสารเคมีทั่วไป | 2026-08-25"}
+      />
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 8 }}>
+        ตรวจพบ <b>{parsed.length}</b> รายการที่จะนำเข้า (รายการเดิมจะไม่ถูกลบหรือทับ — รายการใหม่จะถูกเพิ่มเข้าไป)
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onImport(parsed)} disabled={parsed.length === 0} />
     </Modal>
   );
 }
