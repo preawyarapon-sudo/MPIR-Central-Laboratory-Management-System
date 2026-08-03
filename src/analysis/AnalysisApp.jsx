@@ -381,14 +381,13 @@ function Badge({ children, color, bg }) {
       style={{
         display: "inline-block",
         fontSize: 11,
-        fontWeight: 600,
+        fontWeight: 700,
         letterSpacing: 0.3,
-        padding: "2px 8px",
-        borderRadius: 3,
+        padding: "3px 10px",
+        borderRadius: 999,
         color,
         background: bg,
-        fontFamily: "monospace",
-        textTransform: "uppercase",
+        fontFamily: "inherit",
       }}
     >
       {children}
@@ -397,9 +396,9 @@ function Badge({ children, color, bg }) {
 }
 
 function StatusBadge({ status }) {
-  if (status === STATUS.DONE) return <Badge color={C.green} bg={C.greenDim}>Complete</Badge>;
-  if (status === STATUS.RUN) return <Badge color={C.amber} bg={C.amberDim}>Running</Badge>;
-  return <Badge color={C.textMuted} bg={C.panel2}>Waiting</Badge>;
+  if (status === STATUS.DONE) return <Badge color={C.green} bg={C.greenDim}>เสร็จสิ้น</Badge>;
+  if (status === STATUS.RUN) return <Badge color={C.amber} bg={C.amberDim}>กำลังวิเคราะห์</Badge>;
+  return <Badge color={C.textMuted} bg={C.panel2}>รอดำเนินการ</Badge>;
 }
 
 // Shows how many days a job has been open, colored by deadline urgency:
@@ -428,23 +427,29 @@ function ProgressBar({ job }) {
 
 function DeadlinePill({ job }) {
   const { level, days } = deadlineInfo(job);
+  const pillStyle = { display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 700, padding: "4px 10px", borderRadius: 999, whiteSpace: "nowrap" };
   if (level === "done") {
-    return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, color: C.green }}><CheckCircle2 size={12} /> เสร็จสมบูรณ์</span>;
+    return <span style={{ ...pillStyle, color: C.green, background: C.greenDim }}><CheckCircle2 size={12} /> เสร็จสมบูรณ์</span>;
   }
   if (level === "late") {
-    return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, color: C.red, background: C.redDim, padding: "3px 8px", borderRadius: 5 }}><AlertTriangle size={12} /> ล่าช้า {days} วัน</span>;
+    return <span style={{ ...pillStyle, color: C.red, background: C.redDim }}><AlertTriangle size={12} /> ล่าช้า {days} วัน</span>;
   }
   if (level === "warn") {
-    return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, color: C.amber, background: C.amberDim, padding: "3px 8px", borderRadius: 5 }}><Clock size={12} /> ใกล้ครบกำหนด · เหลือ {LATE_DAYS - days} วัน</span>;
+    return <span style={{ ...pillStyle, color: C.amber, background: C.amberDim }}><Clock size={12} /> ใกล้ครบกำหนด · เหลือ {LATE_DAYS - days} วัน</span>;
   }
-  return <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: "monospace" }}>{days} วัน</span>;
+  return <span style={{ ...pillStyle, color: C.cyan, background: C.cyanDim }}><CircleDot size={12} /> {days} วัน</span>;
 }
 
-function MetricCard({ label, value, color, icon: Icon }) {
+function MetricCard({ label, value, color, icon: Icon, tint }) {
   return (
-    <div style={{ flex: 1, background: C.panel2, borderRadius: 8, padding: "14px 16px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-        {Icon && <Icon size={13} color={color} />}
+    <div style={{ flex: 1, minWidth: 130, background: C.panel2, borderRadius: 8, padding: "14px 16px" }} className="metricCard">
+      {Icon && (
+        <div className="metricCardIconTile" style={{ width: 34, height: 34, borderRadius: 9, background: tint || C.panel, display: "none", alignItems: "center", justifyContent: "center", marginBottom: 8 }}>
+          <Icon size={17} color={color} />
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }} className="metricCardLabelRow">
+        {Icon && <Icon size={13} color={color} className="metricCardInlineIcon" />}
         <div style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{label}</div>
       </div>
       <div style={{ fontSize: 25, fontWeight: 700, fontFamily: "monospace", color }}>{value}</div>
@@ -1778,12 +1783,12 @@ function Dashboard({ jobs, onOpen }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <MetricCard label="งานทั้งหมด" value={jobs.length} color={C.text} />
-        <MetricCard label="กำลังดำเนินการ" value={running} color={C.amber} icon={CircleDot} />
-        <MetricCard label="เสร็จสิ้นแล้ว" value={complete} color={C.green} icon={CheckCircle2} />
-        <MetricCard label="ใกล้ครบกำหนด" value={dueSoonCount} color={C.amber} icon={Clock} />
-        <MetricCard label="ล่าช้า (15+ วัน)" value={lateCount} color={C.red} icon={AlertTriangle} />
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }} className="metricGrid">
+        <MetricCard label="งานทั้งหมด" value={jobs.length} color={C.text} tint={C.panel2} />
+        <MetricCard label="กำลังดำเนินการ" value={running} color={C.amber} icon={CircleDot} tint={C.amberDim} />
+        <MetricCard label="เสร็จสิ้นแล้ว" value={complete} color={C.green} icon={CheckCircle2} tint={C.greenDim} />
+        <MetricCard label="ใกล้ครบกำหนด" value={dueSoonCount} color={C.amber} icon={Clock} tint={C.amberDim} />
+        <MetricCard label="ล่าช้า (15+ วัน)" value={lateCount} color={C.red} icon={AlertTriangle} tint={C.redDim} />
       </div>
 
       <Panel style={{ padding: "8px 16px" }}>
@@ -2057,7 +2062,9 @@ export default function App() {
 
   const tabBtn = (key, label, Icon) => (
     <button
+      key={key}
       onClick={() => { setTab(key); setSelected(null); }}
+      className="topTabBtn"
       style={{
         display: "flex", alignItems: "center", gap: 7,
         background: tab === key ? C.panel2 : "transparent",
@@ -2071,12 +2078,54 @@ export default function App() {
     </button>
   );
 
+  // Mobile-only bottom navigation bar (app-style icon-over-label tabs),
+  // shown instead of the top tab row below the 640px breakpoint.
+  const bottomNavBtn = (key, label, Icon) => {
+    const active = tab === key;
+    return (
+      <button
+        key={key}
+        onClick={() => { setTab(key); setSelected(null); }}
+        className="bottomNavBtn"
+        style={{
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
+          background: "none", border: "none", cursor: "pointer", fontFamily: "inherit",
+          color: active ? C.cyan : C.textFaint, flex: 1, padding: "7px 2px 6px",
+        }}
+      >
+        <Icon size={19} strokeWidth={active ? 2.4 : 2} />
+        <span style={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{label}</span>
+      </button>
+    );
+  };
+
   return (
     <div style={{ background: C.bg, minHeight: 500, borderRadius: 10, fontFamily: "'Prompt', system-ui, sans-serif", color: C.text, padding: 0, border: `1px solid ${C.border}`, boxShadow: "0 2px 18px rgba(14, 111, 186, 0.08)" }} className="latApp">
       <style>{`
         @media (max-width: 640px) {
           .latApp { border-radius: 0 !important; }
           .grid3col { grid-template-columns: 1fr !important; }
+
+          .latHeader { padding: 12px 14px !important; }
+          .latHeaderSub { display: none !important; }
+          .mainContentArea { padding: 14px !important; padding-bottom: 76px !important; }
+
+          /* Dashboard metric cards: 2-column grid with icon tiles, like a native app */
+          .metricGrid { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
+          .metricCard { min-width: 0 !important; padding: 12px 14px !important; }
+          .metricCardIconTile { display: flex !important; }
+          .metricCardLabelRow { margin-bottom: 4px !important; }
+          .metricCardInlineIcon { display: none !important; }
+
+          /* App-style bottom navigation replaces the top tab row on mobile */
+          .topTabRow { display: none !important; }
+          .bottomNavBar {
+            display: flex !important;
+            position: sticky; bottom: 0; left: 0; right: 0; z-index: 20;
+            background: ${C.bg}; border-top: 1px solid ${C.borderSoft};
+            padding: 2px 4px calc(4px + env(safe-area-inset-bottom));
+            box-shadow: 0 -2px 10px rgba(11,42,74,0.06);
+          }
 
           /* Dashboard: job row deadline/progress group drops to its own line */
           .jobRowMeta { width: 100% !important; justify-content: space-between !important; margin-top: 2px !important; }
@@ -2155,14 +2204,14 @@ export default function App() {
           .rqTone { grid-area: tone !important; }
         }
       `}</style>
-      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }} className="latHeader">
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <div style={{ width: 30, height: 30, borderRadius: 6, background: C.cyanDim, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <FlaskConical size={17} color={C.cyan} />
           </div>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700 }}>Lab Analysis Tracker</div>
-            <div style={{ fontSize: 11, color: C.textFaint }}>ระบบติดตามความคืบหน้างานวิเคราะห์ · แชร์ร่วมกันทั้งทีม</div>
+            <div style={{ fontSize: 11, color: C.textFaint }} className="latHeaderSub">ระบบติดตามความคืบหน้างานวิเคราะห์ · แชร์ร่วมกันทั้งทีม</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -2171,14 +2220,14 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ display: "flex", borderBottom: `1px solid ${C.borderSoft}`, padding: "0 12px", overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+      <div style={{ display: "flex", borderBottom: `1px solid ${C.borderSoft}`, padding: "0 12px", overflowX: "auto", WebkitOverflowScrolling: "touch" }} className="topTabRow">
         {tabBtn("dashboard", "Dashboard", LayoutGrid)}
         {tabBtn("jobs", "Jobs", ListChecks)}
         {tabBtn("analysts", "Analysts", Users)}
         {tabBtn("parameters", "Parameters", Layers)}
       </div>
 
-      <div style={{ padding: 20 }}>
+      <div style={{ padding: 20 }} className="mainContentArea">
         {error && (
           <div style={{ marginBottom: 14, padding: "8px 12px", background: C.redDim, border: `1px solid ${C.red}`, borderRadius: 6, color: "#7A2D22", fontSize: 12, display: "flex", alignItems: "center", gap: 8 }}>
             <AlertCircle size={14} /> {error}
@@ -2226,6 +2275,13 @@ export default function App() {
             {tab === "parameters" && <ParametersTable jobs={jobs} onOpenJob={openJob} />}
           </>
         )}
+      </div>
+
+      <div className="bottomNavBar" style={{ display: "none" }}>
+        {bottomNavBtn("dashboard", "Dashboard", LayoutGrid)}
+        {bottomNavBtn("jobs", "Jobs", ListChecks)}
+        {bottomNavBtn("analysts", "Analysts", Users)}
+        {bottomNavBtn("parameters", "Parameters", Layers)}
       </div>
     </div>
   );
