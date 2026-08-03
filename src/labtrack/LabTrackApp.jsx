@@ -442,12 +442,16 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
           const days = daysUntil(e.nextDue);
           const st = statusOf(days);
           return (
-            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: e.imageUrl ? 0 : S.eqCard.padding, overflow: "hidden" }} onClick={() => setSelected(e.id)}>
-              {e.imageUrl && (
+            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden" }} onClick={() => setSelected(e.id)}>
+              {e.imageUrl ? (
                 <img src={e.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
                   style={{ width: "100%", height: 140, objectFit: "contain", background: "#EEF2F6", display: "block" }} />
+              ) : (
+                <div style={{ width: "100%", height: 140, background: "linear-gradient(135deg, #E9F1FB, #F5F8FC)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Wrench size={34} color="#B9C7D6" />
+                </div>
               )}
-              <div style={{ padding: e.imageUrl ? "10px 14px 12px" : 0 }}>
+              <div style={{ padding: "10px 14px 12px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                   <div style={S.eqCardTop}>
                     <span style={{ ...S.beacon, background: STATUS_COLOR[st] }} />
@@ -737,8 +741,30 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
 
 function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction }) {
   const [showForm, setShowForm] = useState(null); // "receive" | "withdraw" | null
+  const [historyFilter, setHistoryFilter] = useState("all"); // "all" | "receive" | "withdraw"
   const low = item.quantity <= item.minThreshold;
   const txs = item.transactions || [];
+  const receiveTxs = txs.filter(t => t.type === "receive");
+  const withdrawTxs = txs.filter(t => t.type === "withdraw");
+  const shownTxs = historyFilter === "receive" ? receiveTxs : historyFilter === "withdraw" ? withdrawTxs : txs;
+
+  const filterTab = (key, label, count) => (
+    <button
+      key={key}
+      onClick={() => setHistoryFilter(key)}
+      style={{
+        flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+        background: historyFilter === key ? "#E9F1FB" : "transparent",
+        border: `1px solid ${historyFilter === key ? "var(--teal)" : "var(--line)"}`,
+        color: historyFilter === key ? "var(--teal-dark)" : "var(--muted)",
+        borderRadius: 8, padding: "7px 8px", fontSize: 12.5, fontWeight: 600,
+        cursor: "pointer", fontFamily: "inherit",
+      }}
+    >
+      {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({count})</span>
+    </button>
+  );
+
   return (
     <Modal onClose={onClose} title={item.name} wide>
       <div style={S.detailHead}>
@@ -767,11 +793,33 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
         </button>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20 }}>
+      <div style={{ marginTop: 20 }}>
         <div style={S.panelTitle}>ประวัติรับเข้า / เบิกใช้</div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          {filterTab("all", "ทั้งหมด", txs.length)}
+          {filterTab("receive", "รับเข้า", receiveTxs.length)}
+          {filterTab("withdraw", "เบิกใช้", withdrawTxs.length)}
+        </div>
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
+          {shownTxs.length === 0 && <EmptyState text="ยังไม่มีรายการในหมวดนี้" small />}
+          {shownTxs.map(t => (
+            <div key={t.id} style={S.activityRow}>
+              <div style={S.activityDate}>{fmtDate(t.date)}</div>
+              <div style={{ flex: 1 }}>
+                <div style={S.activityType}>
+                  <span style={{ color: t.type === "receive" ? "var(--green)" : "var(--red)" }}>
+                    {t.type === "receive" ? `รับเข้า +${t.qty} ${item.unit}` : `เบิกใช้ -${t.qty} ${item.unit}`}
+                  </span>
+                </div>
+                <div style={S.activityDetail}>
+                  {t.type === "receive" && t.poNo ? `PO: ${t.poNo}` : t.type === "withdraw" && t.by ? `ผู้เบิก: ${t.by}` : ""}
+                  {t.note ? ` · ${t.note}` : ""}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-      <TxHistoryGroup title="รับเข้า" color="var(--green)" txs={txs.filter(t => t.type === "receive")} unit={item.unit} />
-      <TxHistoryGroup title="เบิกใช้" color="var(--red)" txs={txs.filter(t => t.type === "withdraw")} unit={item.unit} />
 
       {showForm && (
         <ConsumableTxForm
@@ -782,33 +830,6 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction })
         />
       )}
     </Modal>
-  );
-}
-
-function TxHistoryGroup({ title, color, txs, unit }) {
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ fontSize: 11.5, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
-        {title} ({txs.length})
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 220, overflowY: "auto" }}>
-        {txs.length === 0 && <EmptyState text={`ยังไม่มีรายการ${title}`} small />}
-        {txs.map(t => (
-          <div key={t.id} style={S.activityRow}>
-            <div style={S.activityDate}>{fmtDate(t.date)}</div>
-            <div style={{ flex: 1 }}>
-              <div style={S.activityType}>
-                <span style={{ color }}>{t.type === "receive" ? `+${t.qty} ${unit}` : `-${t.qty} ${unit}`}</span>
-              </div>
-              <div style={S.activityDetail}>
-                {t.type === "receive" && t.poNo ? `PO: ${t.poNo}` : t.type === "withdraw" && t.by ? `ผู้เบิก: ${t.by}` : ""}
-                {t.note ? ` · ${t.note}` : ""}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
