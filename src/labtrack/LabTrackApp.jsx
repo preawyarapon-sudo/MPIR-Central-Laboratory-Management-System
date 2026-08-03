@@ -498,6 +498,8 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
           onEdit={() => { setEditing(selectedItem); setSelected(null); }}
           onDelete={() => remove(selectedItem.id)}
           onAddActivity={(act) => { setActivities([{ ...act, id: uid(), equipmentId: selectedItem.id }, ...activities]); notify("บันทึกกิจกรรมแล้ว"); }}
+          onEditActivity={(act) => { setActivities(activities.map(a => a.id === act.id ? { ...a, ...act } : a)); notify("แก้ไขกิจกรรมแล้ว"); }}
+          onDeleteActivity={(actId) => { setActivities(activities.filter(a => a.id !== actId)); notify("ลบกิจกรรมแล้ว"); }}
         />
       )}
     </div>
@@ -551,8 +553,9 @@ function EquipmentForm({ item, onCancel, onSave }) {
   );
 }
 
-function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddActivity }) {
+function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddActivity, onEditActivity, onDeleteActivity }) {
   const [showAct, setShowAct] = useState(false);
+  const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
@@ -621,7 +624,7 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
       <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 260, overflowY: "auto" }}>
         {shownActivities.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
         {shownActivities.map(a => (
-          <div key={a.id} style={S.activityRow}>
+          <div key={a.id} style={{ ...S.activityRow, alignItems: "center" }}>
             <div style={S.activityDate}>{fmtDate(a.date)}</div>
             <div style={{ flex: 1 }}>
               <div style={S.activityType}>{typeLabel[a.type] || a.type}</div>
@@ -634,6 +637,10 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
                 </a>
               )}
             </div>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button style={S.iconBtnSm} onClick={() => setEditingAct(a)}><Pencil size={12} /></button>
+              <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => onDeleteActivity(a.id)}><Trash2 size={12} /></button>
+            </div>
           </div>
         ))}
       </div>
@@ -641,15 +648,24 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
       {showAct && (
         <ActivityForm onCancel={() => setShowAct(false)} onSave={(act) => { onAddActivity(act); setShowAct(false); }} />
       )}
+      {editingAct && (
+        <ActivityForm
+          initial={editingAct}
+          onCancel={() => setEditingAct(null)}
+          onSave={(act) => { onEditActivity(act); setEditingAct(null); }}
+        />
+      )}
     </Modal>
   );
 }
 
-function ActivityForm({ onCancel, onSave }) {
-  const [f, setF] = useState({ date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", certUrl: "" });
+function ActivityForm({ initial, onCancel, onSave }) {
+  const [f, setF] = useState(initial
+    ? { date: initial.date, type: initial.type, detail: initial.detail || "", by: initial.by || "", poNo: initial.poNo || "", certUrl: initial.certUrl || "" }
+    : { date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", certUrl: "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
-    <Modal onClose={onCancel} title="บันทึกกิจกรรม">
+    <Modal onClose={onCancel} title={initial ? "แก้ไขกิจกรรม" : "บันทึกกิจกรรม"}>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="ประเภทกิจกรรม">
@@ -667,7 +683,7 @@ function ActivityForm({ onCancel, onSave }) {
           <input style={S.input} value={f.certUrl} onChange={set("certUrl")} placeholder="วางลิงก์ใบรับรองผลสอบเทียบ เช่น SharePoint, Google Drive" />
         </Field>
       </div>
-      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.detail} />
+      <ModalFooter onCancel={onCancel} onSave={() => onSave({ ...f, id: initial?.id })} disabled={!f.detail} />
     </Modal>
   );
 }
@@ -1512,23 +1528,30 @@ button { cursor: pointer; }
   .ltH1 { font-size: 20px !important; }
   .ltFormGrid { grid-template-columns: 1fr !important; }
 
-  /* Chemicals / Consumables tables: collapse into stacked cards */
+  /* Chemicals / Consumables tables: collapse into stacked cards.
+     Cells flow inline (wrapping) instead of one row per cell, so short
+     cells like quantity and the edit/delete actions end up sharing a
+     line instead of each getting their own row. */
   .ltTable thead { display: none !important; }
-  .ltTable, .ltTable tbody, .ltTableRow { display: block !important; width: 100% !important; }
-  .ltTableRow { padding: 12px 14px !important; }
+  .ltTable, .ltTable tbody { display: block !important; width: 100% !important; }
+  .ltTableRow {
+    display: flex !important; flex-wrap: wrap !important; align-items: center !important;
+    gap: 4px 14px !important; padding: 12px 14px !important; width: 100% !important; box-sizing: border-box !important;
+  }
   .ltTableCell, .ltTableTitleCell {
-    display: flex !important; justify-content: space-between !important; align-items: center !important;
-    gap: 10px !important; padding: 4px 0 !important; border: none !important; text-align: right !important;
+    display: flex !important; align-items: center !important; gap: 6px !important;
+    border: none !important; padding: 0 !important;
   }
   .ltTableTitleCell {
-    font-weight: 600 !important; font-size: 13.5px !important; justify-content: flex-start !important;
-    text-align: left !important; border-bottom: 1px solid var(--line) !important;
-    padding-bottom: 6px !important; margin-bottom: 4px !important;
+    flex: 1 1 100% !important; font-weight: 600 !important; font-size: 13.5px !important;
+    border-bottom: 1px solid var(--line) !important; padding-bottom: 6px !important; margin-bottom: 2px !important;
   }
+  .ltTableCell { font-size: 12.5px !important; }
   .ltTableCell::before {
     content: attr(data-label); font-size: 11px; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0; text-align: left;
+    text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0;
   }
+  .ltTableRow > .ltTableCell:last-child { margin-left: auto !important; }
 
   /* Colorful icon tiles on the dashboard stat cards, like a native app */
   .statCard { display: flex !important; align-items: center !important; gap: 12px !important; }
@@ -1538,7 +1561,7 @@ button { cursor: pointer; }
 
   .ltBottomNav {
     display: flex !important;
-    position: sticky; bottom: 0; left: 0; right: 0; z-index: 20;
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
     background: #fff; border-top: 1px solid var(--line);
     padding: 2px 4px calc(4px + env(safe-area-inset-bottom));
     box-shadow: 0 -2px 10px rgba(18,37,59,0.06);
