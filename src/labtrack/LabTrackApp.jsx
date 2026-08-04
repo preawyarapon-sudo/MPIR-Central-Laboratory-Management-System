@@ -36,6 +36,12 @@ function earliestExpiry(item) {
   return dates.sort()[0];
 }
 
+// Natural alphabetical sort: 0-9, then A-Z, then ก-ฮ — used across every list
+// page instead of insertion order, so items are easy to scan/find.
+function alphaCompare(a, b) {
+  return String(a || "").localeCompare(String(b || ""), "th", { numeric: true, sensitivity: "base" });
+}
+
 async function loadList(key, seed) {
   try {
     const res = await window.storage.get(key, true);
@@ -408,12 +414,15 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
 
   const types = useMemo(() => [...new Set(equipment.map(e => e.type).filter(Boolean))].sort(), [equipment]);
 
-  const filtered = equipment.filter(e => {
-    const matchQ = (e.code + e.name + (e.brand || "") + (e.model || "") + (e.serialNo || "") + e.location + e.type).toLowerCase().includes(q.toLowerCase());
-    const matchS = statusFilter === "all" || e.status === statusFilter;
-    const matchT = typeFilter === "all" || e.type === typeFilter;
-    return matchQ && matchS && matchT;
-  });
+  const filtered = equipment
+    .filter(e => {
+      const matchQ = (e.code + e.name + (e.brand || "") + (e.model || "") + (e.serialNo || "") + e.location + e.type).toLowerCase().includes(q.toLowerCase());
+      const matchS = statusFilter === "all" || e.status === statusFilter;
+      const matchT = typeFilter === "all" || e.type === typeFilter;
+      return matchQ && matchS && matchT;
+    })
+    .slice()
+    .sort((a, b) => alphaCompare(a.code, b.code));
 
   function upsert(item) {
     if (equipment.find(e => e.id === item.id)) {
@@ -768,13 +777,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
   const filtered = chemicals
     .filter(c => (c.name + (c.formula || "") + (c.brand || "") + c.location).toLowerCase().includes(q.toLowerCase()))
     .slice()
-    .sort((a, b) => {
-      const ea = earliestExpiry(a), eb = earliestExpiry(b);
-      if (!ea && !eb) return 0;
-      if (!ea) return 1; // no expiry date sorts last
-      if (!eb) return -1;
-      return ea.localeCompare(eb); // soonest expiry first
-    });
+    .sort((a, b) => alphaCompare(a.name, b.name));
 
   function upsert(item) {
     if (chemicals.find(c => c.id === item.id)) setChemicals(chemicals.map(c => c.id === item.id ? item : c));
@@ -839,7 +842,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
 
   return (
     <div>
-      <TabHeader title="สต็อคสารเคมี" sub="ติดตามปริมาณคงเหลือและวันหมดอายุ · เรียงตามใกล้หมดอายุที่สุดก่อน" />
+      <TabHeader title="สต็อคสารเคมี" sub="ติดตามปริมาณคงเหลือและวันหมดอายุ · เรียงตามตัวอักษร" />
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อสาร, ตำแหน่ง..." />
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
@@ -1110,7 +1113,10 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState(null);
   const [showImport, setShowImport] = useState(false);
-  const filtered = consumables.filter(s => s.name.toLowerCase().includes(q.toLowerCase()));
+  const filtered = consumables
+    .filter(s => s.name.toLowerCase().includes(q.toLowerCase()))
+    .slice()
+    .sort((a, b) => alphaCompare(a.name, b.name));
 
   function upsert(item) {
     if (consumables.find(s => s.id === item.id)) setConsumables(consumables.map(s => s.id === item.id ? item : s));
