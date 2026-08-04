@@ -409,7 +409,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
   const types = useMemo(() => [...new Set(equipment.map(e => e.type).filter(Boolean))].sort(), [equipment]);
 
   const filtered = equipment.filter(e => {
-    const matchQ = (e.code + e.name + e.location + e.type).toLowerCase().includes(q.toLowerCase());
+    const matchQ = (e.code + e.name + (e.brand || "") + (e.model || "") + (e.serialNo || "") + e.location + e.type).toLowerCase().includes(q.toLowerCase());
     const matchS = statusFilter === "all" || e.status === statusFilter;
     const matchT = typeFilter === "all" || e.type === typeFilter;
     return matchQ && matchS && matchT;
@@ -434,7 +434,8 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
 
   function importItems(items) {
     const newItems = items.map(it => ({
-      id: uid(), code: it.code, name: it.name, type: it.type || "", location: it.location || "",
+      id: uid(), code: it.code, name: it.name, brand: it.brand || "", model: it.model || "", serialNo: it.serialNo || "",
+      type: it.type || "", location: it.location || "",
       status: "active", lastCalibration: it.lastCalibration || "", nextDue: it.nextDue || "",
       notes: "", imageUrl: "",
     }));
@@ -463,7 +464,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", type: "", location: "", status: "active", lastCalibration: "", nextDue: "", notes: "", imageUrl: "" })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", location: "", status: "active", lastCalibration: "", nextDue: "", notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
@@ -492,6 +493,11 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
                   {e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
                 </div>
                 <div style={S.eqName}>{e.name}</div>
+                {(e.brand || e.model) && (
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                    {[e.brand, e.model].filter(Boolean).join(" · ")}
+                  </div>
+                )}
                 <div style={S.eqMeta}><MapPin size={11} /> {e.location || "-"} · {e.type || "-"}</div>
                 <div style={{ ...S.eqDue, color: STATUS_COLOR[st] }}>
                   {e.nextDue ? `กำหนดถัดไป ${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "ไม่มีกำหนดสอบเทียบ"}
@@ -531,6 +537,9 @@ function EquipmentForm({ item, onCancel, onSave }) {
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="รหัสเครื่องมือ"><input style={S.input} value={f.code} onChange={set("code")} placeholder="เช่น MPIR-006" /></Field>
         <Field label="ชื่อเครื่องมือ"><input style={S.input} value={f.name} onChange={set("name")} placeholder="เช่น เครื่องชั่ง 3 ตำแหน่ง" /></Field>
+        <Field label="ยี่ห้อ"><input style={S.input} value={f.brand || ""} onChange={set("brand")} placeholder="เช่น Mitsubishi Electric" /></Field>
+        <Field label="รุ่น (Model)"><input style={S.input} value={f.model || ""} onChange={set("model")} placeholder="เช่น SRK24CYV-W1" /></Field>
+        <Field label="หมายเลขเครื่อง (Serial No.)"><input style={S.input} value={f.serialNo || ""} onChange={set("serialNo")} /></Field>
         <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder="เช่น เครื่องชั่ง" /></Field>
         <Field label="ตำแหน่งที่ตั้ง"><input style={S.input} value={f.location} onChange={set("location")} placeholder="เช่น C1" /></Field>
         <Field label="สถานะ">
@@ -580,19 +589,22 @@ function EquipmentImportForm({ onCancel, onImport }) {
       location: parts[3] || "",
       lastCalibration: parts[4] || "",
       nextDue: parts[5] || "",
+      brand: parts[6] || "",
+      model: parts[7] || "",
+      serialNo: parts[8] || "",
     };
   }).filter(r => r.code && r.name);
 
   return (
     <Modal onClose={onCancel} title="นำเข้ารายการเครื่องมือ" wide>
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>
-        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>รหัส | ชื่อเครื่องมือ | ประเภท | ตำแหน่ง | สอบเทียบล่าสุด (YYYY-MM-DD) | กำหนดถัดไป (YYYY-MM-DD)</b> (คั่นด้วย | — ทุกช่องหลังชื่อใส่หรือเว้นว่างก็ได้ สถานะจะตั้งเป็น "ใช้งานอยู่" ให้อัตโนมัติ)
+        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>รหัส | ชื่อเครื่องมือ | ประเภท | ตำแหน่ง | สอบเทียบล่าสุด (YYYY-MM-DD) | กำหนดถัดไป (YYYY-MM-DD) | ยี่ห้อ | รุ่น | หมายเลขเครื่อง (Serial No.)</b> (คั่นด้วย | — ทุกช่องหลังชื่อใส่หรือเว้นว่างก็ได้ สถานะจะตั้งเป็น "ใช้งานอยู่" ให้อัตโนมัติ)
       </div>
       <textarea
         style={{ ...S.input, minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder={"ตัวอย่าง:\nMPIR-006 | เครื่องชั่ง 4 ตำแหน่ง | เครื่องชั่ง | C2 | 2026-01-15 | 2026-07-15\nMPIR-007 | pH Meter | pH Meter | C1 | | 2026-09-01"}
+        placeholder={"ตัวอย่าง:\nCT-AIR-006 | Air conditioner (25,300 BTU) | Air conditioner | C2 | | | Mitsubishi Electric | SRK24CYV-W1/SRC24CYV-W1 | \nCT-AIR-007 | Air conditioner (34,120 BTU) | Air conditioner | C3 | | | Mitsubishi Electric | MS-GK36VA | "}
       />
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 8 }}>
         ตรวจพบ <b>{parsed.length}</b> รายการที่จะนำเข้า (รายการเดิมจะไม่ถูกลบหรือทับ — รายการใหม่จะถูกเพิ่มเข้าไป)
@@ -644,6 +656,16 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
       <div style={S.detailHead}>
         <div>
           <div style={S.detailName}>{item.name}</div>
+          {(item.brand || item.model) && (
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+              {[item.brand, item.model].filter(Boolean).join(" · ")}
+            </div>
+          )}
+          {item.serialNo && (
+            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
+              S/N: {item.serialNo}
+            </div>
+          )}
           <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"} · {item.type || "-"}</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -1388,8 +1410,8 @@ function ReportsTab({ equipment, activities, chemicals, consumables }) {
     URL.revokeObjectURL(url);
   }
   const exportEquipment = () => download("equipment.csv", toCSV(
-    equipment.map(e => [e.code, e.name, e.type, e.location, e.status, e.lastCalibration, e.nextDue, e.notes]),
-    ["รหัส", "ชื่อ", "ประเภท", "ตำแหน่ง", "สถานะ", "สอบเทียบล่าสุด", "กำหนดถัดไป", "หมายเหตุ"]
+    equipment.map(e => [e.code, e.name, e.brand || "", e.model || "", e.serialNo || "", e.type, e.location, e.status, e.lastCalibration, e.nextDue, e.notes]),
+    ["รหัส", "ชื่อ", "ยี่ห้อ", "รุ่น", "Serial No.", "ประเภท", "ตำแหน่ง", "สถานะ", "สอบเทียบล่าสุด", "กำหนดถัดไป", "หมายเหตุ"]
   ));
   const exportActivities = () => download("activities.csv", toCSV(
     activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, a.type, a.detail, a.by, a.poNo || "", a.certUrl || ""]),
