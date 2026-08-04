@@ -404,6 +404,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
   const [typeFilter, setTypeFilter] = useState("all");
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
+  const [showImport, setShowImport] = useState(false);
 
   const types = useMemo(() => [...new Set(equipment.map(e => e.type).filter(Boolean))].sort(), [equipment]);
 
@@ -431,6 +432,17 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
     if (selected === id) setSelected(null);
   }
 
+  function importItems(items) {
+    const newItems = items.map(it => ({
+      id: uid(), code: it.code, name: it.name, type: it.type || "", location: it.location || "",
+      status: "active", lastCalibration: it.lastCalibration || "", nextDue: it.nextDue || "",
+      notes: "", imageUrl: "",
+    }));
+    setEquipment([...newItems, ...equipment]);
+    notify(`นำเข้า ${newItems.length} รายการแล้ว`);
+    setShowImport(false);
+  }
+
   const selectedItem = equipment.find(e => e.id === selected);
 
   return (
@@ -448,10 +460,14 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
           <option value="maintenance">ซ่อมบำรุง</option>
           <option value="inactive">ปิดใช้งาน</option>
         </select>
+        <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
+          <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
+        </button>
         <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", type: "", location: "", status: "active", lastCalibration: "", nextDue: "", notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
+      {showImport && <EquipmentImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
 
       <div style={S.cardGrid}>
         {filtered.map(e => {
@@ -549,6 +565,39 @@ function EquipmentForm({ item, onCancel, onSave }) {
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.notes} onChange={set("notes")} /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.code || !f.name} />
+    </Modal>
+  );
+}
+
+function EquipmentImportForm({ onCancel, onImport }) {
+  const [text, setText] = useState("");
+  const parsed = text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
+    const parts = line.split("|").map(p => p.trim());
+    return {
+      code: parts[0] || "",
+      name: parts[1] || "",
+      type: parts[2] || "",
+      location: parts[3] || "",
+      lastCalibration: parts[4] || "",
+      nextDue: parts[5] || "",
+    };
+  }).filter(r => r.code && r.name);
+
+  return (
+    <Modal onClose={onCancel} title="นำเข้ารายการเครื่องมือ" wide>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>
+        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>รหัส | ชื่อเครื่องมือ | ประเภท | ตำแหน่ง | สอบเทียบล่าสุด (YYYY-MM-DD) | กำหนดถัดไป (YYYY-MM-DD)</b> (คั่นด้วย | — ทุกช่องหลังชื่อใส่หรือเว้นว่างก็ได้ สถานะจะตั้งเป็น "ใช้งานอยู่" ให้อัตโนมัติ)
+      </div>
+      <textarea
+        style={{ ...S.input, minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={"ตัวอย่าง:\nMPIR-006 | เครื่องชั่ง 4 ตำแหน่ง | เครื่องชั่ง | C2 | 2026-01-15 | 2026-07-15\nMPIR-007 | pH Meter | pH Meter | C1 | | 2026-09-01"}
+      />
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 8 }}>
+        ตรวจพบ <b>{parsed.length}</b> รายการที่จะนำเข้า (รายการเดิมจะไม่ถูกลบหรือทับ — รายการใหม่จะถูกเพิ่มเข้าไป)
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onImport(parsed)} disabled={parsed.length === 0} />
     </Modal>
   );
 }
