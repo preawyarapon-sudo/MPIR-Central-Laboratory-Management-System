@@ -493,9 +493,9 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
                   {e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
                 </div>
                 <div style={S.eqName}>{e.name}</div>
-                {(e.brand || e.model) && (
+                {e.brand && (
                   <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                    {[e.brand, e.model].filter(Boolean).join(" · ")}
+                    {e.brand}
                   </div>
                 )}
                 <div style={S.eqMeta}><MapPin size={11} /> {e.location || "-"} · {e.type || "-"}</div>
