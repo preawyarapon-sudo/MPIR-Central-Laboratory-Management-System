@@ -28,8 +28,6 @@ function statusOf(days) {
 const STATUS_COLOR = { ok: "var(--green)", warn: "var(--amber)", danger: "var(--red)", none: "var(--muted)" };
 const STATUS_LABEL = { ok: "ปกติ", warn: "ใกล้ถึงกำหนด", danger: "เลยกำหนด", none: "-" };
 const PR_CATEGORY_LABEL = { chemical: "สารเคมี", consumable: "พัสดุสิ้นเปลือง", equipment: "ซ่อม/บำรุงเครื่องมือ", other: "อื่นๆ" };
-const PR_STATUS_LABEL = { pending: "รออนุมัติ", ordered: "สั่งซื้อแล้ว (มี PO)", received: "ได้รับแล้ว", cancelled: "ยกเลิก" };
-const PR_STATUS_COLOR = { pending: "var(--muted)", ordered: "var(--amber)", received: "var(--green)", cancelled: "var(--red)" };
 // Soonest expiry date for a chemical, considering both the legacy single
 // expiryDate field and any per-batch expiry dates recorded on "receive"
 // transactions — so items with any near-expiry stock surface first.
@@ -1413,32 +1411,53 @@ function ConsumableForm({ item, onCancel, onSave }) {
 }
 
 /* ================= PURCHASE REQUESTS (PR) ================= */
+// Normalizes a PR's items into a stable array with ids — older PRs only had
+// a raw multi-line itemName string, so those are split into items on first
+// use (and persisted back to storage the first time one is toggled).
+function getPRItems(r) {
+  if (r.items && r.items.length) return r.items;
+  return (r.itemName || "").split("\n").map(s => s.trim()).filter(Boolean)
+    .map(text => ({ id: uid(), text, received: false, poNo: "" }));
+}
+// When the free-text item list is edited/saved from the form, keep the
+// received/PO state of any line whose text is unchanged; new or edited
+// lines start fresh as not-yet-received.
+function reconcilePRItems(oldItems, newText) {
+  const lines = (newText || "").split("\n").map(s => s.trim()).filter(Boolean);
+  const oldByText = {};
+  (oldItems || []).forEach(it => { oldByText[it.text] = it; });
+  return lines.map(text => oldByText[text] || { id: uid(), text, received: false, poNo: "" });
+}
+
 function PurchaseRequestsTab({ requests, setRequests, notify }) {
   const [q, setQ] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
   const [editing, setEditing] = useState(null);
   const [showImport, setShowImport] = useState(false);
 
   const filtered = requests
-    .filter(r => (r.prNo + r.itemName + r.requestedBy + (r.poNo || "")).toLowerCase().includes(q.toLowerCase()))
-    .filter(r => categoryFilter === "all" || r.category === categoryFilter)
-    .filter(r => statusFilter === "all" || r.status === statusFilter)
+    .filter(r => (r.prNo + getPRItems(r).map(i => i.text).join(" ") + r.requestedBy + (r.poNo || "")).toLowerCase().includes(q.toLowerCase()))
+    .filter(r => categoryFilter === "all" || (r.categories || []).includes(categoryFilter))
     .slice()
     .sort((a, b) => (b.date || "").localeCompare(a.date || "")); // most recent PR first
 
   function upsert(item) {
-    if (requests.find(r => r.id === item.id)) setRequests(requests.map(r => r.id === item.id ? item : r));
-    else setRequests([item, ...requests]);
+    const items = reconcilePRItems(requests.find(r => r.id === item.id)?.items, item.itemName);
+    const record = { ...item, items };
+    if (requests.find(r => r.id === item.id)) setRequests(requests.map(r => r.id === item.id ? record : r));
+    else setRequests([record, ...requests]);
     notify("บันทึกใบขอซื้อแล้ว");
     setEditing(null);
   }
   function remove(id) { setRequests(requests.filter(r => r.id !== id)); notify("ลบรายการแล้ว"); }
+  function updateItems(prId, items) {
+    setRequests(requests.map(r => r.id === prId ? { ...r, items } : r));
+  }
 
   function importItems(items) {
     const newItems = items.map(it => ({
-      id: uid(), prNo: it.prNo, date: it.date || todayISO(), category: it.category || "other",
-      itemName: it.itemName, requestedBy: it.requestedBy || "", status: it.status || "pending",
+      id: uid(), prNo: it.prNo, date: it.date || todayISO(), categories: it.categories.length ? it.categories : ["other"],
+      itemName: it.itemName, items: getPRItems({ itemName: it.itemName }), requestedBy: it.requestedBy || "",
       poNo: it.poNo || "", notes: it.notes || "",
     }));
     setRequests([...newItems, ...requests]);
@@ -1446,44 +1465,41 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
     setShowImport(false);
   }
 
-  const pendingCount = requests.filter(r => r.status === "pending").length;
-
   return (
     <div>
-      <TabHeader title="ใบขอซื้อ (PR)" sub={`บันทึกรายการที่สั่งซื้อ/ออก PR ทั้งสารเคมี พัสดุ และซ่อมบำรุงเครื่องมือ · รออนุมัติ ${pendingCount} รายการ`} />
+      <TabHeader title="ใบขอซื้อ (PR)" sub="บันทึกรายการที่สั่งซื้อ/ออก PR ทั้งสารเคมี พัสดุ และซ่อมบำรุงเครื่องมือ · ติ๊กรับแล้วได้ทีละรายการ" />
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเลข PR, รายการ, ผู้ขอ, เลข PO..." />
         <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} style={S.select}>
           <option value="all">ทุกหมวด</option>
           {Object.entries(PR_CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={S.select}>
-          <option value="all">ทุกสถานะ</option>
-          {Object.entries(PR_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), prNo: "", date: todayISO(), category: "chemical", itemName: "", requestedBy: "", status: "pending", poNo: "", notes: "" })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), prNo: "", date: todayISO(), categories: [], itemName: "", requestedBy: "", poNo: "", notes: "" })}>
           <Plus size={15} /> ออกใบขอซื้อ
         </button>
       </Toolbar>
       {showImport && <PurchaseRequestsImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
 
       <Table
-        cols={["เลขที่ PR", "วันที่", "หมวด", "รายการ", "สถานะ", ""]}
+        cols={["เลขที่ PR", "วันที่", "หมวด", "รายการ", ""]}
         rows={filtered.map(r => [
           <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{r.prNo || "-"}</span>,
           fmtDate(r.date),
-          <Tag color="var(--muted)">{PR_CATEGORY_LABEL[r.category] || r.category}</Tag>,
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {(r.categories || []).length > 0
+              ? r.categories.map(c => <Tag key={c} color="var(--muted)">{PR_CATEGORY_LABEL[c] || c}</Tag>)
+              : "-"}
+          </div>,
           <div>
-            <div style={{ fontWeight: 500 }}>{r.itemName}</div>
-            <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
-              {[r.requestedBy ? `ผู้ขอ: ${r.requestedBy}` : null, r.poNo ? `PO: ${r.poNo}` : null].filter(Boolean).join(" · ")}
+            <PRItemsCell items={getPRItems(r)} onUpdateItems={(items) => updateItems(r.id, items)} />
+            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>
+              {[r.requestedBy ? `ผู้ขอ: ${r.requestedBy}` : null, r.poNo ? `PO หลัก: ${r.poNo}` : null].filter(Boolean).join(" · ")}
             </div>
           </div>,
-          <Tag color={PR_STATUS_COLOR[r.status]}>{PR_STATUS_LABEL[r.status] || r.status}</Tag>,
-          <RowActions onEdit={() => setEditing(r)} onDelete={() => remove(r.id)} />,
+          <RowActions onEdit={() => setEditing({ ...r, itemName: getPRItems(r).map(i => i.text).join("\n") })} onDelete={() => remove(r.id)} />,
         ])}
         empty="ยังไม่มีใบขอซื้อ"
       />
@@ -1492,26 +1508,89 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
   );
 }
 
+// Per-PR item checklist: each line item can be individually ticked "received"
+// and given its own PO number, since one PR can arrive in separate shipments
+// under different POs. Shows the first 2 lines with a "+N more" expander.
+function PRItemsCell({ items, onUpdateItems }) {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? items : items.slice(0, 2);
+  const rest = items.length - shown.length;
+
+  const toggleReceived = (id) => {
+    onUpdateItems(items.map(it => it.id === id ? { ...it, received: !it.received } : it));
+  };
+  const setPoNo = (id, poNo) => {
+    onUpdateItems(items.map(it => it.id === id ? { ...it, poNo } : it));
+  };
+
+  if (items.length === 0) return <span style={{ color: "var(--muted)" }}>-</span>;
+
+  return (
+    <div onClick={(e) => e.stopPropagation()}>
+      {shown.map((it) => (
+        <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+          <input type="checkbox" checked={!!it.received} onChange={() => toggleReceived(it.id)} style={{ cursor: "pointer", flexShrink: 0 }} />
+          <span style={{
+            fontSize: 13, fontWeight: 500,
+            textDecoration: it.received ? "line-through" : "none",
+            color: it.received ? "var(--muted)" : "var(--ink)",
+          }}>
+            {it.text}
+          </span>
+          {it.received && (
+            <input
+              type="text"
+              value={it.poNo || ""}
+              onChange={(e) => setPoNo(it.id, e.target.value)}
+              placeholder="เลข PO"
+              style={{ fontSize: 11, border: "1px solid var(--line)", borderRadius: 5, padding: "2px 6px", width: 88, fontFamily: "var(--font-mono)" }}
+            />
+          )}
+        </div>
+      ))}
+      {items.length > 2 && (
+        <button
+          onClick={() => setExpanded(x => !x)}
+          style={{ fontSize: 12, color: "var(--teal)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+        >
+          {expanded ? "ย่อกลับ" : `+${rest} รายการเพิ่มเติม`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function PurchaseRequestForm({ item, onCancel, onSave }) {
-  const [f, setF] = useState(item);
+  const [f, setF] = useState({ ...item, categories: item.categories || [] });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const toggleCategory = (key) => {
+    setF({
+      ...f,
+      categories: f.categories.includes(key) ? f.categories.filter(c => c !== key) : [...f.categories, key],
+    });
+  };
   return (
     <Modal onClose={onCancel} title={item.itemName ? "แก้ไขใบขอซื้อ" : "ออกใบขอซื้อ (PR)"}>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="เลขที่ PR"><input style={S.input} value={f.prNo} onChange={set("prNo")} placeholder="เช่น PR-2569-0045" /></Field>
         <Field label="วันที่ออก PR"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
-        <Field label="หมวดหมู่">
-          <select style={S.input} value={f.category} onChange={set("category")}>
-            {Object.entries(PR_CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
+        <Field label="หมวดหมู่ (เลือกได้มากกว่า 1 ถ้าสั่งรวมกัน)" full>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "4px 0" }}>
+            {Object.entries(PR_CATEGORY_LABEL).map(([k, v]) => (
+              <label key={k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                <input type="checkbox" checked={f.categories.includes(k)} onChange={() => toggleCategory(k)} />
+                {v}
+              </label>
+            ))}
+          </div>
         </Field>
-        <Field label="สถานะ">
-          <select style={S.input} value={f.status} onChange={set("status")}>
-            {Object.entries(PR_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-        </Field>
-        <Field label="รายการที่ขอสั่งซื้อ" full>
-          <textarea style={{ ...S.input, minHeight: 60 }} value={f.itemName} onChange={set("itemName")} placeholder="เช่น สารเคมี Acetonitrile HPLC grade 4 ขวด, ซ่อมแอร์ห้อง C1 น้ำหยด" />
+        <Field label="รายการที่ขอสั่งซื้อ (1 รายการต่อบรรทัด)" full>
+          <textarea
+            style={{ ...S.input, minHeight: 90, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
+            value={f.itemName}
+            onChange={set("itemName")}
+            placeholder={"ขึ้นบรรทัดใหม่ทีละรายการ เช่น:\nNitric acid 65% 2.5 L (Merck 100456)\nSodium Hydroxide 1 kg (Merck 106498)\nซ่อมแอร์ห้อง C1 น้ำหยด"}
+          />
         </Field>
         <Field label="ผู้ขอซื้อ"><input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} /></Field>
         <Field label="เลขที่ PO (ถ้ามี)"><input style={S.input} value={f.poNo} onChange={set("poNo")} placeholder="กรอกภายหลังเมื่อได้รับ PO" /></Field>
@@ -1524,29 +1603,27 @@ function PurchaseRequestForm({ item, onCancel, onSave }) {
 
 function PurchaseRequestsImportForm({ onCancel, onImport }) {
   const [text, setText] = useState("");
-  const STATUS_KEYS = Object.keys(PR_STATUS_LABEL);
   const CATEGORY_KEYS = Object.keys(PR_CATEGORY_LABEL);
   const parsed = text.split("\n").map(l => l.trim()).filter(Boolean).map(line => {
     const parts = line.split("|").map(p => p.trim());
-    const category = CATEGORY_KEYS.includes(parts[2]) ? parts[2] : "other";
-    const status = STATUS_KEYS.includes(parts[5]) ? parts[5] : "pending";
+    const categories = (parts[2] || "").split(",").map(c => c.trim()).filter(c => CATEGORY_KEYS.includes(c));
     return {
-      prNo: parts[0] || "", date: parts[1] || "", category,
-      itemName: parts[3] || "", requestedBy: parts[4] || "", status,
-      poNo: parts[6] || "", notes: parts[7] || "",
+      prNo: parts[0] || "", date: parts[1] || "", categories,
+      itemName: parts[3] || "", requestedBy: parts[4] || "",
+      poNo: parts[5] || "", notes: parts[6] || "",
     };
   }).filter(r => r.itemName);
 
   return (
     <Modal onClose={onCancel} title="นำเข้ารายการใบขอซื้อ" wide>
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>
-        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>เลขที่ PR | วันที่ (YYYY-MM-DD) | หมวด (chemical/consumable/equipment/other) | รายการ | ผู้ขอ | สถานะ (pending/ordered/received/cancelled) | เลข PO | หมายเหตุ</b> (คั่นด้วย | — ทุกช่องหลังรายการใส่หรือเว้นว่างก็ได้)
+        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>เลขที่ PR | วันที่ (YYYY-MM-DD) | หมวด (chemical/consumable/equipment/other คั่นหลายหมวดด้วย , ) | รายการ | ผู้ขอ | เลข PO | หมายเหตุ</b> (คั่นด้วย | — ทุกช่องหลังรายการใส่หรือเว้นว่างก็ได้)
       </div>
       <textarea
         style={{ ...S.input, minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder={"ตัวอย่าง:\nPR-2569-0045 | 2026-08-01 | chemical | Acetonitrile HPLC grade 4 ขวด | สมชาย | ordered | PO-2569-0123 | \nPR-2569-0046 | 2026-08-02 | equipment | ซ่อมแอร์ห้อง C1 น้ำหยด | พาน | pending | | "}
+        placeholder={"ตัวอย่าง:\nPR-2569-0045 | 2026-08-01 | chemical | Acetonitrile HPLC grade 4 ขวด | สมชาย | PO-2569-0123 | \nPR-2569-0046 | 2026-08-02 | chemical,equipment | สั่งสารเคมีรวมกับซ่อมแอร์ห้อง C1 | พาน | | "}
       />
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 8 }}>
         ตรวจพบ <b>{parsed.length}</b> รายการที่จะนำเข้า (รายการเดิมจะไม่ถูกลบหรือทับ — รายการใหม่จะถูกเพิ่มเข้าไป)
@@ -1607,10 +1684,19 @@ function ReportsTab({ equipment, activities, chemicals, consumables, purchaseReq
     ));
   };
 
-  const exportPurchaseRequests = () => download("purchase-requests.csv", toCSV(
-    purchaseRequests.map(r => [r.prNo, r.date, PR_CATEGORY_LABEL[r.category] || r.category, r.itemName, r.requestedBy, PR_STATUS_LABEL[r.status] || r.status, r.poNo || "", r.notes || ""]),
-    ["เลขที่ PR", "วันที่", "หมวด", "รายการ", "ผู้ขอ", "สถานะ", "เลขที่ PO", "หมายเหตุ"]
-  ));
+  const exportPurchaseRequests = () => {
+    const rows = [];
+    purchaseRequests.forEach(r => {
+      const cats = (r.categories || []).map(c => PR_CATEGORY_LABEL[c] || c).join("; ");
+      getPRItems(r).forEach(it => {
+        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.poNo || r.poNo || "", r.requestedBy, r.notes || ""]);
+      });
+    });
+    download("purchase-requests.csv", toCSV(
+      rows,
+      ["เลขที่ PR", "วันที่", "หมวด", "รายการ", "สถานะรับของ", "เลขที่ PO", "ผู้ขอ", "หมายเหตุ"]
+    ));
+  };
 
   const txCount = consumables.reduce((sum, s) => sum + (s.transactions || []).length, 0);
 
