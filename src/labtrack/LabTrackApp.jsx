@@ -19,6 +19,14 @@ const fmtDate = (dateStr) => {
   const d = new Date(dateStr + "T00:00:00");
   return d.toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
 };
+// Adds N months to a YYYY-MM-DD date string, used to auto-calculate the next
+// calibration/maintenance due date from an equipment's recurrence interval.
+function addMonths(dateStr, months) {
+  if (!dateStr || !months) return "";
+  const d = new Date(dateStr + "T00:00:00");
+  d.setMonth(d.getMonth() + Number(months));
+  return d.toISOString().slice(0, 10);
+}
 function statusOf(days) {
   if (days === null) return "none";
   if (days < 0) return "danger";
@@ -453,12 +461,24 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
     const newItems = items.map(it => ({
       id: uid(), code: it.code, name: it.name, brand: it.brand || "", model: it.model || "", serialNo: it.serialNo || "",
       type: it.type || "", location: it.location || "",
-      status: "active", lastCalibration: it.lastCalibration || "", nextDue: it.nextDue || "",
+      status: "active", lastCalibration: it.lastCalibration || "", nextDue: it.nextDue || "", intervalMonths: it.intervalMonths || "",
       notes: "", imageUrl: "",
     }));
     setEquipment([...newItems, ...equipment]);
     notify(`นำเข้า ${newItems.length} รายการแล้ว`);
     setShowImport(false);
+  }
+
+  // Logging a "calibration" activity updates the equipment's last-calibration
+  // date, and — if a recurrence interval is set — recalculates the next due
+  // date automatically instead of requiring it to be typed in separately.
+  function applyCalibrationDates(equipmentId, act) {
+    if (act.type !== "calibration") return;
+    setEquipment(equipment.map(e => {
+      if (e.id !== equipmentId) return e;
+      const nextDue = e.intervalMonths ? (addMonths(act.date, e.intervalMonths) || e.nextDue) : e.nextDue;
+      return { ...e, lastCalibration: act.date, nextDue };
+    }));
   }
 
   const selectedItem = equipment.find(e => e.id === selected);
@@ -481,7 +501,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", location: "", status: "active", lastCalibration: "", nextDue: "", notes: "", imageUrl: "" })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", location: "", status: "active", lastCalibration: "", nextDue: "", intervalMonths: "", notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
@@ -536,8 +556,16 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
           onClose={() => setSelected(null)}
           onEdit={() => { setEditing(selectedItem); setSelected(null); }}
           onDelete={() => remove(selectedItem.id)}
-          onAddActivity={(act) => { setActivities([{ ...act, id: uid(), equipmentId: selectedItem.id }, ...activities]); notify("บันทึกกิจกรรมแล้ว"); }}
-          onEditActivity={(act) => { setActivities(activities.map(a => a.id === act.id ? { ...a, ...act } : a)); notify("แก้ไขกิจกรรมแล้ว"); }}
+          onAddActivity={(act) => {
+            setActivities([{ ...act, id: uid(), equipmentId: selectedItem.id }, ...activities]);
+            applyCalibrationDates(selectedItem.id, act);
+            notify("บันทึกกิจกรรมแล้ว");
+          }}
+          onEditActivity={(act) => {
+            setActivities(activities.map(a => a.id === act.id ? { ...a, ...act } : a));
+            applyCalibrationDates(selectedItem.id, act);
+            notify("แก้ไขกิจกรรมแล้ว");
+          }}
           onDeleteActivity={(actId) => { setActivities(activities.filter(a => a.id !== actId)); notify("ลบกิจกรรมแล้ว"); }}
         />
       )}
@@ -566,8 +594,33 @@ function EquipmentForm({ item, onCancel, onSave }) {
             <option value="inactive">ปิดใช้งาน</option>
           </select>
         </Field>
-        <Field label="สอบเทียบล่าสุด"><input type="date" style={S.input} value={f.lastCalibration} onChange={set("lastCalibration")} /></Field>
-        <Field label="กำหนดสอบเทียบถัดไป"><input type="date" style={S.input} value={f.nextDue} onChange={set("nextDue")} /></Field>
+        <Field label="สอบเทียบล่าสุด">
+          <input
+            type="date"
+            style={S.input}
+            value={f.lastCalibration}
+            onChange={(e) => {
+              const lastCalibration = e.target.value;
+              setF({ ...f, lastCalibration, nextDue: f.intervalMonths ? addMonths(lastCalibration, f.intervalMonths) || f.nextDue : f.nextDue });
+            }}
+          />
+        </Field>
+        <Field label="รอบสอบเทียบ/บำรุงรักษา (เดือน)">
+          <input
+            type="number"
+            style={S.input}
+            value={f.intervalMonths || ""}
+            onChange={(e) => {
+              const intervalMonths = e.target.value;
+              setF({ ...f, intervalMonths, nextDue: f.lastCalibration ? addMonths(f.lastCalibration, intervalMonths) || f.nextDue : f.nextDue });
+            }}
+            placeholder="เช่น 6, 12 หรือ 3 สำหรับล้างแอร์"
+          />
+        </Field>
+        <Field label="กำหนดสอบเทียบถัดไป">
+          <input type="date" style={S.input} value={f.nextDue} onChange={set("nextDue")} />
+          {f.intervalMonths ? <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>คำนวณอัตโนมัติจากรอบ {f.intervalMonths} เดือน — แก้ไขเองได้ถ้าต้องการ</div> : null}
+        </Field>
         <Field label="ลิงก์รูปภาพเครื่องมือ" full>
           <input
             style={S.input}
@@ -609,13 +662,14 @@ function EquipmentImportForm({ onCancel, onImport }) {
       brand: parts[6] || "",
       model: parts[7] || "",
       serialNo: parts[8] || "",
+      intervalMonths: parts[9] || "",
     };
   }).filter(r => r.code && r.name);
 
   return (
     <Modal onClose={onCancel} title="นำเข้ารายการเครื่องมือ" wide>
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>
-        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>รหัส | ชื่อเครื่องมือ | ประเภท | ตำแหน่ง | สอบเทียบล่าสุด (YYYY-MM-DD) | กำหนดถัดไป (YYYY-MM-DD) | ยี่ห้อ | รุ่น | หมายเลขเครื่อง (Serial No.)</b> (คั่นด้วย | — ทุกช่องหลังชื่อใส่หรือเว้นว่างก็ได้ สถานะจะตั้งเป็น "ใช้งานอยู่" ให้อัตโนมัติ)
+        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>รหัส | ชื่อเครื่องมือ | ประเภท | ตำแหน่ง | สอบเทียบล่าสุด (YYYY-MM-DD) | กำหนดถัดไป (YYYY-MM-DD) | ยี่ห้อ | รุ่น | หมายเลขเครื่อง (Serial No.) | รอบสอบเทียบ (เดือน)</b> (คั่นด้วย | — ทุกช่องหลังชื่อใส่หรือเว้นว่างก็ได้ สถานะจะตั้งเป็น "ใช้งานอยู่" ให้อัตโนมัติ)
       </div>
       <textarea
         style={{ ...S.input, minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
