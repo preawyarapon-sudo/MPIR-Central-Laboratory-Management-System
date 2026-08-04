@@ -1417,7 +1417,7 @@ function ConsumableForm({ item, onCancel, onSave }) {
 function getPRItems(r) {
   if (r.items && r.items.length) return r.items;
   return (r.itemName || "").split("\n").map(s => s.trim()).filter(Boolean)
-    .map(text => ({ id: uid(), text, received: false }));
+    .map(text => ({ id: uid(), text, received: false, receivedDate: null }));
 }
 // When the free-text item list is edited/saved from the form, keep the
 // received state of any line whose text is unchanged; new or edited
@@ -1426,7 +1426,7 @@ function reconcilePRItems(oldItems, newText) {
   const lines = (newText || "").split("\n").map(s => s.trim()).filter(Boolean);
   const oldByText = {};
   (oldItems || []).forEach(it => { oldByText[it.text] = it; });
-  return lines.map(text => oldByText[text] || { id: uid(), text, received: false });
+  return lines.map(text => oldByText[text] || { id: uid(), text, received: false, receivedDate: null });
 }
 function isPRFullyReceived(r) {
   const items = getPRItems(r);
@@ -1463,7 +1463,7 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
     setRequests(requests.map(r => r.id === prId ? { ...r, items } : r));
   }
   function receiveAll(r) {
-    updateItems(r.id, getPRItems(r).map(it => ({ ...it, received: true })));
+    updateItems(r.id, getPRItems(r).map(it => it.received ? it : { ...it, received: true, receivedDate: todayISO() }));
     notify("บันทึกรับของครบทั้ง PO แล้ว");
   }
 
@@ -1556,7 +1556,10 @@ function PRItemsCell({ items, onUpdateItems, onReceiveAll }) {
   const allReceived = items.length > 0 && items.every(it => it.received);
 
   const toggleReceived = (id) => {
-    onUpdateItems(items.map(it => it.id === id ? { ...it, received: !it.received } : it));
+    onUpdateItems(items.map(it => it.id === id
+      ? (it.received ? { ...it, received: false, receivedDate: null } : { ...it, received: true, receivedDate: todayISO() })
+      : it
+    ));
   };
 
   if (items.length === 0) return <span style={{ color: "var(--muted)" }}>-</span>;
@@ -1582,7 +1585,7 @@ function PRItemsCell({ items, onUpdateItems, onReceiveAll }) {
               flexShrink: 0,
             }}
           >
-            {it.received ? "✓ รับแล้ว" : "รับแล้ว"}
+            {it.received ? `✓ รับแล้ว${it.receivedDate ? ` · ${fmtDate(it.receivedDate)}` : ""}` : "รับแล้ว"}
           </button>
         </div>
       ))}
@@ -1735,12 +1738,12 @@ function ReportsTab({ equipment, activities, chemicals, consumables, purchaseReq
     purchaseRequests.forEach(r => {
       const cats = (r.categories || []).map(c => PR_CATEGORY_LABEL[c] || c).join("; ");
       getPRItems(r).forEach(it => {
-        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", r.poNo || "", r.requestedBy, r.notes || ""]);
+        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", r.poNo || "", r.requestedBy, r.notes || ""]);
       });
     });
     download("purchase-requests.csv", toCSV(
       rows,
-      ["เลขที่ PR", "วันที่", "หมวด", "รายการ", "สถานะรับของ", "เลขที่ PO", "ผู้ขอ", "หมายเหตุ"]
+      ["เลขที่ PR", "วันที่", "หมวด", "รายการ", "สถานะรับของ", "วันที่รับ", "เลขที่ PO", "ผู้ขอ", "หมายเหตุ"]
     ));
   };
 
