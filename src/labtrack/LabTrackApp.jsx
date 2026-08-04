@@ -1417,27 +1417,36 @@ function ConsumableForm({ item, onCancel, onSave }) {
 function getPRItems(r) {
   if (r.items && r.items.length) return r.items;
   return (r.itemName || "").split("\n").map(s => s.trim()).filter(Boolean)
-    .map(text => ({ id: uid(), text, received: false, poNo: "" }));
+    .map(text => ({ id: uid(), text, received: false }));
 }
 // When the free-text item list is edited/saved from the form, keep the
-// received/PO state of any line whose text is unchanged; new or edited
+// received state of any line whose text is unchanged; new or edited
 // lines start fresh as not-yet-received.
 function reconcilePRItems(oldItems, newText) {
   const lines = (newText || "").split("\n").map(s => s.trim()).filter(Boolean);
   const oldByText = {};
   (oldItems || []).forEach(it => { oldByText[it.text] = it; });
-  return lines.map(text => oldByText[text] || { id: uid(), text, received: false, poNo: "" });
+  return lines.map(text => oldByText[text] || { id: uid(), text, received: false });
+}
+function isPRFullyReceived(r) {
+  const items = getPRItems(r);
+  return items.length > 0 && items.every(it => it.received);
 }
 
 function PurchaseRequestsTab({ requests, setRequests, notify }) {
   const [q, setQ] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [view, setView] = useState("active"); // "active" | "history"
   const [editing, setEditing] = useState(null);
   const [showImport, setShowImport] = useState(false);
+
+  const activeCount = requests.filter(r => !isPRFullyReceived(r)).length;
+  const historyCount = requests.filter(r => isPRFullyReceived(r)).length;
 
   const filtered = requests
     .filter(r => (r.prNo + getPRItems(r).map(i => i.text).join(" ") + r.requestedBy + (r.poNo || "")).toLowerCase().includes(q.toLowerCase()))
     .filter(r => categoryFilter === "all" || (r.categories || []).includes(categoryFilter))
+    .filter(r => view === "history" ? isPRFullyReceived(r) : !isPRFullyReceived(r))
     .slice()
     .sort((a, b) => (b.date || "").localeCompare(a.date || "")); // most recent PR first
 
@@ -1453,6 +1462,10 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
   function updateItems(prId, items) {
     setRequests(requests.map(r => r.id === prId ? { ...r, items } : r));
   }
+  function receiveAll(r) {
+    updateItems(r.id, getPRItems(r).map(it => ({ ...it, received: true })));
+    notify("บันทึกรับของครบทั้ง PO แล้ว");
+  }
 
   function importItems(items) {
     const newItems = items.map(it => ({
@@ -1467,7 +1480,11 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
 
   return (
     <div>
-      <TabHeader title="ใบขอซื้อ (PR)" sub="บันทึกรายการที่สั่งซื้อ/ออก PR ทั้งสารเคมี พัสดุ และซ่อมบำรุงเครื่องมือ · ติ๊กรับแล้วได้ทีละรายการ" />
+      <TabHeader title="ใบขอซื้อ (PR)" sub="บันทึกรายการที่สั่งซื้อ/ออก PR ทั้งสารเคมี พัสดุ และซ่อมบำรุงเครื่องมือ · 1 PR = 1 PO" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <ViewTab active={view === "active"} onClick={() => setView("active")} label="กำลังดำเนินการ" count={activeCount} />
+        <ViewTab active={view === "history"} onClick={() => setView("history")} label="ประวัติ (รับครบแล้ว)" count={historyCount} />
+      </div>
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเลข PR, รายการ, ผู้ขอ, เลข PO..." />
         <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} style={S.select}>
@@ -1486,7 +1503,10 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
       <Table
         cols={["เลขที่ PR", "วันที่", "หมวด", "รายการ", ""]}
         rows={filtered.map(r => [
-          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{r.prNo || "-"}</span>,
+          <div>
+            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{r.prNo || "-"}</span>
+            {r.poNo && <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>PO: {r.poNo}</div>}
+          </div>,
           fmtDate(r.date),
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             {(r.categories || []).length > 0
@@ -1494,33 +1514,49 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
               : "-"}
           </div>,
           <div>
-            <PRItemsCell items={getPRItems(r)} onUpdateItems={(items) => updateItems(r.id, items)} />
-            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>
-              {[r.requestedBy ? `ผู้ขอ: ${r.requestedBy}` : null, r.poNo ? `PO หลัก: ${r.poNo}` : null].filter(Boolean).join(" · ")}
-            </div>
+            <PRItemsCell items={getPRItems(r)} onUpdateItems={(items) => updateItems(r.id, items)} onReceiveAll={() => receiveAll(r)} />
+            {r.requestedBy && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>ผู้ขอ: {r.requestedBy}</div>}
           </div>,
           <RowActions onEdit={() => setEditing({ ...r, itemName: getPRItems(r).map(i => i.text).join("\n") })} onDelete={() => remove(r.id)} />,
         ])}
-        empty="ยังไม่มีใบขอซื้อ"
+        empty={view === "history" ? "ยังไม่มี PR ที่รับของครบ" : "ยังไม่มีใบขอซื้อที่กำลังดำเนินการ"}
       />
       {editing && <PurchaseRequestForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
     </div>
   );
 }
 
-// Per-PR item checklist: each line item can be individually ticked "received"
-// and given its own PO number, since one PR can arrive in separate shipments
-// under different POs. Shows the first 2 lines with a "+N more" expander.
-function PRItemsCell({ items, onUpdateItems }) {
+function ViewTab({ active, onClick, label, count }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", gap: 6,
+        background: active ? "#E9F1FB" : "transparent",
+        border: `1px solid ${active ? "var(--teal)" : "var(--line)"}`,
+        color: active ? "var(--teal-dark)" : "var(--muted)",
+        borderRadius: 999, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+        cursor: "pointer", fontFamily: "inherit",
+      }}
+    >
+      {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({count})</span>
+    </button>
+  );
+}
+
+// Per-PR item checklist: click the "รับแล้ว" label on each line to toggle it
+// received, or click "รับแล้วทั้งหมด (PO นี้)" once to mark every line at
+// once — matches the 1 PR = 1 PO assumption, so the PO number lives on the
+// PR itself rather than per line. Shows the first 2 lines with a "+N more"
+// expander.
+function PRItemsCell({ items, onUpdateItems, onReceiveAll }) {
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? items : items.slice(0, 2);
   const rest = items.length - shown.length;
+  const allReceived = items.length > 0 && items.every(it => it.received);
 
   const toggleReceived = (id) => {
     onUpdateItems(items.map(it => it.id === id ? { ...it, received: !it.received } : it));
-  };
-  const setPoNo = (id, poNo) => {
-    onUpdateItems(items.map(it => it.id === id ? { ...it, poNo } : it));
   };
 
   if (items.length === 0) return <span style={{ color: "var(--muted)" }}>-</span>;
@@ -1528,8 +1564,7 @@ function PRItemsCell({ items, onUpdateItems }) {
   return (
     <div onClick={(e) => e.stopPropagation()}>
       {shown.map((it) => (
-        <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
-          <input type="checkbox" checked={!!it.received} onChange={() => toggleReceived(it.id)} style={{ cursor: "pointer", flexShrink: 0 }} />
+        <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
           <span style={{
             fontSize: 13, fontWeight: 500,
             textDecoration: it.received ? "line-through" : "none",
@@ -1537,23 +1572,34 @@ function PRItemsCell({ items, onUpdateItems }) {
           }}>
             {it.text}
           </span>
-          {it.received && (
-            <input
-              type="text"
-              value={it.poNo || ""}
-              onChange={(e) => setPoNo(it.id, e.target.value)}
-              placeholder="เลข PO"
-              style={{ fontSize: 11, border: "1px solid var(--line)", borderRadius: 5, padding: "2px 6px", width: 88, fontFamily: "var(--font-mono)" }}
-            />
-          )}
+          <button
+            onClick={() => toggleReceived(it.id)}
+            style={{
+              fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer",
+              background: it.received ? "#E3F5EA" : "transparent",
+              color: it.received ? "var(--green)" : "var(--muted)",
+              border: `1px solid ${it.received ? "var(--green)" : "var(--line)"}`,
+              flexShrink: 0,
+            }}
+          >
+            {it.received ? "✓ รับแล้ว" : "รับแล้ว"}
+          </button>
         </div>
       ))}
       {items.length > 2 && (
         <button
           onClick={() => setExpanded(x => !x)}
-          style={{ fontSize: 12, color: "var(--teal)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+          style={{ fontSize: 12, color: "var(--teal)", background: "none", border: "none", cursor: "pointer", padding: 0, marginRight: 12 }}
         >
           {expanded ? "ย่อกลับ" : `+${rest} รายการเพิ่มเติม`}
+        </button>
+      )}
+      {!allReceived && (
+        <button
+          onClick={onReceiveAll}
+          style={{ fontSize: 12, color: "var(--teal-dark)", background: "none", border: "none", cursor: "pointer", padding: 0, marginTop: 4, fontWeight: 600, textDecoration: "underline" }}
+        >
+          รับแล้วทั้งหมด (PO นี้)
         </button>
       )}
     </div>
@@ -1689,7 +1735,7 @@ function ReportsTab({ equipment, activities, chemicals, consumables, purchaseReq
     purchaseRequests.forEach(r => {
       const cats = (r.categories || []).map(c => PR_CATEGORY_LABEL[c] || c).join("; ");
       getPRItems(r).forEach(it => {
-        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.poNo || r.poNo || "", r.requestedBy, r.notes || ""]);
+        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", r.poNo || "", r.requestedBy, r.notes || ""]);
       });
     });
     download("purchase-requests.csv", toCSV(
