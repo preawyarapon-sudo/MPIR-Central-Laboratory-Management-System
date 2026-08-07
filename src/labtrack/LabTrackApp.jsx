@@ -112,18 +112,21 @@ function itemBookingSummary(itemId, bookings, totalQty) {
   const qty = Number(totalQty) || 1;
   const live = bookings.filter((b) => b.equipmentId === itemId && b.assetType === "item" && isBookingCurrent(b));
   const activeCheckouts = live.filter((b) => b.type === "checkout");
-  const availableNow = Math.max(0, qty - activeCheckouts.length);
+  // Sum actual quantities borrowed, not just how many booking records exist —
+  // one request can claim more than 1 unit.
+  const checkedOutQty = activeCheckouts.reduce((sum, b) => sum + (Number(b.qty) || 1), 0);
+  const availableNow = Math.max(0, qty - checkedOutQty);
   if (availableNow <= 0) {
-    return { busy: true, text: `ถูกยืมครบแล้ว (${activeCheckouts.length}/${qty})`, color: "var(--red)" };
+    return { busy: true, availableNow: 0, text: `ถูกยืมครบแล้ว (${checkedOutQty}/${qty})`, color: "var(--red)" };
   }
-  if (activeCheckouts.length > 0) {
-    return { busy: false, text: `เหลือว่าง ${availableNow}/${qty} ชิ้น`, color: "var(--amber)" };
+  if (checkedOutQty > 0) {
+    return { busy: false, availableNow, text: `เหลือว่าง ${availableNow}/${qty} ชิ้น`, color: "var(--amber)" };
   }
   const reservations = live.filter((b) => b.type === "reservation");
   if (reservations.length > 0) {
-    return { busy: false, text: `ว่าง ${qty} ชิ้น (มีจองล่วงหน้า ${reservations.length} รายการ)`, color: "var(--amber)" };
+    return { busy: false, availableNow, text: `ว่าง ${qty} ชิ้น (มีจองล่วงหน้า ${reservations.length} รายการ)`, color: "var(--amber)" };
   }
-  return { busy: false, text: `ว่างทั้งหมด ${qty} ชิ้น`, color: "var(--green)" };
+  return { busy: false, availableNow: qty, text: `ว่างทั้งหมด ${qty} ชิ้น`, color: "var(--green)" };
 }
 
 async function loadList(key, seed) {
@@ -1571,21 +1574,26 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                 {activeItems.map(it => {
                   const checked = !!itemQtys[it.id];
                   const bk = itemBookingSummary(it.id, bookings, it.totalQty);
-                  const maxQty = it.totalQty || 1;
+                  // Cap at what's actually still free right now, not the raw
+                  // total — otherwise the form would let people request more
+                  // than physically exists once some units are already out.
+                  const maxQty = bk.availableNow;
+                  const disabled = maxQty <= 0 && !checked;
                   return (
                     <div key={it.id} style={{
                       display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
                       border: `1px solid ${checked ? "var(--teal)" : "var(--line)"}`,
-                      borderRadius: 8, background: checked ? "#E9F1FB" : "#fff",
+                      borderRadius: 8, background: checked ? "#E9F1FB" : disabled ? "#F5F5F5" : "#fff",
+                      opacity: disabled ? 0.6 : 1,
                     }}>
-                      <input type="checkbox" checked={checked} onChange={() => toggleItem(it.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
-                      <div style={{ flex: 1, minWidth: 0 }} onClick={() => toggleItem(it.id)} role="button">
-                        <div style={{ fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{it.name}</div>
+                      <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleItem(it.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }} onClick={() => !disabled && toggleItem(it.id)} role="button">
+                        <div style={{ fontSize: 13, fontWeight: 600, cursor: disabled ? "default" : "pointer" }}>{it.name}</div>
                         <div style={{ fontSize: 11, color: bk.color }}>{bk.text}</div>
                       </div>
                       {checked && maxQty > 1 && (
                         <input
-                          type="number" min="1" max={maxQty} value={itemQtys[it.id]}
+                          type="number" min="1" max={maxQty} value={Math.min(itemQtys[it.id], maxQty)}
                           onChange={(e) => setItemQty(it.id, e.target.value, maxQty)}
                           style={{ ...S.input, width: 60, padding: "5px 8px", flexShrink: 0 }}
                         />
