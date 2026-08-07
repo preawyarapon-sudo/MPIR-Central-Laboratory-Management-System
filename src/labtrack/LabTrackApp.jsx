@@ -1259,7 +1259,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
             <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
               {b.type === "checkout"
                 ? `${fmtDate(b.startDate)}${b.returnedAt ? ` → คืนแล้ว ${fmtDate(b.returnedAt)}` : b.dueBackDate ? ` · กำหนดคืน ${fmtDate(b.dueBackDate)}` : ""}`
-                : `${fmtDate(b.startDate)}${b.endDate && b.endDate !== b.startDate ? ` - ${fmtDate(b.endDate)}` : ""}${b.startTime ? ` · ${b.startTime}${b.endTime ? `-${b.endTime}` : ""}` : ""}`}
+                : `${fmtDate(b.startDate)}${b.endDate && b.endDate !== b.startDate ? ` - ${fmtDate(b.endDate)}` : ""}`}
             </div>
             {isBookingOverdue(b) && <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 2 }}>เลยกำหนดคืน {Math.abs(daysUntil(b.dueBackDate))} วัน</div>}
           </div>,
@@ -1355,8 +1355,6 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const [equipSubType, setEquipSubType] = useState("checkout"); // checkout | reservation
   const [startDate, setStartDate] = useState(todayISO());
   const [endDate, setEndDate] = useState(todayISO());
-  const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
   const [dueBackDate, setDueBackDate] = useState("");
 
   // ---- item-mode state: { [itemId]: qty } for every checked item ----
@@ -1467,8 +1465,6 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
         type: equipSubType,
         startDate,
         endDate: equipSubType === "reservation" ? endDate : null,
-        startTime: equipSubType === "reservation" ? startTime : "",
-        endTime: equipSubType === "reservation" ? endTime : "",
         dueBackDate: equipSubType === "checkout" ? dueBackDate : "",
         requestedBy: requestedBy.trim(),
         purpose: purpose.trim(),
@@ -1485,8 +1481,6 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           qty: itemQtys[id],
           startDate: itemStartDate,
           endDate: null,
-          startTime: "",
-          endTime: "",
           dueBackDate: itemDueBackDate,
           requestedBy: requestedBy.trim(),
           purpose: purpose.trim(),
@@ -1561,8 +1555,6 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
               <>
                 <Field label="วันที่เริ่มจอง"><input type="date" style={S.input} value={startDate} onChange={(e) => { setStartDate(e.target.value); if (endDate < e.target.value) setEndDate(e.target.value); }} /></Field>
                 <Field label="วันที่สิ้นสุด"><input type="date" style={S.input} value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} /></Field>
-                <Field label="เวลาเริ่ม (ถ้ามี)"><input type="time" style={S.input} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></Field>
-                <Field label="เวลาสิ้นสุด (ถ้ามี)"><input type="time" style={S.input} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></Field>
               </>
             )}
           </>
