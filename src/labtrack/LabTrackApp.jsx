@@ -152,7 +152,7 @@ const NAV = [
   { key: "reports", label: "รายงาน", icon: FileDown },
 ];
 
-export default function App({ restrictToBooking = false }) {
+export default function App({ restrictToBooking = false, currentUsername = "" }) {
   const [tab, setTab] = useState(restrictToBooking ? "bookings" : "dashboard");
   const [loading, setLoading] = useState(true);
   const [equipment, setEquipment] = useState([]);
@@ -271,7 +271,8 @@ export default function App({ restrictToBooking = false }) {
         {/* main */}
         <main style={S.main} className="ltMain">
           {restrictToBooking ? (
-            <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
+            <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify}
+              restrictToBooking currentUsername={currentUsername} />
           ) : (
             <>
               {tab === "dashboard" && (
@@ -978,17 +979,25 @@ function ActivityForm({ initial, onCancel, onSave }) {
 }
 
 /* ================= BOOKINGS (จอง/ยืมเครื่องมือ) ================= */
-// NOTE on approval: this app has no login/user accounts, so "approval" here
-// is trust-based rather than access-controlled — anyone can click อนุมัติ/
-// ปฏิเสธ, but the name typed into "ชื่อผู้ดำเนินการ" is recorded on the
-// booking so there's still an audit trail of who approved/rejected/returned
-// what, even without real authentication.
-function BookingsTab({ bookings, setBookings, equipment, notify }) {
+// NOTE on approval: this app has no real per-request authorization at the
+// data layer — "approval" here is trust-based, gated only by which UI a
+// logged-in role gets to see (see restrictToBooking below). The name typed
+// into "ชื่อผู้ดำเนินการ" is recorded on the booking for an audit trail of
+// who approved/rejected/returned what.
+function BookingsTab({ bookings, setBookings, equipment, notify, restrictToBooking = false, currentUsername = "" }) {
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [view, setView] = useState("pending"); // "pending" | "current" | "history"
   const [showForm, setShowForm] = useState(false);
   const [actorName, setActorName] = useState("");
+
+  // Restricted (booking-only) accounts can see THAT other bookings exist
+  // (via the conflict warning inside BookingForm, which always checks the
+  // full unfiltered list) but the tables here only ever show their own
+  // requests — everyone else's requester names/purposes stay out of view.
+  const ownOnly = restrictToBooking
+    ? bookings.filter(b => b.requestedBy === currentUsername)
+    : bookings;
 
   const withMeta = (list) => list.filter(b => {
     const matchQ = (b.equipmentCode + b.equipmentName + (b.requestedBy || "") + (b.purpose || "")).toLowerCase().includes(q.toLowerCase());
@@ -996,9 +1005,9 @@ function BookingsTab({ bookings, setBookings, equipment, notify }) {
     return matchQ && matchT;
   });
 
-  const pending = withMeta(bookings.filter(b => b.status === "pending")).sort((a, b) => (a.requestedAt || "").localeCompare(b.requestedAt || ""));
-  const current = withMeta(bookings.filter(isBookingCurrent)).sort((a, b) => bookingRange(a).start.localeCompare(bookingRange(b).start));
-  const history = withMeta(bookings.filter(b => !isBookingCurrent(b) && b.status !== "pending")).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
+  const pending = withMeta(ownOnly.filter(b => b.status === "pending")).sort((a, b) => (a.requestedAt || "").localeCompare(b.requestedAt || ""));
+  const current = withMeta(ownOnly.filter(isBookingCurrent)).sort((a, b) => bookingRange(a).start.localeCompare(bookingRange(b).start));
+  const history = withMeta(ownOnly.filter(b => !isBookingCurrent(b) && b.status !== "pending")).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
 
   const shown = view === "pending" ? pending : view === "current" ? current : history;
 
@@ -1018,7 +1027,7 @@ function BookingsTab({ bookings, setBookings, equipment, notify }) {
     notify("ยกเลิกรายการแล้ว");
   }
   function markReturned(b) {
-    update(b.id, { returnedAt: todayISO(), returnedBy: actorName || "-" });
+    update(b.id, { returnedAt: todayISO(), returnedBy: actorName || currentUsername || "-" });
     notify("บันทึกการคืนแล้ว");
   }
 
@@ -1030,17 +1039,24 @@ function BookingsTab({ bookings, setBookings, equipment, notify }) {
 
   return (
     <div>
-      <TabHeader title="จอง/ยืมเครื่องมือ" sub="ขอใช้เครื่องมือแบบเช็คเอาท์ทันทีหรือจองล่วงหน้า — ทุกคำขอต้องผ่านการอนุมัติก่อน" />
+      <TabHeader
+        title="จอง/ยืมเครื่องมือ"
+        sub={restrictToBooking
+          ? "ขอใช้เครื่องมือแบบเช็คเอาท์ทันทีหรือจองล่วงหน้า — แสดงเฉพาะคำขอของคุณ (ระบบยังเช็คให้ว่าชนกับของคนอื่นไหมตอนสร้างคำขอ)"
+          : "ขอใช้เครื่องมือแบบเช็คเอาท์ทันทีหรือจองล่วงหน้า — ทุกคำขอต้องผ่านการอนุมัติก่อน"}
+      />
 
-      <div style={{ ...S.notesBox, marginBottom: 14, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600 }}>ชื่อผู้ดำเนินการ (สำหรับอนุมัติ/ปฏิเสธ/บันทึกคืน):</span>
-        <input
-          style={{ ...S.input, maxWidth: 220, padding: "6px 10px" }}
-          value={actorName}
-          onChange={(e) => setActorName(e.target.value)}
-          placeholder="พิมพ์ชื่อของคุณ"
-        />
-      </div>
+      {!restrictToBooking && (
+        <div style={{ ...S.notesBox, marginBottom: 14, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600 }}>ชื่อผู้ดำเนินการ (สำหรับอนุมัติ/ปฏิเสธ/บันทึกคืน):</span>
+          <input
+            style={{ ...S.input, maxWidth: 220, padding: "6px 10px" }}
+            value={actorName}
+            onChange={(e) => setActorName(e.target.value)}
+            placeholder="พิมพ์ชื่อของคุณ"
+          />
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <ViewTab active={view === "pending"} onClick={() => setView("pending")} label="รออนุมัติ" count={pending.length} />
@@ -1088,6 +1104,7 @@ function BookingsTab({ bookings, setBookings, equipment, notify }) {
           </div>,
           <BookingActions
             booking={b}
+            canApprove={!restrictToBooking}
             onApprove={() => approve(b)}
             onReject={() => reject(b)}
             onCancel={() => cancel(b)}
@@ -1095,25 +1112,35 @@ function BookingsTab({ bookings, setBookings, equipment, notify }) {
           />,
         ])}
         empty={
-          view === "pending" ? "ไม่มีคำขอรออนุมัติ"
+          view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
           : view === "current" ? "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"
           : "ยังไม่มีประวัติ"
         }
       />
 
       {showForm && (
-        <BookingForm equipment={equipment} bookings={bookings} onCancel={() => setShowForm(false)} onSave={create} />
+        <BookingForm
+          equipment={equipment}
+          bookings={bookings}
+          fixedRequestedBy={restrictToBooking ? currentUsername : null}
+          onCancel={() => setShowForm(false)}
+          onSave={create}
+        />
       )}
     </div>
   );
 }
 
-function BookingActions({ booking: b, onApprove, onReject, onCancel, onReturn }) {
+function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel, onReturn }) {
   if (b.status === "pending") {
     return (
       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-        <button style={{ ...S.iconBtnSm, color: "var(--green)" }} title="อนุมัติ" onClick={onApprove}><CheckCircle2 size={14} /></button>
-        <button style={{ ...S.iconBtnSm, color: "var(--red)" }} title="ปฏิเสธ" onClick={onReject}><XCircle size={14} /></button>
+        {canApprove && (
+          <>
+            <button style={{ ...S.iconBtnSm, color: "var(--green)" }} title="อนุมัติ" onClick={onApprove}><CheckCircle2 size={14} /></button>
+            <button style={{ ...S.iconBtnSm, color: "var(--red)" }} title="ปฏิเสธ" onClick={onReject}><XCircle size={14} /></button>
+          </>
+        )}
         <button style={S.iconBtnSm} title="ยกเลิกคำขอ" onClick={onCancel}><Trash2 size={13} /></button>
       </div>
     );
@@ -1135,7 +1162,7 @@ function BookingActions({ booking: b, onApprove, onReject, onCancel, onReturn })
   return null;
 }
 
-function BookingForm({ equipment, bookings, initialEquipmentId, onCancel, onSave }) {
+function BookingForm({ equipment, bookings, initialEquipmentId, fixedRequestedBy, onCancel, onSave }) {
   const activeEquipment = equipment.filter(e => e.status !== "inactive").slice().sort((a, b) => alphaCompare(a.code, b.code));
   const [f, setF] = useState({
     equipmentId: initialEquipmentId || activeEquipment[0]?.id || "",
@@ -1145,7 +1172,7 @@ function BookingForm({ equipment, bookings, initialEquipmentId, onCancel, onSave
     startTime: "",
     endTime: "",
     dueBackDate: "",
-    requestedBy: "",
+    requestedBy: fixedRequestedBy || "",
     purpose: "",
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -1218,7 +1245,13 @@ function BookingForm({ equipment, bookings, initialEquipmentId, onCancel, onSave
           </>
         )}
 
-        <Field label="ผู้จอง/ยืม"><input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} placeholder="ชื่อ-นามสกุล" /></Field>
+        <Field label="ผู้จอง/ยืม">
+          {fixedRequestedBy ? (
+            <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", display: "flex", alignItems: "center" }}>{fixedRequestedBy}</div>
+          ) : (
+            <input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} placeholder="ชื่อ-นามสกุล" />
+          )}
+        </Field>
         <Field label="วัตถุประสงค์/งานที่ใช้" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.purpose} onChange={set("purpose")} /></Field>
       </div>
 
