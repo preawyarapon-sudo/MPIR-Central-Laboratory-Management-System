@@ -27,6 +27,7 @@ const ACCOUNTS = [
   },
   { username: "mpiradmin", password: "admin1234", role: "admin" },
   { username: "wimonsiri", password: "22210", role: "booking" },
+  { username: "thidarati", password: "1234", role: "booking" },
 ];
 
 const SESSION_KEY = "mpirLabSession";
