@@ -662,6 +662,79 @@ async function deleteJobStorage(jobNo) {
   await remove(ref(db, `jobs/${jobNo}`));
 }
 
+// ---------- DEBUG: reconstruct LINE notification history ----------
+// Every LINE push this app ever sends leaves a timestamp behind somewhere
+// in the job data (createdAt for "new job", lateNotifiedAt / doneNotifiedAt
+// on the job itself, flaggedAt / resolvedNotifiedAt on individual repairs).
+// This walks all loaded jobs and counts how many notifications of each type
+// fall inside a date range, so you can audit usage without needing Vercel
+// logs (which expire quickly) or LINE's own dashboard (which only shows a
+// total, not a breakdown by type).
+//
+// Usage (after deploying, open the app, press F12 -> Console, then run):
+//   __auditNotifications('2026-08-01', '2026-08-06')
+function auditNotifications(jobs, fromDateStr, toDateStr) {
+  const from = new Date(fromDateStr + "T00:00:00").getTime();
+  const to = new Date(toDateStr + "T23:59:59").getTime();
+  const inRange = (ts) => typeof ts === "number" && ts >= from && ts <= to;
+
+  const counts = { newJob: 0, jobDone: 0, jobLate: 0, repairFlag: 0, repairDone: 0 };
+  const details = [];
+
+  jobs.forEach((job) => {
+    if (inRange(job.createdAt)) {
+      counts.newJob++;
+      details.push({ type: "newJob", jobNo: job.jobNo, ts: job.createdAt });
+    }
+    if (inRange(job.doneNotifiedAt)) {
+      counts.jobDone++;
+      details.push({ type: "jobDone", jobNo: job.jobNo, ts: job.doneNotifiedAt });
+    }
+    if (inRange(job.lateNotifiedAt)) {
+      counts.jobLate++;
+      details.push({ type: "jobLate", jobNo: job.jobNo, ts: job.lateNotifiedAt });
+    }
+    (job.parameters || []).forEach((p) => {
+      (p.repairs || []).forEach((r) => {
+        if (inRange(r.flaggedAt)) {
+          counts.repairFlag++;
+          details.push({ type: "repairFlag", jobNo: job.jobNo, param: p.name, regNo: r.regNo, ts: r.flaggedAt });
+        }
+      });
+    });
+  });
+
+  // repairDone messages are sent once per *batch* (all repairs on the same
+  // parameter that got resolved together share the same resolvedNotifiedAt
+  // timestamp), so count distinct (job, parameter, timestamp) combos rather
+  // than individual repair rows.
+  const doneBatches = new Map();
+  jobs.forEach((job) => {
+    (job.parameters || []).forEach((p) => {
+      (p.repairs || []).forEach((r) => {
+        if (inRange(r.resolvedNotifiedAt)) {
+          const key = `${job.jobNo}|${p.id}|${r.resolvedNotifiedAt}`;
+          if (!doneBatches.has(key)) {
+            doneBatches.set(key, { type: "repairDone", jobNo: job.jobNo, param: p.name, ts: r.resolvedNotifiedAt });
+          }
+        }
+      });
+    });
+  });
+  counts.repairDone = doneBatches.size;
+  details.push(...doneBatches.values());
+
+  const total = counts.newJob + counts.jobDone + counts.jobLate + counts.repairFlag + counts.repairDone;
+  details.sort((a, b) => a.ts - b.ts);
+
+  console.log(`--- LINE notification audit: ${fromDateStr} to ${toDateStr} ---`);
+  console.table(counts);
+  console.log(`รวมประมาณ ${total} ข้อความ (ตัวเลขนี้เป็นการประมาณจากข้อมูลที่ยังอยู่ในระบบ — ถ้ามีงานถูกลบไปแล้วหลังส่งแจ้งเตือน จะนับไม่ครบ)`);
+  console.table(details.map((d) => ({ ...d, when: new Date(d.ts).toLocaleString("th-TH") })));
+
+  return { counts, total, details };
+}
+
 // ---------- New / Edit Job Form ----------
 function NewJobForm({ onCancel, onCreate, onSaveEdit, suggestedNo, suggestedRegStart = "", knownAnalysts, knownParams, knownSamples, editingJob, existingJobNos = [], lastAnalystByParam = {} }) {
   const isEdit = !!editingJob;
@@ -1836,6 +1909,15 @@ export default function App() {
     );
     return () => unsubscribe();
   }, []);
+
+  // DEBUG: makes auditNotifications() reachable from the browser console —
+  // open DevTools (F12) > Console and run e.g.
+  //   __auditNotifications('2026-08-01', '2026-08-06')
+  // Safe to leave in production: it only reads data already loaded in this
+  // tab and does nothing unless someone deliberately calls it.
+  useEffect(() => {
+    window.__auditNotifications = (from, to) => auditNotifications(jobs, from, to);
+  }, [jobs]);
 
   // แจ้งเตือนงานล่าช้า: เมื่อรหัสงานใดครบกำหนด LATE_DAYS และยังไม่เสร็จ
   // จะยิงแจ้งเตือนซ้ำทุก LATE_REPEAT_MS จนกว่างานจะเสร็จ (เก็บเวลาแจ้งเตือน
