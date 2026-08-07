@@ -3,6 +3,12 @@
 // variable) and is never sent to the browser — the React app just calls
 // this endpoint with the message text.
 //
+// UPDATED: this endpoint now NEVER returns 502/500 when LINE fails
+// (quota reached, LINE outage, bad token, etc). It always responds 200,
+// so a LINE problem can't break the caller's flow — the notification is
+// simply skipped and logged. No quota tracking, no other channel, and
+// nothing is queued or retried later.
+//
 // Required Vercel environment variables (Project Settings -> Environment
 // Variables, then redeploy):
 //   LINE_CHANNEL_ACCESS_TOKEN  -- from LINE Developers Console, Messaging
@@ -25,7 +31,7 @@ export default async function handler(req, res) {
   const groupId = process.env.LINE_GROUP_ID;
   if (!token || !groupId) {
     console.warn("LINE_CHANNEL_ACCESS_TOKEN / LINE_GROUP_ID not set — skipping LINE push");
-    res.status(200).json({ ok: false, skipped: true });
+    res.status(200).json({ ok: false, skipped: true, reason: "not_configured" });
     return;
   }
 
@@ -41,15 +47,20 @@ export default async function handler(req, res) {
         messages: [{ type: "text", text: message }],
       }),
     });
+
     if (!lineRes.ok) {
       const detail = await lineRes.text();
       console.error("LINE push failed", lineRes.status, detail);
-      res.status(502).json({ ok: false, error: "LINE API error", detail });
+      // Always 200: the caller's flow shouldn't treat a LINE failure
+      // (quota, outage, bad token, etc) as a hard error. The message is
+      // simply not delivered — no retry, no other channel.
+      res.status(200).json({ ok: false, skipped: true, reason: "line_error", lineStatus: lineRes.status });
       return;
     }
-    res.status(200).json({ ok: true });
+
+    res.status(200).json({ ok: true, channel: "line" });
   } catch (e) {
     console.error("notify-line error", e);
-    res.status(500).json({ ok: false, error: String(e) });
+    res.status(200).json({ ok: false, skipped: true, reason: "line_exception" });
   }
 }
