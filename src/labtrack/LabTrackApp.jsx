@@ -729,9 +729,11 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           bookings={bookings}
           setBookings={setBookings}
           onCancel={() => setBookingFor(null)}
-          onSave={(b) => {
-            setBookings([{ ...b, id: uid(), status: "pending", requestedAt: new Date().toISOString() }, ...bookings]);
-            notify("ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
+          onSave={(list) => {
+            const now = new Date().toISOString();
+            const records = list.map(b => ({ ...b, id: uid(), status: "pending", requestedAt: now }));
+            setBookings([...records, ...bookings]);
+            notify(records.length > 1 ? `ส่งคำขอจอง/ยืม ${records.length} รายการแล้ว รออนุมัติ` : "ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
             setBookingFor(null);
           }}
         />
@@ -1098,9 +1100,11 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
           bookings={bookings}
           setBookings={setBookings}
           onCancel={() => setBookingFor(null)}
-          onSave={(b) => {
-            setBookings([{ ...b, id: uid(), status: "pending", requestedAt: new Date().toISOString() }, ...bookings]);
-            notify("ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
+          onSave={(list) => {
+            const now = new Date().toISOString();
+            const records = list.map(b => ({ ...b, id: uid(), status: "pending", requestedAt: now }));
+            setBookings([...records, ...bookings]);
+            notify(records.length > 1 ? `ส่งคำขอจอง/ยืม ${records.length} รายการแล้ว รออนุมัติ` : "ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
             setBookingFor(null);
           }}
         />
@@ -1189,9 +1193,11 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
     notify("บันทึกการคืนแล้ว");
   }
 
-  function create(b) {
-    setBookings([{ ...b, id: uid(), status: "pending", requestedAt: new Date().toISOString() }, ...bookings]);
-    notify("ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
+  function create(list) {
+    const now = new Date().toISOString();
+    const records = list.map(b => ({ ...b, id: uid(), status: "pending", requestedAt: now }));
+    setBookings([...records, ...bookings]);
+    notify(records.length > 1 ? `ส่งคำขอจอง/ยืม ${records.length} รายการแล้ว รออนุมัติ` : "ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
     setShowForm(false);
   }
 
@@ -1243,6 +1249,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
               <Tag color={b.assetType === "item" ? "#7A4FC2" : "var(--teal)"}>{b.assetType === "item" ? "อุปกรณ์" : "เครื่องมือ"}</Tag>
             </div>
             {b.equipmentCode && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{b.equipmentName}</div>}
+            {b.assetType === "item" && b.qty > 1 && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>จำนวน {b.qty} ชิ้น</div>}
           </div>,
           <div>
             <div>{BOOKING_TYPE_LABEL[b.type]}</div>
@@ -1309,6 +1316,9 @@ function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel,
     );
   }
   if (b.status === "approved" && b.type === "checkout" && !b.returnedAt) {
+    // Marking something returned confirms the physical item is actually
+    // back — restricted to lab/admin so a borrower can't just self-certify.
+    if (!canApprove) return null;
     return (
       <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
         <button style={S.smallBtn} onClick={onReturn}><Undo2 size={13} /> บันทึกคืนแล้ว</button>
@@ -1326,123 +1336,267 @@ function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel,
 }
 
 function BookingForm({ equipment, items = [], bookings, setBookings, initialEquipmentId, initialAssetType, fixedRequestedBy, onCancel, onSave }) {
-  const activeEquipment = equipment.filter(e => e.status !== "inactive").slice().sort((a, b) => alphaCompare(a.code, b.code));
+  // Air conditioners are fixed-installed, not something anyone checks out —
+  // excluded from the equipment picker entirely.
+  const activeEquipment = equipment
+    .filter(e => e.status !== "inactive" && e.type !== "เครื่องปรับอากาศ")
+    .slice().sort((a, b) => alphaCompare(a.code, b.code));
   const activeItems = items.filter(i => i.status !== "inactive").slice().sort((a, b) => alphaCompare(a.name, b.name));
-  const firstAssetType = initialAssetType || "equipment";
-  const firstAssetId = initialEquipmentId || (firstAssetType === "item" ? activeItems[0]?.id : activeEquipment[0]?.id) || "";
-  const [f, setF] = useState({
-    assetType: firstAssetType,
-    equipmentId: firstAssetId,
-    type: "checkout",
-    startDate: todayISO(),
-    endDate: todayISO(),
-    startTime: "",
-    endTime: "",
-    dueBackDate: "",
-    requestedBy: fixedRequestedBy || "",
-    purpose: "",
-  });
-  const [showAllConflicts, setShowAllConflicts] = useState(false);
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const eq = f.assetType === "item" ? items.find(i => i.id === f.equipmentId) : equipment.find(e => e.id === f.equipmentId);
 
-  function pickAsset(assetType, assetId) {
-    setF({ ...f, assetType, equipmentId: assetId });
+  const isAdmin = !fixedRequestedBy;
+
+  const [mode, setMode] = useState(initialAssetType === "item" ? "item" : "equipment");
+
+  // ---- equipment-mode state ----
+  const [equipmentId, setEquipmentId] = useState((initialAssetType !== "item" && initialEquipmentId) || activeEquipment[0]?.id || "");
+  const [equipSubType, setEquipSubType] = useState("checkout"); // checkout | reservation
+  const [startDate, setStartDate] = useState(todayISO());
+  const [endDate, setEndDate] = useState(todayISO());
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [dueBackDate, setDueBackDate] = useState("");
+
+  // ---- item-mode state: { [itemId]: qty } for every checked item ----
+  const [itemQtys, setItemQtys] = useState(() =>
+    initialAssetType === "item" && initialEquipmentId ? { [initialEquipmentId]: 1 } : {}
+  );
+  const [itemStartDate, setItemStartDate] = useState(todayISO());
+  const [itemDueBackDate, setItemDueBackDate] = useState("");
+
+  // ---- shared ----
+  const [requestedBy, setRequestedBy] = useState(fixedRequestedBy || "");
+  const [purpose, setPurpose] = useState("");
+  const [expanded, setExpanded] = useState({}); // per asset id -> show all conflicts
+
+  const eq = equipment.find(e => e.id === equipmentId);
+  const selectedItemIds = Object.keys(itemQtys).filter(id => itemQtys[id] > 0);
+
+  function toggleItem(id) {
+    setItemQtys(prev => {
+      const next = { ...prev };
+      if (next[id]) delete next[id];
+      else next[id] = 1;
+      return next;
+    });
+  }
+  function setItemQty(id, qty, max) {
+    const q = Math.max(1, Math.min(Number(qty) || 1, max || 99));
+    setItemQtys(prev => ({ ...prev, [id]: q }));
   }
 
-  const range = f.type === "checkout"
-    ? { start: f.startDate || todayISO(), end: "9999-12-31" }
-    : { start: f.startDate || "", end: f.endDate || f.startDate || "" };
-  const conflicts = f.equipmentId ? findBookingConflicts(bookings, f.equipmentId, range, null) : [];
-  const shownConflicts = showAllConflicts ? conflicts : conflicts.slice(0, 5);
+  const equipRange = equipSubType === "checkout"
+    ? { start: startDate || todayISO(), end: "9999-12-31" }
+    : { start: startDate || "", end: endDate || startDate || "" };
+  const equipConflicts = mode === "equipment" && equipmentId ? findBookingConflicts(bookings, equipmentId, equipRange, null) : [];
 
-  // fixedRequestedBy set = a restricted (booking-only) account, who can only
-  // cancel/return their OWN conflicting bookings from this list; no
-  // fixedRequestedBy = an admin, who can manage anyone's.
-  const canManage = (c) => !!setBookings && (!fixedRequestedBy || c.requestedBy === fixedRequestedBy);
+  const itemRange = { start: itemStartDate || todayISO(), end: "9999-12-31" };
+
+  // Restricted (booking-only) accounts can cancel only their own conflicting
+  // requests; admins can manage anyone's. Marking something "returned" is
+  // admin/lab-only regardless of whose request it is.
+  const canCancelBooking = (c) => !!setBookings && (isAdmin || c.requestedBy === fixedRequestedBy);
+  const canReturnBooking = () => !!setBookings && isAdmin;
   function cancelConflict(c) {
     setBookings(bookings.map(b => b.id === c.id ? { ...b, status: "cancelled" } : b));
   }
   function returnConflict(c) {
-    setBookings(bookings.map(b => b.id === c.id ? { ...b, returnedAt: todayISO(), returnedBy: fixedRequestedBy || "-" } : b));
+    setBookings(bookings.map(b => b.id === c.id ? { ...b, returnedAt: todayISO(), returnedBy: "-" } : b));
   }
 
-  const canSave = f.equipmentId && f.requestedBy.trim() && (f.type === "checkout" ? f.startDate : (f.startDate && f.endDate && f.endDate >= f.startDate));
+  function ConflictBox({ conflicts, assetKey, capacityNote }) {
+    if (conflicts.length === 0) return null;
+    const showAll = !!expanded[assetKey];
+    const shown = showAll ? conflicts : conflicts.slice(0, 5);
+    return (
+      <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", marginTop: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, color: "var(--amber)", fontSize: 12.5 }}>
+          <AlertTriangle size={13} /> ชนกับการจอง/ยืมอื่น ({conflicts.length} รายการ){capacityNote}
+        </div>
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+          {shown.map(c => (
+            <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, color: "var(--ink)" }}>
+              <span>
+                {BOOKING_STATUS_LABEL[c.status]} · {BOOKING_TYPE_LABEL[c.type]} โดย {c.requestedBy || "-"}
+                {" "}({fmtDate(bookingRange(c).start)}{bookingRange(c).end !== "9999-12-31" ? ` - ${fmtDate(bookingRange(c).end)}` : " เป็นต้นไป"})
+              </span>
+              <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                {c.status === "pending" && canCancelBooking(c) && (
+                  <button type="button" onClick={() => cancelConflict(c)} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer", background: "transparent", color: "var(--red)", border: "1px solid var(--red)" }}>
+                    ยกเลิก
+                  </button>
+                )}
+                {c.status === "approved" && c.type === "checkout" && !c.returnedAt && canReturnBooking(c) && (
+                  <button type="button" onClick={() => returnConflict(c)} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer", background: "transparent", color: "var(--green)", border: "1px solid var(--green)" }}>
+                    ใช้งานเสร็จแล้ว
+                  </button>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+        {conflicts.length > 5 && (
+          <button
+            type="button"
+            onClick={() => setExpanded(x => ({ ...x, [assetKey]: !x[assetKey] }))}
+            style={{ fontSize: 12, color: "var(--teal-dark)", background: "none", border: "none", cursor: "pointer", padding: 0, marginTop: 8, fontWeight: 600, textDecoration: "underline" }}
+          >
+            {showAll ? "ย่อกลับ" : `+${conflicts.length - 5} รายการเพิ่มเติม`}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const canSave = requestedBy.trim() && (
+    mode === "equipment"
+      ? (equipmentId && (equipSubType === "checkout" ? startDate : (startDate && endDate && endDate >= startDate)))
+      : (selectedItemIds.length > 0 && itemStartDate)
+  );
 
   function submit() {
-    if (!eq) return;
-    onSave({
-      equipmentId: f.equipmentId,
-      equipmentCode: eq.code || "",
-      equipmentName: eq.name,
-      assetType: f.assetType,
-      type: f.type,
-      startDate: f.startDate,
-      endDate: f.type === "reservation" ? f.endDate : null,
-      startTime: f.type === "reservation" ? f.startTime : "",
-      endTime: f.type === "reservation" ? f.endTime : "",
-      dueBackDate: f.type === "checkout" ? f.dueBackDate : "",
-      requestedBy: f.requestedBy.trim(),
-      purpose: f.purpose.trim(),
-    });
+    if (mode === "equipment") {
+      if (!eq) return;
+      onSave([{
+        equipmentId,
+        equipmentCode: eq.code || "",
+        equipmentName: eq.name,
+        assetType: "equipment",
+        type: equipSubType,
+        startDate,
+        endDate: equipSubType === "reservation" ? endDate : null,
+        startTime: equipSubType === "reservation" ? startTime : "",
+        endTime: equipSubType === "reservation" ? endTime : "",
+        dueBackDate: equipSubType === "checkout" ? dueBackDate : "",
+        requestedBy: requestedBy.trim(),
+        purpose: purpose.trim(),
+      }]);
+    } else {
+      const records = selectedItemIds.map(id => {
+        const it = items.find(i => i.id === id);
+        return {
+          equipmentId: id,
+          equipmentCode: it.code || "",
+          equipmentName: it.name,
+          assetType: "item",
+          type: "checkout",
+          qty: itemQtys[id],
+          startDate: itemStartDate,
+          endDate: null,
+          startTime: "",
+          endTime: "",
+          dueBackDate: itemDueBackDate,
+          requestedBy: requestedBy.trim(),
+          purpose: purpose.trim(),
+        };
+      });
+      onSave(records);
+    }
   }
 
   return (
-    <Modal onClose={onCancel} title="จอง/ยืมเครื่องมือ">
+    <Modal onClose={onCancel} title="จอง/ยืมเครื่องมือ" wide>
       <div style={S.formGrid} className="ltFormGrid">
-        <Field label="เครื่องมือ / อุปกรณ์" full>
-          <select
-            style={S.input}
-            value={`${f.assetType}:${f.equipmentId}`}
-            onChange={(e) => {
-              const [assetType, assetId] = e.target.value.split(":");
-              pickAsset(assetType, assetId);
-            }}
-          >
-            {activeEquipment.length > 0 && (
-              <optgroup label="เครื่องมือ">
-                {activeEquipment.map(e => <option key={e.id} value={`equipment:${e.id}`}>{e.code} · {e.name}</option>)}
-              </optgroup>
-            )}
-            {activeItems.length > 0 && (
-              <optgroup label="อุปกรณ์">
-                {activeItems.map(i => <option key={i.id} value={`item:${i.id}`}>{i.name}{i.totalQty > 1 ? ` (มี ${i.totalQty} ชิ้น)` : ""}</option>)}
-              </optgroup>
-            )}
-          </select>
-        </Field>
-        <Field label="รูปแบบ" full>
+        <Field label="ประเภทคำขอ" full>
           <div style={{ display: "flex", gap: 8 }}>
-            {["checkout", "reservation"].map(t => (
+            {[
+              { key: "item", label: "ขอยืมอุปกรณ์" },
+              { key: "equipment", label: "ขอใช้/จองเครื่องมือ" },
+            ].map(m => (
               <button
-                key={t}
+                key={m.key}
                 type="button"
-                onClick={() => setF({ ...f, type: t })}
+                onClick={() => setMode(m.key)}
                 style={{
-                  flex: 1, padding: "9px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
-                  fontSize: 13, fontWeight: 600,
-                  background: f.type === t ? "#E9F1FB" : "var(--bg2, #F7F9FB)",
-                  border: `1px solid ${f.type === t ? "var(--teal)" : "var(--line)"}`,
-                  color: f.type === t ? "var(--teal-dark)" : "var(--muted)",
+                  flex: 1, padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 13.5, fontWeight: 700,
+                  background: mode === m.key ? "#E9F1FB" : "var(--bg2, #F7F9FB)",
+                  border: `1px solid ${mode === m.key ? "var(--teal)" : "var(--line)"}`,
+                  color: mode === m.key ? "var(--teal-dark)" : "var(--muted)",
                 }}
               >
-                {BOOKING_TYPE_LABEL[t]}
+                {m.label}
               </button>
             ))}
           </div>
         </Field>
 
-        {f.type === "checkout" ? (
+        {mode === "equipment" ? (
           <>
-            <Field label="วันที่เริ่มใช้"><input type="date" style={S.input} value={f.startDate} onChange={set("startDate")} /></Field>
-            <Field label="กำหนดคืน (ถ้ามี)"><input type="date" style={S.input} value={f.dueBackDate} onChange={set("dueBackDate")} /></Field>
+            <Field label="เครื่องมือ" full>
+              <select style={S.input} value={equipmentId} onChange={(e) => setEquipmentId(e.target.value)}>
+                {activeEquipment.length === 0 && <option value="">ไม่มีเครื่องมือที่ยืมได้</option>}
+                {activeEquipment.map(e => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
+              </select>
+            </Field>
+            <Field label="ลักษณะการใช้" full>
+              <div style={{ display: "flex", gap: 8 }}>
+                {["checkout", "reservation"].map(t => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setEquipSubType(t)}
+                    style={{
+                      flex: 1, padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                      fontSize: 12.5, fontWeight: 600,
+                      background: equipSubType === t ? "#F0F5F2" : "var(--bg2, #F7F9FB)",
+                      border: `1px solid ${equipSubType === t ? "var(--green)" : "var(--line)"}`,
+                      color: equipSubType === t ? "var(--green)" : "var(--muted)",
+                    }}
+                  >
+                    {t === "checkout" ? "ใช้งานทันที" : "จองล่วงหน้า (ระบุช่วงวันที่)"}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            {equipSubType === "checkout" ? (
+              <>
+                <Field label="วันที่เริ่มใช้"><input type="date" style={S.input} value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
+                <Field label="กำหนดคืน (ถ้ามี)"><input type="date" style={S.input} value={dueBackDate} onChange={(e) => setDueBackDate(e.target.value)} /></Field>
+              </>
+            ) : (
+              <>
+                <Field label="วันที่เริ่มจอง"><input type="date" style={S.input} value={startDate} onChange={(e) => { setStartDate(e.target.value); if (endDate < e.target.value) setEndDate(e.target.value); }} /></Field>
+                <Field label="วันที่สิ้นสุด"><input type="date" style={S.input} value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} /></Field>
+                <Field label="เวลาเริ่ม (ถ้ามี)"><input type="time" style={S.input} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></Field>
+                <Field label="เวลาสิ้นสุด (ถ้ามี)"><input type="time" style={S.input} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></Field>
+              </>
+            )}
           </>
         ) : (
           <>
-            <Field label="วันที่เริ่มจอง"><input type="date" style={S.input} value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value, endDate: f.endDate < e.target.value ? e.target.value : f.endDate })} /></Field>
-            <Field label="วันที่สิ้นสุด"><input type="date" style={S.input} value={f.endDate} min={f.startDate} onChange={set("endDate")} /></Field>
-            <Field label="เวลาเริ่ม (ถ้ามี)"><input type="time" style={S.input} value={f.startTime} onChange={set("startTime")} /></Field>
-            <Field label="เวลาสิ้นสุด (ถ้ามี)"><input type="time" style={S.input} value={f.endTime} onChange={set("endTime")} /></Field>
+            <Field label="เลือกอุปกรณ์ (เลือกได้หลายรายการ)" full>
+              {activeItems.length === 0 && <div style={{ fontSize: 12.5, color: "var(--muted)" }}>ยังไม่มีข้อมูลอุปกรณ์</div>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {activeItems.map(it => {
+                  const checked = !!itemQtys[it.id];
+                  const bk = itemBookingSummary(it.id, bookings, it.totalQty);
+                  const maxQty = it.totalQty || 1;
+                  return (
+                    <div key={it.id} style={{
+                      display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
+                      border: `1px solid ${checked ? "var(--teal)" : "var(--line)"}`,
+                      borderRadius: 8, background: checked ? "#E9F1FB" : "#fff",
+                    }}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleItem(it.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }} onClick={() => toggleItem(it.id)} role="button">
+                        <div style={{ fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{it.name}</div>
+                        <div style={{ fontSize: 11, color: bk.color }}>{bk.text}</div>
+                      </div>
+                      {checked && maxQty > 1 && (
+                        <input
+                          type="number" min="1" max={maxQty} value={itemQtys[it.id]}
+                          onChange={(e) => setItemQty(it.id, e.target.value, maxQty)}
+                          style={{ ...S.input, width: 60, padding: "5px 8px", flexShrink: 0 }}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Field>
+            <Field label="วันที่เริ่มยืม"><input type="date" style={S.input} value={itemStartDate} onChange={(e) => setItemStartDate(e.target.value)} /></Field>
+            <Field label="กำหนดคืน (ถ้ามี)"><input type="date" style={S.input} value={itemDueBackDate} onChange={(e) => setItemDueBackDate(e.target.value)} /></Field>
           </>
         )}
 
@@ -1450,53 +1604,34 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           {fixedRequestedBy ? (
             <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", display: "flex", alignItems: "center" }}>{fixedRequestedBy}</div>
           ) : (
-            <input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} placeholder="ชื่อ-นามสกุล" />
+            <input style={S.input} value={requestedBy} onChange={(e) => setRequestedBy(e.target.value)} placeholder="ชื่อ-นามสกุล" />
           )}
         </Field>
-        <Field label="วัตถุประสงค์/งานที่ใช้" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.purpose} onChange={set("purpose")} /></Field>
+        <Field label="วัตถุประสงค์/งานที่ใช้" full><textarea style={{ ...S.input, minHeight: 60 }} value={purpose} onChange={(e) => setPurpose(e.target.value)} /></Field>
       </div>
 
-      {conflicts.length > 0 && (
-        <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", marginTop: 4 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, color: "var(--amber)", fontSize: 12.5 }}>
-            <AlertTriangle size={13} /> ช่วงเวลานี้ชนกับการจอง/ยืมอื่น ({conflicts.length} รายการ){f.assetType === "item" && eq?.totalQty > 1 ? ` — มีอุปกรณ์นี้ทั้งหมด ${eq.totalQty} ชิ้น` : ""}
+      {mode === "equipment" && (
+        <ConflictBox conflicts={equipConflicts} assetKey={equipmentId} capacityNote="" />
+      )}
+      {mode === "item" && selectedItemIds.map(id => {
+        const it = items.find(i => i.id === id);
+        const conflicts = findBookingConflicts(bookings, id, itemRange, null);
+        return (
+          <div key={id}>
+            {conflicts.length > 0 && (
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--ink)", marginTop: 10 }}>{it?.name}</div>
+            )}
+            <ConflictBox
+              conflicts={conflicts}
+              assetKey={id}
+              capacityNote={it?.totalQty > 1 ? ` — มีทั้งหมด ${it.totalQty} ชิ้น` : ""}
+            />
           </div>
-          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
-            {shownConflicts.map(c => (
-              <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, color: "var(--ink)" }}>
-                <span>
-                  {BOOKING_STATUS_LABEL[c.status]} · {BOOKING_TYPE_LABEL[c.type]} โดย {c.requestedBy || "-"}
-                  {" "}({fmtDate(bookingRange(c).start)}{bookingRange(c).end !== "9999-12-31" ? ` - ${fmtDate(bookingRange(c).end)}` : " เป็นต้นไป"})
-                </span>
-                {canManage(c) && (
-                  <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    {c.status === "pending" && (
-                      <button type="button" onClick={() => cancelConflict(c)} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer", background: "transparent", color: "var(--red)", border: "1px solid var(--red)" }}>
-                        ยกเลิก
-                      </button>
-                    )}
-                    {c.status === "approved" && c.type === "checkout" && !c.returnedAt && (
-                      <button type="button" onClick={() => returnConflict(c)} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer", background: "transparent", color: "var(--green)", border: "1px solid var(--green)" }}>
-                        ใช้งานเสร็จแล้ว
-                      </button>
-                    )}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-          {conflicts.length > 5 && (
-            <button
-              type="button"
-              onClick={() => setShowAllConflicts(x => !x)}
-              style={{ fontSize: 12, color: "var(--teal-dark)", background: "none", border: "none", cursor: "pointer", padding: 0, marginTop: 8, fontWeight: 600, textDecoration: "underline" }}
-            >
-              {showAllConflicts ? "ย่อกลับ" : `+${conflicts.length - 5} รายการเพิ่มเติม`}
-            </button>
-          )}
-          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>
-            ยังส่งคำขอได้ — ผู้อนุมัติจะเห็นความชนกันนี้ตอนพิจารณาด้วย
-          </div>
+        );
+      })}
+      {((mode === "equipment" && equipConflicts.length > 0) || (mode === "item" && selectedItemIds.some(id => findBookingConflicts(bookings, id, itemRange, null).length > 0))) && (
+        <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>
+          ยังส่งคำขอได้ — ผู้อนุมัติจะเห็นความชนกันนี้ตอนพิจารณาด้วย
         </div>
       )}
 
