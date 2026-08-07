@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Wrench, FlaskConical, Lock } from "lucide-react";
+import { Wrench, FlaskConical, Lock, LogOut } from "lucide-react";
 import LabTrackApp from "./labtrack/LabTrackApp.jsx";
 import AnalysisApp from "./analysis/AnalysisApp.jsx";
 
@@ -8,26 +8,54 @@ const TABS = [
   { key: "analysis", label: "ติดตามงานวิเคราะห์", sub: "Lab Analysis Tracker", Icon: FlaskConical },
 ];
 
-// Shared team login, kept out of source control (see .env.local / README).
-// This only gates the UI in the browser — it does not restrict who can read
-// or write the underlying Firebase data (see notes in README).
-const APP_USERNAME = import.meta.env.VITE_APP_USERNAME || "mpirlab";
-const APP_PASSWORD = import.meta.env.VITE_APP_PASSWORD || "mpir1234";
-const ACCESS_KEY = "mpirLabAccessGranted";
+// Shared team accounts, kept out of source control ideally (see .env.local /
+// README) — the original shared login stays configurable via env vars for
+// backward compatibility; the two new named accounts are fixed here.
+// This only gates the UI in the browser — it does NOT restrict who can read
+// or write the underlying data at the storage layer (see notes in README).
+// Roles:
+//   "admin"   — full access to every tab (both LabTrack and Analysis), same
+//               as the original shared login.
+//   "booking" — LabTrack only, and inside LabTrack restricted to just the
+//               "จอง/ยืมเครื่องมือ" (equipment booking) tab. Cannot see
+//               equipment/chemicals/consumables/PR/reports or Analysis at all.
+const ACCOUNTS = [
+  {
+    username: import.meta.env.VITE_APP_USERNAME || "mpirlab",
+    password: import.meta.env.VITE_APP_PASSWORD || "mpir1234",
+    role: "admin",
+  },
+  { username: "mpiradmin", password: "admin1234", role: "admin" },
+  { username: "wimonsiri", password: "22210", role: "booking" },
+];
 
-function PasswordGate({ children }) {
-  const [unlocked, setUnlocked] = useState(() => localStorage.getItem(ACCESS_KEY) === "true");
+const SESSION_KEY = "mpirLabSession";
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // must still match a known account (in case ACCOUNTS ever changes)
+    if (ACCOUNTS.some(a => a.username === parsed.username && a.role === parsed.role)) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function PasswordGate({ onLogin }) {
   const [username, setUsername] = useState("");
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
 
-  if (unlocked) return children;
-
   const submit = (e) => {
     e.preventDefault();
-    if (username === APP_USERNAME && input === APP_PASSWORD) {
-      localStorage.setItem(ACCESS_KEY, "true");
-      setUnlocked(true);
+    const acc = ACCOUNTS.find(a => a.username === username && a.password === input);
+    if (acc) {
+      const session = { username: acc.username, role: acc.role };
+      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      onLogin(session);
     } else {
       setError("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
     }
@@ -105,10 +133,23 @@ const gateStyles = {
 
 export default function App() {
   const [section, setSection] = useState("labtrack");
+  const [session, setSession] = useState(loadSession);
+
+  if (!session) {
+    return <PasswordGate onLogin={setSession} />;
+  }
+
+  const isBookingOnly = session.role === "booking";
+  const visibleTabs = isBookingOnly ? TABS.filter(t => t.key === "labtrack") : TABS;
+  const activeSection = isBookingOnly ? "labtrack" : section;
+
+  function logout() {
+    localStorage.removeItem(SESSION_KEY);
+    setSession(null);
+  }
 
   return (
-    <PasswordGate>
-      <div style={styles.page} className="appPage">
+    <div style={styles.page} className="appPage">
       <style>{`
         @media (max-width: 640px) {
           .appPage { padding: 10px 10px 18px !important; }
@@ -126,33 +167,40 @@ export default function App() {
             <div style={styles.brandSub}>ระบบห้องปฏิบัติการ</div>
           </div>
         </div>
-        <div style={styles.tabRow} className="appTabRow">
-          {TABS.map(({ key, label, sub, Icon }) => {
-            const active = section === key;
-            return (
-              <button
-                key={key}
-                onClick={() => setSection(key)}
-                style={{ ...styles.tabBtn, ...(active ? styles.tabBtnActive : null) }}
-                className="appTabBtn"
-              >
-                <Icon size={16} />
-                <span>
-                  <span style={styles.tabLabel}>{label}</span>
-                  <span style={styles.tabSub} className="appTabSub"> · {sub}</span>
-                </span>
-              </button>
-            );
-          })}
+        {visibleTabs.length > 1 && (
+          <div style={styles.tabRow} className="appTabRow">
+            {visibleTabs.map(({ key, label, sub, Icon }) => {
+              const active = activeSection === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSection(key)}
+                  style={{ ...styles.tabBtn, ...(active ? styles.tabBtnActive : null) }}
+                  className="appTabBtn"
+                >
+                  <Icon size={16} />
+                  <span>
+                    <span style={styles.tabLabel}>{label}</span>
+                    <span style={styles.tabSub} className="appTabSub"> · {sub}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div style={styles.userBox}>
+          <span style={styles.userName}>{session.username}</span>
+          <button onClick={logout} style={styles.logoutBtn} title="ออกจากระบบ">
+            <LogOut size={14} />
+          </button>
         </div>
       </div>
 
       <div style={styles.content}>
-        {section === "labtrack" && <LabTrackApp />}
-        {section === "analysis" && <AnalysisApp />}
+        {activeSection === "labtrack" && <LabTrackApp restrictToBooking={isBookingOnly} />}
+        {activeSection === "analysis" && !isBookingOnly && <AnalysisApp />}
       </div>
     </div>
-    </PasswordGate>
   );
 }
 
@@ -200,5 +248,12 @@ const styles = {
   },
   tabLabel: { fontWeight: 600 },
   tabSub: { fontSize: 11, opacity: 0.85 },
+  userBox: { display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" },
+  userName: { fontSize: 12.5, fontWeight: 600, color: "#0B2A4A" },
+  logoutBtn: {
+    display: "flex", alignItems: "center", justifyContent: "center",
+    background: "#F3F8FD", border: "1px solid #D3E6F5", borderRadius: 8,
+    padding: 7, cursor: "pointer", color: "#5B7A96",
+  },
   content: {},
 };
