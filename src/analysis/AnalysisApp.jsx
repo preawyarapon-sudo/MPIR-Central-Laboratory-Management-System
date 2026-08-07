@@ -803,12 +803,18 @@ function NewJobForm({ onCancel, onCreate, onSaveEdit, suggestedNo, suggestedRegS
           };
         });
       const { samples: _legacySamples, ...restEditingJob } = editingJob;
+      // NOTE: we intentionally do NOT reset lateNotifiedAt here — it's
+      // already carried over correctly via ...restEditingJob. Explicitly
+      // nulling it on every edit used to re-arm the "late job" LINE
+      // notification (see claimNotifyFlag / LATE_REPEAT_MS above) on every
+      // routine edit — even ones with nothing to do with the deadline —
+      // causing far more LINE pushes than intended and burning through the
+      // monthly quota.
       onSaveEdit({
         ...restEditingJob,
         sample: sample.trim(),
         parameters,
         createdAt: createdTs,
-        lateNotifiedAt: null,
         regStart: regStart.trim(),
         regEnd: regEnd.trim(),
         sampleCount: regCount || 0,
