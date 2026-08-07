@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  Clock, ChevronRight, MapPin, CalendarClock, ClipboardList
+  Clock, ChevronRight, MapPin, CalendarClock, ClipboardList,
+  CalendarCheck, XCircle, Undo2
 } from "lucide-react";
 
 /* ---------- helpers ---------- */
@@ -51,6 +52,60 @@ function alphaCompare(a, b) {
   return String(a || "").localeCompare(String(b || ""), "th", { numeric: true, sensitivity: "base" });
 }
 
+/* ---------- booking (จอง/ยืมเครื่องมือ) helpers ---------- */
+const BOOKING_TYPE_LABEL = { checkout: "เช็คเอาท์ทันที", reservation: "จองล่วงหน้า" };
+const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
+const BOOKING_STATUS_COLOR = { pending: "var(--amber)", approved: "var(--green)", rejected: "var(--red)", cancelled: "var(--muted)" };
+
+// Normalizes a booking into a comparable {start, end} date range. A checkout
+// with no returnedAt yet is treated as open-ended (far-future end) so it
+// correctly conflicts with anything that would need the equipment later.
+function bookingRange(b) {
+  if (b.type === "checkout") {
+    return { start: b.startDate || todayISO(), end: b.returnedAt || "9999-12-31" };
+  }
+  return { start: b.startDate || "", end: b.endDate || b.startDate || "" };
+}
+function rangesOverlap(aStart, aEnd, bStart, bEnd) {
+  return aStart <= bEnd && bStart <= aEnd;
+}
+// Only pending/approved bookings can conflict — rejected/cancelled ones are
+// no longer live claims on the equipment.
+function findBookingConflicts(bookings, equipmentId, range, excludeId) {
+  return bookings.filter((b) => {
+    if (b.equipmentId !== equipmentId || b.id === excludeId) return false;
+    if (b.status !== "pending" && b.status !== "approved") return false;
+    const r = bookingRange(b);
+    return rangesOverlap(range.start, range.end, r.start, r.end);
+  });
+}
+// "Currently live" = approved and either an unreturned checkout, or a
+// reservation whose date range hasn't fully passed yet. Used to split the
+// "current" view from "history" without needing a separate status value.
+function isBookingCurrent(b) {
+  if (b.status !== "approved") return false;
+  if (b.type === "checkout") return !b.returnedAt;
+  return (b.endDate || b.startDate || "") >= todayISO();
+}
+function isBookingOverdue(b) {
+  return b.type === "checkout" && b.status === "approved" && !b.returnedAt && b.dueBackDate && daysUntil(b.dueBackDate) < 0;
+}
+// Human-readable one-line status of a piece of equipment right now, shown on
+// the equipment card/detail — e.g. "ว่าง", "ถูกยืมโดย สมชาย", "มีการจองล่วงหน้า".
+function equipmentBookingSummary(equipmentId, bookings) {
+  const live = bookings.filter((b) => b.equipmentId === equipmentId && isBookingCurrent(b));
+  const activeCheckout = live.find((b) => b.type === "checkout");
+  if (activeCheckout) {
+    return { busy: true, text: `ถูกยืมโดย ${activeCheckout.requestedBy || "-"}`, color: "var(--red)" };
+  }
+  const reservations = live.filter((b) => b.type === "reservation").sort((a, b) => a.startDate.localeCompare(b.startDate));
+  if (reservations.length > 0) {
+    const r = reservations[0];
+    return { busy: false, text: `มีจองล่วงหน้า ${fmtDate(r.startDate)}${r.endDate && r.endDate !== r.startDate ? ` - ${fmtDate(r.endDate)}` : ""}`, color: "var(--amber)" };
+  }
+  return { busy: false, text: "ว่าง", color: "var(--green)" };
+}
+
 async function loadList(key, seed) {
   try {
     const res = await window.storage.get(key, true);
@@ -85,21 +140,24 @@ const SEED_CONSUMABLES = [
   { id: "s1", name: "ทิชชู่เช็ดเลนส์", quantity: 3, unit: "ห่อ", minThreshold: 5, location: "ตู้พัสดุ C1" },
   { id: "s2", name: "ถุงมือไนไตรล์ ไซส์ M", quantity: 2, unit: "กล่อง", minThreshold: 3, location: "ตู้พัสดุ C2" },
 ];
+const SEED_BOOKINGS = [];
 
 const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   { key: "equipment", label: "เครื่องมือ", icon: Wrench },
+  { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
   { key: "consumables", label: "พัสดุสิ้นเปลือง", icon: Package },
   { key: "purchase", label: "ใบขอซื้อ (PR)", icon: ClipboardList },
   { key: "reports", label: "รายงาน", icon: FileDown },
 ];
 
-export default function App() {
-  const [tab, setTab] = useState("dashboard");
+export default function App({ restrictToBooking = false }) {
+  const [tab, setTab] = useState(restrictToBooking ? "bookings" : "dashboard");
   const [loading, setLoading] = useState(true);
   const [equipment, setEquipment] = useState([]);
   const [activities, setActivities] = useState([]);
+  const [bookings, setBookings] = useState([]);
   const [chemicals, setChemicals] = useState([]);
   const [consumables, setConsumables] = useState([]);
   const [purchaseRequests, setPurchaseRequests] = useState([]);
@@ -107,14 +165,15 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      const [eq, ac, ch, co, pr] = await Promise.all([
+      const [eq, ac, bk, ch, co, pr] = await Promise.all([
         loadList("equipment", SEED_EQUIPMENT),
         loadList("activities", SEED_ACTIVITIES),
+        loadList("bookings", SEED_BOOKINGS),
         loadList("chemicals", SEED_CHEMICALS),
         loadList("consumables", SEED_CONSUMABLES),
         loadList("purchaseRequests", []),
       ]);
-      setEquipment(eq); setActivities(ac); setChemicals(ch); setConsumables(co); setPurchaseRequests(pr);
+      setEquipment(eq); setActivities(ac); setBookings(bk); setChemicals(ch); setConsumables(co); setPurchaseRequests(pr);
       setLoading(false);
     })();
   }, []);
@@ -127,6 +186,7 @@ export default function App() {
   const persist = {
     equipment: (list) => { setEquipment(list); saveList("equipment", list); },
     activities: (list) => { setActivities(list); saveList("activities", list); },
+    bookings: (list) => { setBookings(list); saveList("bookings", list); },
     chemicals: (list) => { setChemicals(list); saveList("chemicals", list); },
     consumables: (list) => { setConsumables(list); saveList("consumables", list); },
     purchaseRequests: (list) => { setPurchaseRequests(list); saveList("purchaseRequests", list); },
@@ -147,8 +207,17 @@ export default function App() {
     const lowChem = chemicals
       .filter(c => c.quantity <= c.minThreshold)
       .sort((a, b) => a.quantity - b.quantity);
-    return { calib, expiry, lowStock, lowChem };
-  }, [equipment, chemicals, consumables]);
+    const pendingBookings = bookings
+      .filter(b => b.status === "pending")
+      .sort((a, b) => (a.requestedAt || "").localeCompare(b.requestedAt || ""));
+    const overdueBookings = bookings.filter(isBookingOverdue);
+    return { calib, expiry, lowStock, lowChem, pendingBookings, overdueBookings };
+  }, [equipment, chemicals, consumables, bookings]);
+
+  const totalAlertCount = alerts.calib.length + alerts.expiry.length + alerts.lowStock.length
+    + alerts.lowChem.length + alerts.pendingBookings.length + alerts.overdueBookings.length;
+
+  const visibleNav = restrictToBooking ? NAV.filter(n => n.key === "bookings") : NAV;
 
   if (loading) {
     return (
@@ -174,68 +243,88 @@ export default function App() {
               <div style={S.brandSub}>MPIR Central Lab</div>
             </div>
           </div>
-          <nav style={{ marginTop: 18 }} className="ltNav">
-            {NAV.map(n => {
-              const Icon = n.icon;
-              const active = tab === n.key;
-              const count = n.key === "dashboard"
-                ? alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length
-                : 0;
-              return (
-                <button key={n.key} onClick={() => setTab(n.key)} style={{ ...S.navBtn, ...(active ? S.navBtnActive : {}) }} className="ltNavBtn">
-                  <Icon size={16} strokeWidth={2} />
-                  <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
-                  {count > 0 && <span style={S.navBadge}>{count}</span>}
-                </button>
-              );
-            })}
-          </nav>
-          <div style={S.sidebarFoot} className="ltSidebarFoot">ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ</div>
+          {visibleNav.length > 1 && (
+            <nav style={{ marginTop: 18 }} className="ltNav">
+              {visibleNav.map(n => {
+                const Icon = n.icon;
+                const active = tab === n.key;
+                const count = n.key === "dashboard"
+                  ? totalAlertCount
+                  : n.key === "bookings"
+                  ? alerts.pendingBookings.length
+                  : 0;
+                return (
+                  <button key={n.key} onClick={() => setTab(n.key)} style={{ ...S.navBtn, ...(active ? S.navBtnActive : {}) }} className="ltNavBtn">
+                    <Icon size={16} strokeWidth={2} />
+                    <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
+                    {count > 0 && <span style={S.navBadge}>{count}</span>}
+                  </button>
+                );
+              })}
+            </nav>
+          )}
+          <div style={S.sidebarFoot} className="ltSidebarFoot">
+            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืมเครื่องมือ" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
+          </div>
         </aside>
 
         {/* main */}
         <main style={S.main} className="ltMain">
-          {tab === "dashboard" && (
-            <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} alerts={alerts} goto={setTab} />
-          )}
-          {tab === "equipment" && (
-            <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
-              activities={activities} setActivities={persist.activities} notify={notify} />
-          )}
-          {tab === "chemicals" && (
-            <ChemicalsTab chemicals={chemicals} setChemicals={persist.chemicals} notify={notify} />
-          )}
-          {tab === "consumables" && (
-            <ConsumablesTab consumables={consumables} setConsumables={persist.consumables} notify={notify} />
-          )}
-          {tab === "purchase" && (
-            <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} />
-          )}
-          {tab === "reports" && (
-            <ReportsTab equipment={equipment} activities={activities} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests} />
+          {restrictToBooking ? (
+            <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
+          ) : (
+            <>
+              {tab === "dashboard" && (
+                <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} goto={setTab} />
+              )}
+              {tab === "equipment" && (
+                <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
+                  activities={activities} setActivities={persist.activities}
+                  bookings={bookings} setBookings={persist.bookings} notify={notify} />
+              )}
+              {tab === "bookings" && (
+                <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
+              )}
+              {tab === "chemicals" && (
+                <ChemicalsTab chemicals={chemicals} setChemicals={persist.chemicals} notify={notify} />
+              )}
+              {tab === "consumables" && (
+                <ConsumablesTab consumables={consumables} setConsumables={persist.consumables} notify={notify} />
+              )}
+              {tab === "purchase" && (
+                <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} />
+              )}
+              {tab === "reports" && (
+                <ReportsTab equipment={equipment} activities={activities} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests} />
+              )}
+            </>
           )}
         </main>
       </div>
 
       {/* App-style bottom navigation bar, shown only on mobile (see .ltBottomNav in CSS) */}
-      <div className="ltBottomNav">
-        {NAV.map(n => {
-          const Icon = n.icon;
-          const active = tab === n.key;
-          const count = n.key === "dashboard"
-            ? alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length
-            : 0;
-          return (
-            <button key={n.key} onClick={() => setTab(n.key)} className="ltBottomNavBtn" style={{ color: active ? "var(--teal-dark)" : "var(--muted)" }}>
-              <span style={{ position: "relative" }}>
-                <Icon size={19} strokeWidth={active ? 2.4 : 2} />
-                {count > 0 && <span className="ltBottomNavBadge">{count}</span>}
-              </span>
-              <span style={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{n.label}</span>
-            </button>
-          );
-        })}
-      </div>
+      {visibleNav.length > 1 && (
+        <div className="ltBottomNav">
+          {visibleNav.map(n => {
+            const Icon = n.icon;
+            const active = tab === n.key;
+            const count = n.key === "dashboard"
+              ? totalAlertCount
+              : n.key === "bookings"
+              ? alerts.pendingBookings.length
+              : 0;
+            return (
+              <button key={n.key} onClick={() => setTab(n.key)} className="ltBottomNavBtn" style={{ color: active ? "var(--teal-dark)" : "var(--muted)" }}>
+                <span style={{ position: "relative" }}>
+                  <Icon size={19} strokeWidth={active ? 2.4 : 2} />
+                  {count > 0 && <span className="ltBottomNavBadge">{count}</span>}
+                </span>
+                <span style={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{n.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {toast && <div style={S.toast}>{toast}</div>}
     </div>
@@ -243,13 +332,14 @@ export default function App() {
 }
 
 /* ================= DASHBOARD ================= */
-function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
+function Dashboard({ equipment, chemicals, consumables, bookings, alerts, goto }) {
   const activeCount = equipment.filter(e => e.status === "active").length;
   const stats = [
     { label: "เครื่องมือทั้งหมด", value: equipment.length, sub: `${activeCount} ใช้งานอยู่`, icon: Wrench, tint: "#E9F1FB", color: "var(--teal)", goto: "equipment" },
+    { label: "คำขอจอง/ยืมรออนุมัติ", value: alerts.pendingBookings.length, sub: `${bookings.filter(isBookingCurrent).length} รายการกำลังใช้งาน/จองอยู่`, icon: CalendarCheck, tint: "#FDF3E3", color: "var(--amber)", goto: "bookings" },
     { label: "รายการสารเคมี", value: chemicals.length, sub: `${alerts.expiry.length} ใกล้/เลยหมดอายุ`, icon: FlaskConical, tint: "#FBE9E4", color: "#D9622E", goto: "chemicals" },
     { label: "พัสดุสิ้นเปลือง", value: consumables.length, sub: `${alerts.lowStock.length} ใกล้หมด`, icon: Package, tint: "#F0EAFB", color: "#7A4FC2", goto: "consumables" },
-    { label: "รายการที่ต้องติดตาม", value: alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length, sub: "รวมทุกประเภท", icon: AlertTriangle, tint: "#FBE4E1", color: "var(--red)", goto: null },
+    { label: "รายการที่ต้องติดตาม", value: alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length + alerts.pendingBookings.length + alerts.overdueBookings.length, sub: "รวมทุกประเภท", icon: AlertTriangle, tint: "#FBE4E1", color: "var(--red)", goto: null },
   ];
 
   const calibOk = equipment.filter(e => statusOf(daysUntil(e.nextDue)) === "ok" && e.nextDue).length;
@@ -308,6 +398,22 @@ function Dashboard({ equipment, chemicals, consumables, alerts, goto }) {
       )}
 
       <div style={S.alertCols}>
+        <AlertPanel
+          title="การจอง/ยืมที่ต้องติดตาม"
+          icon={CalendarCheck}
+          empty="ไม่มีคำขอรออนุมัติหรือรายการเลยกำหนดคืน"
+          onSeeAll={() => goto("bookings")}
+          items={[
+            ...alerts.pendingBookings.map(b => ({
+              key: b.id, st: "warn", title: `${b.equipmentCode} · ${b.equipmentName}`,
+              detail: `รออนุมัติ · ${BOOKING_TYPE_LABEL[b.type]} โดย ${b.requestedBy || "-"}`,
+            })),
+            ...alerts.overdueBookings.map(b => ({
+              key: "od-" + b.id, st: "danger", title: `${b.equipmentCode} · ${b.equipmentName}`,
+              detail: `เลยกำหนดคืน ${Math.abs(daysUntil(b.dueBackDate))} วัน · ยืมโดย ${b.requestedBy || "-"}`,
+            })),
+          ]}
+        />
         <AlertPanel
           title="กำหนดสอบเทียบ / บำรุงรักษา"
           icon={CalendarClock}
@@ -420,13 +526,14 @@ function AlertPanel({ title, icon: Icon, items, empty, onSeeAll }) {
 }
 
 /* ================= EQUIPMENT ================= */
-function EquipmentTab({ equipment, setEquipment, activities, setActivities, notify }) {
+function EquipmentTab({ equipment, setEquipment, activities, setActivities, bookings, setBookings, notify }) {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
   const [showImport, setShowImport] = useState(false);
+  const [bookingFor, setBookingFor] = useState(null); // equipment item to open the booking form for
 
   const types = useMemo(() => [...new Set(equipment.map(e => e.type).filter(Boolean))].sort(), [equipment]);
 
@@ -511,6 +618,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
         {filtered.map(e => {
           const days = daysUntil(e.nextDue);
           const st = statusOf(days);
+          const bk = equipmentBookingSummary(e.id, bookings);
           return (
             <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden" }} onClick={() => setSelected(e.id)}>
               {e.imageUrl ? (
@@ -539,6 +647,9 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
                 <div style={{ ...S.eqDue, color: STATUS_COLOR[st] }}>
                   {e.nextDue ? `กำหนดถัดไป ${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "ไม่มีกำหนดสอบเทียบ"}
                 </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 11.5, fontWeight: 600, color: bk.color }}>
+                  <CalendarCheck size={12} /> {bk.text}
+                </div>
               </div>
             </div>
           );
@@ -553,9 +664,11 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
         <EquipmentDetail
           item={selectedItem}
           activities={activities.filter(a => a.equipmentId === selectedItem.id).sort((a, b) => b.date.localeCompare(a.date))}
+          bookings={bookings.filter(b => b.equipmentId === selectedItem.id).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""))}
           onClose={() => setSelected(null)}
           onEdit={() => { setEditing(selectedItem); setSelected(null); }}
           onDelete={() => remove(selectedItem.id)}
+          onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
           onAddActivity={(act) => {
             setActivities([{ ...act, id: uid(), equipmentId: selectedItem.id }, ...activities]);
             applyCalibrationDates(selectedItem.id, act);
@@ -567,6 +680,19 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, noti
             notify("แก้ไขกิจกรรมแล้ว");
           }}
           onDeleteActivity={(actId) => { setActivities(activities.filter(a => a.id !== actId)); notify("ลบกิจกรรมแล้ว"); }}
+        />
+      )}
+      {bookingFor && (
+        <BookingForm
+          equipment={equipment}
+          initialEquipmentId={bookingFor.id}
+          bookings={bookings}
+          onCancel={() => setBookingFor(null)}
+          onSave={(b) => {
+            setBookings([{ ...b, id: uid(), status: "pending", requestedAt: new Date().toISOString() }, ...bookings]);
+            notify("ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
+            setBookingFor(null);
+          }}
         />
       )}
     </div>
@@ -685,12 +811,13 @@ function EquipmentImportForm({ onCancel, onImport }) {
   );
 }
 
-function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddActivity, onEditActivity, onDeleteActivity }) {
+function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete, onBook, onAddActivity, onEditActivity, onDeleteActivity }) {
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
+  const bk = equipmentBookingSummary(item.id, bookings);
   const typeLabel = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ" };
   const typeCounts = {
     all: activities.length,
@@ -740,17 +867,37 @@ function EquipmentDetail({ item, activities, onClose, onEdit, onDelete, onAddAct
           <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"} · {item.type || "-"}</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
           <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={onDelete}><Trash2 size={14} /></button>
         </div>
       </div>
-      <div style={{ display: "flex", gap: 10, margin: "12px 0 6px" }}>
+      <div style={{ display: "flex", gap: 10, margin: "12px 0 6px", flexWrap: "wrap" }}>
         <Tag color={item.status === "active" ? "var(--green)" : item.status === "maintenance" ? "var(--amber)" : "var(--muted)"}>
           {item.status === "active" ? "ใช้งานอยู่" : item.status === "maintenance" ? "ซ่อมบำรุง" : "ปิดใช้งาน"}
         </Tag>
         <Tag color={STATUS_COLOR[st]}>{item.nextDue ? `${STATUS_LABEL[st]} · ${fmtDate(item.nextDue)}` : "ไม่มีกำหนด"}</Tag>
+        <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
       </div>
       {item.notes && <div style={S.notesBox}>{item.notes}</div>}
+
+      {bookings.length > 0 && (
+        <>
+          <div style={{ ...S.panelTitle, marginTop: 18 }}>ประวัติการจอง/ยืม</div>
+          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
+            {bookings.slice(0, 8).map(b => (
+              <div key={b.id} style={{ ...S.activityRow, alignItems: "center" }}>
+                <div style={S.activityDate}>{fmtDate(b.startDate)}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type]} · {b.requestedBy || "-"}</div>
+                  <div style={S.activityDetail}>{b.purpose || "-"}</div>
+                </div>
+                <Tag color={BOOKING_STATUS_COLOR[b.status]}>{BOOKING_STATUS_LABEL[b.status]}</Tag>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 18 }}>
         <div style={S.panelTitle}>ประวัติกิจกรรม</div>
@@ -826,6 +973,275 @@ function ActivityForm({ initial, onCancel, onSave }) {
         </Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave({ ...f, id: initial?.id })} disabled={!f.detail} />
+    </Modal>
+  );
+}
+
+/* ================= BOOKINGS (จอง/ยืมเครื่องมือ) ================= */
+// NOTE on approval: this app has no login/user accounts, so "approval" here
+// is trust-based rather than access-controlled — anyone can click อนุมัติ/
+// ปฏิเสธ, but the name typed into "ชื่อผู้ดำเนินการ" is recorded on the
+// booking so there's still an audit trail of who approved/rejected/returned
+// what, even without real authentication.
+function BookingsTab({ bookings, setBookings, equipment, notify }) {
+  const [q, setQ] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [view, setView] = useState("pending"); // "pending" | "current" | "history"
+  const [showForm, setShowForm] = useState(false);
+  const [actorName, setActorName] = useState("");
+
+  const withMeta = (list) => list.filter(b => {
+    const matchQ = (b.equipmentCode + b.equipmentName + (b.requestedBy || "") + (b.purpose || "")).toLowerCase().includes(q.toLowerCase());
+    const matchT = typeFilter === "all" || b.type === typeFilter;
+    return matchQ && matchT;
+  });
+
+  const pending = withMeta(bookings.filter(b => b.status === "pending")).sort((a, b) => (a.requestedAt || "").localeCompare(b.requestedAt || ""));
+  const current = withMeta(bookings.filter(isBookingCurrent)).sort((a, b) => bookingRange(a).start.localeCompare(bookingRange(b).start));
+  const history = withMeta(bookings.filter(b => !isBookingCurrent(b) && b.status !== "pending")).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
+
+  const shown = view === "pending" ? pending : view === "current" ? current : history;
+
+  function update(id, patch) {
+    setBookings(bookings.map(b => b.id === id ? { ...b, ...patch } : b));
+  }
+  function approve(b) {
+    update(b.id, { status: "approved", approvedBy: actorName || "-", approvedAt: new Date().toISOString() });
+    notify("อนุมัติคำขอแล้ว");
+  }
+  function reject(b) {
+    update(b.id, { status: "rejected", approvedBy: actorName || "-", approvedAt: new Date().toISOString() });
+    notify("ปฏิเสธคำขอแล้ว");
+  }
+  function cancel(b) {
+    update(b.id, { status: "cancelled" });
+    notify("ยกเลิกรายการแล้ว");
+  }
+  function markReturned(b) {
+    update(b.id, { returnedAt: todayISO(), returnedBy: actorName || "-" });
+    notify("บันทึกการคืนแล้ว");
+  }
+
+  function create(b) {
+    setBookings([{ ...b, id: uid(), status: "pending", requestedAt: new Date().toISOString() }, ...bookings]);
+    notify("ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
+    setShowForm(false);
+  }
+
+  return (
+    <div>
+      <TabHeader title="จอง/ยืมเครื่องมือ" sub="ขอใช้เครื่องมือแบบเช็คเอาท์ทันทีหรือจองล่วงหน้า — ทุกคำขอต้องผ่านการอนุมัติก่อน" />
+
+      <div style={{ ...S.notesBox, marginBottom: 14, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600 }}>ชื่อผู้ดำเนินการ (สำหรับอนุมัติ/ปฏิเสธ/บันทึกคืน):</span>
+        <input
+          style={{ ...S.input, maxWidth: 220, padding: "6px 10px" }}
+          value={actorName}
+          onChange={(e) => setActorName(e.target.value)}
+          placeholder="พิมพ์ชื่อของคุณ"
+        />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <ViewTab active={view === "pending"} onClick={() => setView("pending")} label="รออนุมัติ" count={pending.length} />
+        <ViewTab active={view === "current"} onClick={() => setView("current")} label="กำลังใช้งาน/จองอยู่" count={current.length} />
+        <ViewTab active={view === "history"} onClick={() => setView("history")} label="ประวัติ" count={history.length} />
+      </div>
+
+      <Toolbar>
+        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเครื่องมือ, ผู้จอง, วัตถุประสงค์..." />
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={S.select}>
+          <option value="all">ทุกประเภท</option>
+          <option value="checkout">เช็คเอาท์ทันที</option>
+          <option value="reservation">จองล่วงหน้า</option>
+        </select>
+        <button style={S.primaryBtn} onClick={() => setShowForm(true)}>
+          <Plus size={15} /> จอง/ยืมเครื่องมือ
+        </button>
+      </Toolbar>
+
+      <Table
+        cols={["เครื่องมือ", "ประเภท / ช่วงเวลา", "ผู้จอง / วัตถุประสงค์", "สถานะ", ""]}
+        rows={shown.map(b => [
+          <div>
+            <div style={{ fontWeight: 600 }}>{b.equipmentCode}</div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{b.equipmentName}</div>
+          </div>,
+          <div>
+            <div>{BOOKING_TYPE_LABEL[b.type]}</div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+              {b.type === "checkout"
+                ? `${fmtDate(b.startDate)}${b.returnedAt ? ` → คืนแล้ว ${fmtDate(b.returnedAt)}` : b.dueBackDate ? ` · กำหนดคืน ${fmtDate(b.dueBackDate)}` : ""}`
+                : `${fmtDate(b.startDate)}${b.endDate && b.endDate !== b.startDate ? ` - ${fmtDate(b.endDate)}` : ""}${b.startTime ? ` · ${b.startTime}${b.endTime ? `-${b.endTime}` : ""}` : ""}`}
+            </div>
+            {isBookingOverdue(b) && <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 2 }}>เลยกำหนดคืน {Math.abs(daysUntil(b.dueBackDate))} วัน</div>}
+          </div>,
+          <div>
+            <div style={{ fontWeight: 600 }}>{b.requestedBy || "-"}</div>
+            {b.purpose && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{b.purpose}</div>}
+          </div>,
+          <div>
+            <Tag color={BOOKING_STATUS_COLOR[b.status]}>{BOOKING_STATUS_LABEL[b.status]}</Tag>
+            {b.status !== "pending" && b.approvedBy && (
+              <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>โดย {b.approvedBy}</div>
+            )}
+          </div>,
+          <BookingActions
+            booking={b}
+            onApprove={() => approve(b)}
+            onReject={() => reject(b)}
+            onCancel={() => cancel(b)}
+            onReturn={() => markReturned(b)}
+          />,
+        ])}
+        empty={
+          view === "pending" ? "ไม่มีคำขอรออนุมัติ"
+          : view === "current" ? "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"
+          : "ยังไม่มีประวัติ"
+        }
+      />
+
+      {showForm && (
+        <BookingForm equipment={equipment} bookings={bookings} onCancel={() => setShowForm(false)} onSave={create} />
+      )}
+    </div>
+  );
+}
+
+function BookingActions({ booking: b, onApprove, onReject, onCancel, onReturn }) {
+  if (b.status === "pending") {
+    return (
+      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+        <button style={{ ...S.iconBtnSm, color: "var(--green)" }} title="อนุมัติ" onClick={onApprove}><CheckCircle2 size={14} /></button>
+        <button style={{ ...S.iconBtnSm, color: "var(--red)" }} title="ปฏิเสธ" onClick={onReject}><XCircle size={14} /></button>
+        <button style={S.iconBtnSm} title="ยกเลิกคำขอ" onClick={onCancel}><Trash2 size={13} /></button>
+      </div>
+    );
+  }
+  if (b.status === "approved" && b.type === "checkout" && !b.returnedAt) {
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+        <button style={S.smallBtn} onClick={onReturn}><Undo2 size={13} /> บันทึกคืนแล้ว</button>
+      </div>
+    );
+  }
+  if (b.status === "approved" && isBookingCurrent(b)) {
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+        <button style={S.iconBtnSm} title="ยกเลิกการจอง" onClick={onCancel}><Trash2 size={13} /></button>
+      </div>
+    );
+  }
+  return null;
+}
+
+function BookingForm({ equipment, bookings, initialEquipmentId, onCancel, onSave }) {
+  const activeEquipment = equipment.filter(e => e.status !== "inactive").slice().sort((a, b) => alphaCompare(a.code, b.code));
+  const [f, setF] = useState({
+    equipmentId: initialEquipmentId || activeEquipment[0]?.id || "",
+    type: "checkout",
+    startDate: todayISO(),
+    endDate: todayISO(),
+    startTime: "",
+    endTime: "",
+    dueBackDate: "",
+    requestedBy: "",
+    purpose: "",
+  });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const eq = equipment.find(e => e.id === f.equipmentId);
+
+  const range = f.type === "checkout"
+    ? { start: f.startDate || todayISO(), end: "9999-12-31" }
+    : { start: f.startDate || "", end: f.endDate || f.startDate || "" };
+  const conflicts = f.equipmentId ? findBookingConflicts(bookings, f.equipmentId, range, null) : [];
+
+  const canSave = f.equipmentId && f.requestedBy.trim() && (f.type === "checkout" ? f.startDate : (f.startDate && f.endDate && f.endDate >= f.startDate));
+
+  function submit() {
+    if (!eq) return;
+    onSave({
+      equipmentId: f.equipmentId,
+      equipmentCode: eq.code,
+      equipmentName: eq.name,
+      type: f.type,
+      startDate: f.startDate,
+      endDate: f.type === "reservation" ? f.endDate : null,
+      startTime: f.type === "reservation" ? f.startTime : "",
+      endTime: f.type === "reservation" ? f.endTime : "",
+      dueBackDate: f.type === "checkout" ? f.dueBackDate : "",
+      requestedBy: f.requestedBy.trim(),
+      purpose: f.purpose.trim(),
+    });
+  }
+
+  return (
+    <Modal onClose={onCancel} title="จอง/ยืมเครื่องมือ">
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="เครื่องมือ" full>
+          <select style={S.input} value={f.equipmentId} onChange={set("equipmentId")}>
+            {activeEquipment.map(e => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
+          </select>
+        </Field>
+        <Field label="รูปแบบ" full>
+          <div style={{ display: "flex", gap: 8 }}>
+            {["checkout", "reservation"].map(t => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setF({ ...f, type: t })}
+                style={{
+                  flex: 1, padding: "9px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 13, fontWeight: 600,
+                  background: f.type === t ? "#E9F1FB" : "var(--bg2, #F7F9FB)",
+                  border: `1px solid ${f.type === t ? "var(--teal)" : "var(--line)"}`,
+                  color: f.type === t ? "var(--teal-dark)" : "var(--muted)",
+                }}
+              >
+                {BOOKING_TYPE_LABEL[t]}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        {f.type === "checkout" ? (
+          <>
+            <Field label="วันที่เริ่มใช้"><input type="date" style={S.input} value={f.startDate} onChange={set("startDate")} /></Field>
+            <Field label="กำหนดคืน (ถ้ามี)"><input type="date" style={S.input} value={f.dueBackDate} onChange={set("dueBackDate")} /></Field>
+          </>
+        ) : (
+          <>
+            <Field label="วันที่เริ่มจอง"><input type="date" style={S.input} value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value, endDate: f.endDate < e.target.value ? e.target.value : f.endDate })} /></Field>
+            <Field label="วันที่สิ้นสุด"><input type="date" style={S.input} value={f.endDate} min={f.startDate} onChange={set("endDate")} /></Field>
+            <Field label="เวลาเริ่ม (ถ้ามี)"><input type="time" style={S.input} value={f.startTime} onChange={set("startTime")} /></Field>
+            <Field label="เวลาสิ้นสุด (ถ้ามี)"><input type="time" style={S.input} value={f.endTime} onChange={set("endTime")} /></Field>
+          </>
+        )}
+
+        <Field label="ผู้จอง/ยืม"><input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} placeholder="ชื่อ-นามสกุล" /></Field>
+        <Field label="วัตถุประสงค์/งานที่ใช้" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.purpose} onChange={set("purpose")} /></Field>
+      </div>
+
+      {conflicts.length > 0 && (
+        <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", marginTop: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, color: "var(--amber)", fontSize: 12.5 }}>
+            <AlertTriangle size={13} /> ช่วงเวลานี้ชนกับการจอง/ยืมอื่น
+          </div>
+          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+            {conflicts.map(c => (
+              <div key={c.id} style={{ fontSize: 12, color: "var(--ink)" }}>
+                {BOOKING_STATUS_LABEL[c.status]} · {BOOKING_TYPE_LABEL[c.type]} โดย {c.requestedBy || "-"}
+                {" "}({fmtDate(bookingRange(c).start)}{bookingRange(c).end !== "9999-12-31" ? ` - ${fmtDate(bookingRange(c).end)}` : " เป็นต้นไป"})
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 6 }}>
+            ยังส่งคำขอได้ — ผู้อนุมัติจะเห็นความชนกันนี้ตอนพิจารณาด้วย
+          </div>
+        </div>
+      )}
+
+      <ModalFooter onCancel={onCancel} onSave={submit} disabled={!canSave} />
     </Modal>
   );
 }
