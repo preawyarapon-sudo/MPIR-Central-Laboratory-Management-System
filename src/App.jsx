@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Wrench, FlaskConical, Lock, LogOut } from "lucide-react";
 import LabTrackApp from "./labtrack/LabTrackApp.jsx";
 import AnalysisApp from "./analysis/AnalysisApp.jsx";
@@ -26,8 +26,89 @@ const ACCOUNTS = [
     role: "admin",
   },
   { username: "mpiradmin", password: "admin1234", role: "admin" },
-  { username: "wimonsiri", password: "22210", role: "booking" },
-  { username: "thidarati", password: "1234", role: "booking" },
+  // Full staff roster (78 accounts) — booking-only role, one per person,
+  // generated from user_id_list.xlsx. Username = "System ID" column,
+  // shared password mpir1234 for everyone. Replaces the earlier ad-hoc
+  // wimonsiri/thidarati test accounts (both are included here under their
+  // real System ID / standard password instead).
+  { username: "vorraveerukornv", password: "mpir1234", role: "booking", name: "Vorraveerukorn Veerachitt" },
+  { username: "anutinp", password: "mpir1234", role: "booking", name: "Anutin Pattamasuwan" },
+  { username: "jamnank", password: "mpir1234", role: "booking", name: "Jamnan Khodphuvieng" },
+  { username: "rattanam", password: "mpir1234", role: "booking", name: "Rattana Muangmontri" },
+  { username: "somwunga", password: "mpir1234", role: "booking", name: "Somwung Anusonpornperm" },
+  { username: "nuchnichap", password: "mpir1234", role: "booking", name: "Nuchnicha Phaeon" },
+  { username: "chaiwatn", password: "mpir1234", role: "booking", name: "Chaiwat Ngasan" },
+  { username: "pimchanokb", password: "mpir1234", role: "booking", name: "Pimchanok Busayapongchai" },
+  { username: "jirachayak", password: "mpir1234", role: "booking", name: "Jirachaya Klisumalee" },
+  { username: "pisittineec", password: "mpir1234", role: "booking", name: "Pisittinee Chapanya" },
+  { username: "varinthonj", password: "mpir1234", role: "booking", name: "Varinthon Jarnkoon" },
+  { username: "rutchadapornn", password: "mpir1234", role: "booking", name: "Rutchadaporn Nootas" },
+  { username: "pathaithipc", password: "mpir1234", role: "booking", name: "Pathaithip Champasri" },
+  { username: "therdpongk", password: "mpir1234", role: "booking", name: "Therdpong Khongsanun" },
+  { username: "manuwatt", password: "mpir1234", role: "booking", name: "Manuwat Tintarasaranaratchasema" },
+  { username: "samrans", password: "mpir1234", role: "booking", name: "Samran Saensupo" },
+  { username: "wichitl", password: "mpir1234", role: "booking", name: "Wichit Liewkongsataporn" },
+  { username: "watcharasaks", password: "mpir1234", role: "booking", name: "Watcharasak Sukcharoenvipharat" },
+  { username: "peerayak", password: "mpir1234", role: "booking", name: "Peeraya Klomsa-ard" },
+  { username: "nantidaw", password: "mpir1234", role: "booking", name: "Nantida Watanarojanaporn" },
+  { username: "pratchyas", password: "mpir1234", role: "booking", name: "Pratchya Swangmaneecharern" },
+  { username: "chirawatp", password: "mpir1234", role: "booking", name: "Chirawat Prasitsom" },
+  { username: "lawank", password: "mpir1234", role: "booking", name: "Lawan Kladsuwan" },
+  { username: "kanokwans", password: "mpir1234", role: "booking", name: "Kanokwan Sawang" },
+  { username: "warodomw", password: "mpir1234", role: "booking", name: "Warodom Wirojsirasak" },
+  { username: "siriwanp", password: "mpir1234", role: "booking", name: "Siriwan Pangma" },
+  { username: "narubodiny", password: "mpir1234", role: "booking", name: "Narubodin Yindi" },
+  { username: "saranyap", password: "mpir1234", role: "booking", name: "Saranya Phaengthai" },
+  { username: "satjapornc", password: "mpir1234", role: "booking", name: "Satjaporn Chantawong" },
+  { username: "mintrat", password: "mpir1234", role: "booking", name: "Mintra Tippa-art" },
+  { username: "supaporns", password: "mpir1234", role: "booking", name: "Supaporn Sa-ngawong" },
+  { username: "sucharatb", password: "mpir1234", role: "booking", name: "Sucharat Butphu" },
+  { username: "punyanucht", password: "mpir1234", role: "booking", name: "Punyanuch Themcharoensawad" },
+  { username: "chanphenk", password: "mpir1234", role: "booking", name: "Chanphen Kaenkong" },
+  { username: "papadap", password: "mpir1234", role: "booking", name: "Papada Phonmuang" },
+  { username: "supattam", password: "mpir1234", role: "booking", name: "Supatta Mingolo" },
+  { username: "prakomek", password: "mpir1234", role: "booking", name: "Prakome Kongyoo" },
+  { username: "phunsukl", password: "mpir1234", role: "booking", name: "Phunsuk Laotongkum" },
+  { username: "yingyost", password: "mpir1234", role: "booking", name: "Yingyos Tonsomros" },
+  { username: "attharasab", password: "mpir1234", role: "booking", name: "Attharasa Boonprajum" },
+  { username: "orawant", password: "mpir1234", role: "booking", name: "Orawan Tejan" },
+  { username: "waranyan", password: "mpir1234", role: "booking", name: "Waranya Natesuntorn" },
+  { username: "kridsanak", password: "mpir1234", role: "booking", name: "Kridsana Krisomdee" },
+  { username: "chokchais", password: "mpir1234", role: "booking", name: "Chokchai Sompugdee" },
+  { username: "phattamonh", password: "mpir1234", role: "booking", name: "Phattamon Heawchaiyaphum" },
+  { username: "prayooths", password: "mpir1234", role: "booking", name: "Prayooth Saothong" },
+  { username: "walaipornr", password: "mpir1234", role: "booking", name: "Walaiporn Rungjang" },
+  { username: "ratchaniwanj", password: "mpir1234", role: "booking", name: "Ratchaniwan Jaemsaeng" },
+  { username: "piyanant", password: "mpir1234", role: "booking", name: "Piyanan Tessen" },
+  { username: "wimonsirik", password: "mpir1234", role: "booking", name: "Wimonsiri Kongchai" },
+  { username: "suntitr", password: "mpir1234", role: "booking", name: "Suntit Reewarabundit" },
+  { username: "jirayuts", password: "mpir1234", role: "booking", name: "Jirayut Saosuwan" },
+  { username: "nitiyas", password: "mpir1234", role: "booking", name: "Nitiya Srithuanok" },
+  { username: "seksitp", password: "mpir1234", role: "booking", name: "Seksit Promputta" },
+  { username: "atiyat", password: "mpir1234", role: "booking", name: "Atiya Techaparin" },
+  { username: "suwalakl", password: "mpir1234", role: "booking", name: "Suwalak Laephukhieo" },
+  { username: "ratthiwakorny", password: "mpir1234", role: "booking", name: "Ratthiwakorn Yuenyong" },
+  { username: "ariyak", password: "mpir1234", role: "booking", name: "Ariya Khoosakunrat" },
+  { username: "netnaphan", password: "mpir1234", role: "booking", name: "Netnapha Ngamjamrus" },
+  { username: "orathaid", password: "mpir1234", role: "booking", name: "Orathai Duangmonti" },
+  { username: "thanawanp", password: "mpir1234", role: "booking", name: "Thanawan Phongchai" },
+  { username: "thipphawanw", password: "mpir1234", role: "booking", name: "Thipphawan Wongfaideang" },
+  { username: "chontichan", password: "mpir1234", role: "booking", name: "Chonticha Naeoaolo" },
+  { username: "ponchaiw", password: "mpir1234", role: "booking", name: "Ponchai Wawilai" },
+  { username: "yaraponp", password: "mpir1234", role: "booking", name: "Yarapon Puttakot" },
+  { username: "sasipimf", password: "mpir1234", role: "booking", name: "Sasipim Foisoongnern" },
+  { username: "thimphilatchanantl", password: "mpir1234", role: "booking", name: "Thimphilatchanant Lakool" },
+  { username: "sarawutc", password: "mpir1234", role: "booking", name: "Sarawut Chuayaurachon" },
+  { username: "visitp", password: "mpir1234", role: "booking", name: "Visit Prathumteep" },
+  { username: "chanissarar", password: "mpir1234", role: "booking", name: "Chanissara Ruangyos" },
+  { username: "warinpas", password: "mpir1234", role: "booking", name: "Warinpa Sutthibut" },
+  { username: "thiradeth", password: "mpir1234", role: "booking", name: "Thiradet Homhwan" },
+  { username: "butsabawany", password: "mpir1234", role: "booking", name: "Butsabawan Yenkhan" },
+  { username: "noppamasc", password: "mpir1234", role: "booking", name: "Noppamas Chantawan" },
+  { username: "kanokkans", password: "mpir1234", role: "booking", name: "Kanokkan Sriwaiyaphram" },
+  { username: "thidarati", password: "mpir1234", role: "booking", name: "Thidarat Intakham" },
+  { username: "panitk", password: "mpir1234", role: "booking", name: "Panit Kitsubun" },
+  { username: "suteek", password: "mpir1234", role: "booking", name: "Sutee Kiddee" },
 ];
 
 const SESSION_KEY = "mpirLabSession";
@@ -45,7 +126,7 @@ function loadSession() {
   }
 }
 
-function PasswordGate({ onLogin }) {
+function PasswordGate({ onLogin, autoLoggedOut }) {
   const [username, setUsername] = useState("");
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
@@ -54,7 +135,7 @@ function PasswordGate({ onLogin }) {
     e.preventDefault();
     const acc = ACCOUNTS.find(a => a.username === username && a.password === input);
     if (acc) {
-      const session = { username: acc.username, role: acc.role };
+      const session = { username: acc.username, role: acc.role, name: acc.name || acc.username };
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       onLogin(session);
     } else {
@@ -68,6 +149,11 @@ function PasswordGate({ onLogin }) {
         <div style={gateStyles.iconWrap}><Lock size={20} color="#0E6FBA" /></div>
         <div style={gateStyles.title}>MPIR Central Lab</div>
         <div style={gateStyles.sub}>กรุณาเข้าสู่ระบบเพื่อใช้งาน</div>
+        {autoLoggedOut && (
+          <div style={{ ...gateStyles.error, color: "#0E6FBA", background: "#EAF3FB", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
+            ออกจากระบบอัตโนมัติเนื่องจากไม่มีการใช้งานเกิน 30 นาที กรุณาเข้าสู่ระบบใหม่
+          </div>
+        )}
         <input
           type="text"
           autoFocus
@@ -135,9 +221,39 @@ const gateStyles = {
 export default function App() {
   const [section, setSection] = useState("labtrack");
   const [session, setSession] = useState(loadSession);
+  const [autoLoggedOut, setAutoLoggedOut] = useState(false);
+
+  // Auto-logout for restricted "booking" accounts after 30 minutes with no
+  // interaction. This app doesn't sync data across open sessions in real
+  // time, so a booking-only user who leaves the tab open for a long time
+  // could act on stale equipment/availability info — kicking back to the
+  // login screen forces a fresh reload of current data next time they sign
+  // in. Admin accounts are unaffected (they're trusted to notice staleness
+  // and refresh manually).
+  useEffect(() => {
+    if (!session || session.role !== "booking") return;
+    const IDLE_LIMIT_MS = 30 * 60 * 1000;
+    let timeoutId;
+    function triggerLogout() {
+      localStorage.removeItem(SESSION_KEY);
+      setAutoLoggedOut(true);
+      setSession(null);
+    }
+    function resetTimer() {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(triggerLogout, IDLE_LIMIT_MS);
+    }
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"];
+    events.forEach(ev => window.addEventListener(ev, resetTimer));
+    resetTimer();
+    return () => {
+      clearTimeout(timeoutId);
+      events.forEach(ev => window.removeEventListener(ev, resetTimer));
+    };
+  }, [session]);
 
   if (!session) {
-    return <PasswordGate onLogin={setSession} />;
+    return <PasswordGate onLogin={(s) => { setAutoLoggedOut(false); setSession(s); }} autoLoggedOut={autoLoggedOut} />;
   }
 
   const isBookingOnly = session.role === "booking";
@@ -190,7 +306,7 @@ export default function App() {
           </div>
         )}
         <div style={styles.userBox}>
-          <span style={styles.userName}>{session.username}</span>
+          <span style={styles.userName}>{session.name || session.username}</span>
           <button onClick={logout} style={styles.logoutBtn} title="ออกจากระบบ">
             <LogOut size={14} />
           </button>
