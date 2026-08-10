@@ -1358,12 +1358,12 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   function update(id, patch) {
     setBookings(bookings.map(b => b.id === id ? { ...b, ...patch } : b));
   }
-  function approve(b, note) {
-    update(b.id, { status: "approved", approvedBy: actorName || "-", approvedAt: new Date().toISOString(), approvalNote: note || "" });
+  function approve(b, note, name) {
+    update(b.id, { status: "approved", approvedBy: name || actorName || "-", approvedAt: new Date().toISOString(), approvalNote: note || "" });
     notify("อนุมัติคำขอแล้ว");
   }
-  function reject(b, note) {
-    update(b.id, { status: "rejected", approvedBy: actorName || "-", approvedAt: new Date().toISOString(), approvalNote: note || "" });
+  function reject(b, note, name) {
+    update(b.id, { status: "rejected", approvedBy: name || actorName || "-", approvedAt: new Date().toISOString(), approvalNote: note || "" });
     notify("ปฏิเสธคำขอแล้ว");
   }
   function cancel(b) {
@@ -1374,16 +1374,16 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
     setBookings(bookings.filter(x => x.id !== b.id));
     notify("ลบประวัติรายการแล้ว");
   }
-  function markReturned(b, qtyReturned) {
+  function markReturned(b, qtyReturned, name) {
     const total = b.qty || 1;
     const remaining = total - (qtyReturned || total);
     if (b.assetType === "item" && remaining > 0) {
       // Partial return: reduce the outstanding qty, keep the booking active
       // for what's still out.
-      update(b.id, { qty: remaining });
+      update(b.id, { qty: remaining, returnedBy: name || actorName || currentUsername || "-" });
       notify(`บันทึกคืนอุปกรณ์ ${qtyReturned} ชิ้น (เหลือค้างอีก ${remaining} ชิ้น)`);
     } else {
-      update(b.id, { returnedAt: todayISO(), returnedBy: actorName || currentUsername || "-" });
+      update(b.id, { returnedAt: todayISO(), returnedBy: name || actorName || currentUsername || "-" });
       notify(b.assetType === "item" ? "บันทึกคืนอุปกรณ์ครบแล้ว" : "บันทึกใช้งานเสร็จสิ้นแล้ว");
     }
   }
@@ -1448,10 +1448,11 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         booking={b}
         canApprove={!restrictToBooking}
         currentUsername={currentUsername}
-        onApprove={(note) => approve(b, note)}
-        onReject={(note) => reject(b, note)}
+        defaultActorName={actorName}
+        onApprove={(note, name) => approve(b, note, name)}
+        onReject={(note, name) => reject(b, note, name)}
         onCancel={() => cancel(b)}
-        onReturn={(qty) => markReturned(b, qty)}
+        onReturn={(qty, name) => markReturned(b, qty, name)}
         onDelete={() => deleteHistoryItem(b)}
       />,
     ];
@@ -1524,7 +1525,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   );
 }
 
-function BookingActions({ booking: b, canApprove, currentUsername, onApprove, onReject, onCancel, onReturn, onDelete }) {
+function BookingActions({ booking: b, canApprove, currentUsername, defaultActorName = "", onApprove, onReject, onCancel, onReturn, onDelete }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmReturn, setConfirmReturn] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1551,11 +1552,12 @@ function BookingActions({ booking: b, canApprove, currentUsername, onApprove, on
           <ApprovalDialog
             booking={b}
             action={approvalAction}
+            defaultName={defaultActorName}
             onCancel={() => setApprovalAction(null)}
-            onConfirm={(note) => {
+            onConfirm={(note, name) => {
               const action = approvalAction;
               setApprovalAction(null);
-              if (action === "approve") onApprove(note); else onReject(note);
+              if (action === "approve") onApprove(note, name); else onReject(note, name);
             }}
           />
         )}
@@ -1579,8 +1581,9 @@ function BookingActions({ booking: b, canApprove, currentUsername, onApprove, on
         {confirmReturn && (
           <ReturnQtyDialog
             booking={b}
+            defaultName={defaultActorName}
             onCancel={() => setConfirmReturn(false)}
-            onConfirm={(qty) => { setConfirmReturn(false); onReturn(qty); }}
+            onConfirm={(qty, name) => { setConfirmReturn(false); onReturn(qty, name); }}
           />
         )}
       </div>
@@ -3473,10 +3476,11 @@ function ConfirmDialog({ title = "ยืนยันการทำรายก�
 // reduce the remaining qty on the booking instead of closing it outright.
 // For "เครื่องมือ" (equipment) there's nothing to count, just a straight
 // confirm with the "ใช้งานเสร็จสิ้นแล้ว" wording.
-function ReturnQtyDialog({ booking, onCancel, onConfirm }) {
+function ReturnQtyDialog({ booking, defaultName = "", onCancel, onConfirm }) {
   const isItem = booking.assetType === "item";
   const maxQty = booking.qty || 1;
   const [qty, setQty] = useState(maxQty);
+  const [returnedByName, setReturnedByName] = useState(defaultName);
   return (
     <div
       onClick={(e) => { e.stopPropagation(); onCancel(); }}
@@ -3508,9 +3512,18 @@ function ReturnQtyDialog({ booking, onCancel, onConfirm }) {
             />
           </div>
         )}
+        <div style={{ marginTop: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>ชื่อผู้รับคืน</label>
+          <input
+            value={returnedByName}
+            onChange={(e) => setReturnedByName(e.target.value)}
+            placeholder="พิมพ์ชื่อผู้รับคืน..."
+            style={{ ...S.input, marginTop: 6 }}
+          />
+        </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
           <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
-          <button style={S.primaryBtn} onClick={() => onConfirm(isItem ? qty : maxQty)}>
+          <button style={S.primaryBtn} onClick={() => onConfirm(isItem ? qty : maxQty, returnedByName.trim())}>
             {isItem ? "ยืนยันคืน" : "ยืนยันเสร็จสิ้น"}
           </button>
         </div>
@@ -3573,8 +3586,9 @@ function ReturnTxQtyDialog({ tx, unit, onCancel, onConfirm }) {
 // optional (but always-shown) notes field — e.g. an approver's condition,
 // or a rejecter's reason — stored on the booking as approvalNote so it's
 // visible to the requester afterwards.
-function ApprovalDialog({ booking, action, onCancel, onConfirm }) {
+function ApprovalDialog({ booking, action, defaultName = "", onCancel, onConfirm }) {
   const [note, setNote] = useState("");
+  const [approverName, setApproverName] = useState(defaultName);
   const isApprove = action === "approve";
   return (
     <div
@@ -3599,6 +3613,17 @@ function ApprovalDialog({ booking, action, onCancel, onConfirm }) {
         </div>
         <div style={{ marginTop: 14 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>
+            {isApprove ? "ชื่อผู้อนุมัติ" : "ชื่อผู้ปฏิเสธ"}
+          </label>
+          <input
+            value={approverName}
+            onChange={(e) => setApproverName(e.target.value)}
+            placeholder={isApprove ? "พิมพ์ชื่อผู้อนุมัติ..." : "พิมพ์ชื่อผู้ปฏิเสธ..."}
+            style={{ ...S.input, marginTop: 6 }}
+          />
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>
             หมายเหตุ{isApprove ? " (ถ้ามี)" : " (เช่น เหตุผลที่ปฏิเสธ)"}
           </label>
           <textarea
@@ -3617,7 +3642,7 @@ function ApprovalDialog({ booking, action, onCancel, onConfirm }) {
               background: isApprove ? "var(--green)" : "var(--red)",
               borderColor: isApprove ? "var(--green)" : "var(--red)",
             }}
-            onClick={() => onConfirm(note.trim())}
+            onClick={() => onConfirm(note.trim(), approverName.trim())}
           >
             {isApprove ? "ยืนยันอนุมัติ" : "ยืนยันปฏิเสธ"}
           </button>
