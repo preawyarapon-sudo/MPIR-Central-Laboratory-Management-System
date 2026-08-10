@@ -314,7 +314,7 @@ export default function App() {
       </div>
 
       <div style={styles.content}>
-        {activeSection === "labtrack" && <LabTrackApp restrictToBooking={isBookingOnly} currentUsername={session.username} />}
+        {activeSection === "labtrack" && <LabTrackApp restrictToBooking={isBookingOnly} currentUsername={session.username} currentDisplayName={session.name} />}
         {activeSection === "analysis" && !isBookingOnly && <AnalysisApp />}
       </div>
     </div>
