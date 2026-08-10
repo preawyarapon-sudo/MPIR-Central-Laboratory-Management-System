@@ -1266,7 +1266,21 @@ function ItemForm({ item, onCancel, onSave }) {
         <Field label="ประเภท"><input style={S.input} value={f.category || ""} onChange={set("category")} placeholder="เช่น เก็บตัวอย่าง, วัดค่า" /></Field>
         <Field label="ตำแหน่งที่เก็บ"><input style={S.input} value={f.location} onChange={set("location")} placeholder="เช่น C1" /></Field>
         <Field label="จำนวนทั้งหมด (ชิ้น)">
-          <input type="number" min="1" style={S.input} value={f.totalQty || 1} onChange={(e) => setF({ ...f, totalQty: Number(e.target.value) || 1 })} />
+          <input
+            type="number" min="1" style={S.input}
+            value={f.totalQty ?? 1}
+            onChange={(e) => {
+              // Allow the field to sit empty while the person is mid-edit
+              // (e.g. backspacing "1" to type "10") — forcing a fallback to
+              // 1 on every keystroke made it impossible to clear/retype,
+              // since an empty string would instantly snap back to "1".
+              const raw = e.target.value;
+              setF({ ...f, totalQty: raw === "" ? "" : Number(raw) });
+            }}
+            onBlur={() => {
+              if (!f.totalQty || Number(f.totalQty) < 1) setF({ ...f, totalQty: 1 });
+            }}
+          />
         </Field>
         <Field label="สถานะ">
           <select style={S.input} value={f.status} onChange={set("status")}>
