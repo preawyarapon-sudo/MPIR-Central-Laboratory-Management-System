@@ -1642,7 +1642,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const [expanded, setExpanded] = useState({}); // per asset id -> show all conflicts
 
   const eq = equipment.find(e => e.id === equipmentId);
-  const selectedItemIds = Object.keys(itemQtys).filter(id => itemQtys[id] > 0);
+  const selectedItemIds = Object.keys(itemQtys);
 
   function toggleItem(id) {
     setItemQtys(prev => {
@@ -1653,8 +1653,22 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
     });
   }
   function setItemQty(id, qty, max) {
-    const q = Math.max(1, Math.min(Number(qty) || 1, max || 99));
-    setItemQtys(prev => ({ ...prev, [id]: q }));
+    // Keep whatever the person typed, including "" mid-edit — clamping on
+    // every keystroke made it impossible to clear the field and type a new
+    // number, since an empty string instantly snapped back to 1.
+    if (qty === "") {
+      setItemQtys(prev => ({ ...prev, [id]: "" }));
+      return;
+    }
+    const n = Number(qty);
+    if (Number.isNaN(n)) return;
+    setItemQtys(prev => ({ ...prev, [id]: n }));
+  }
+  function clampItemQty(id, max) {
+    setItemQtys(prev => {
+      const q = Math.max(1, Math.min(Number(prev[id]) || 1, max || 99));
+      return { ...prev, [id]: q };
+    });
   }
 
   // A checkout's true "occupied until" date is whatever the person entered
@@ -1789,7 +1803,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           equipmentName: it.name,
           assetType: "item",
           type: "checkout",
-          qty: itemQtys[id],
+          qty: Number(itemQtys[id]) || 1,
           startDate: itemStartDate,
           endDate: null,
           dueBackDate: itemDueBackDate,
@@ -1878,7 +1892,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
               {activeItems.length === 0 && <div style={{ fontSize: 12.5, color: "var(--muted)" }}>ยังไม่มีข้อมูลอุปกรณ์</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {activeItems.map(it => {
-                  const checked = !!itemQtys[it.id];
+                  const checked = it.id in itemQtys;
                   const bk = itemSummaries[it.id];
                   // Cap at what's actually still free right now, not the raw
                   // total — otherwise the form would let people request more
@@ -1908,8 +1922,9 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                           taller row above pushes everything down). */}
                       <input
                         type="number" min="1" max={maxQty || 1}
-                        value={checked ? Math.min(itemQtys[it.id], maxQty) : 1}
+                        value={checked ? (itemQtys[it.id] === "" ? "" : Math.min(itemQtys[it.id], maxQty)) : 1}
                         onChange={(e) => setItemQty(it.id, e.target.value, maxQty)}
+                        onBlur={() => clampItemQty(it.id, maxQty)}
                         style={{
                           ...S.input, width: 60, padding: "5px 8px", flexShrink: 0,
                           visibility: checked && showQtyBox ? "visible" : "hidden",
