@@ -1108,7 +1108,7 @@ function ActivityForm({ initial, onCancel, onSave }) {
         <Field label="ผู้ดำเนินการ / บริษัท"><input style={S.input} value={f.by} onChange={set("by")} /></Field>
         <Field label="เลขที่ PO"><input style={S.input} value={f.poNo} onChange={set("poNo")} placeholder="เช่น PO-2569-0123" /></Field>
         {f.type === "calibration" && (
-          <Field label="สถานที่สอบเทียบ" full>
+          <Field label="สถานที่สอบเทียบ" full plain>
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
               <input type="checkbox" checked={f.external} onChange={(e) => setF({ ...f, external: e.target.checked })} style={{ width: 16, height: 16 }} />
               ส่งสอบเทียบภายนอกบริษัท
@@ -1821,7 +1821,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   return (
     <Modal onClose={onCancel} title="จอง/ยืมเครื่องมือ" wide>
       <div style={S.formGrid} className="ltFormGrid">
-        <Field label="ประเภทคำขอ" full>
+        <Field label="ประเภทคำขอ" full plain>
           <div style={{ display: "flex", gap: 8 }}>
             {[
               { key: "item", label: "ขอยืมอุปกรณ์" },
@@ -1853,7 +1853,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                 {activeEquipment.map(e => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
               </select>
             </Field>
-            <Field label="ลักษณะการใช้" full>
+            <Field label="ลักษณะการใช้" full plain>
               <div style={{ display: "flex", gap: 8 }}>
                 {["checkout", "reservation"].map(t => (
                   <button
@@ -1951,7 +1951,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
         </Field>
         <Field label="วัตถุประสงค์/งานที่ใช้" full><textarea style={{ ...S.input, minHeight: 60 }} value={purpose} onChange={(e) => setPurpose(e.target.value)} /></Field>
 
-        <Field label="สถานที่ใช้งาน" full>
+        <Field label="สถานที่ใช้งาน" full plain>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={offSite} onChange={(e) => setOffSite(e.target.checked)} style={{ width: 16, height: 16 }} />
             ขอใช้นอกสถานที่ (ไม่ได้ใช้งานภายในแล็บ)
@@ -2961,7 +2961,7 @@ function PurchaseRequestForm({ item, onCancel, onSave }) {
         </Field>
         <Field label="ผู้ขอซื้อ"><input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} /></Field>
         <div />
-        <Field label="เลขที่ PO (1 PR ออกได้หลาย PO — ใส่ลิงก์ไฟล์ PO ได้ถ้ามี)" full>
+        <Field label="เลขที่ PO (1 PR ออกได้หลาย PO — ใส่ลิงก์ไฟล์ PO ได้ถ้ามี)" full plain>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {f.pos.map(p => (
               <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
