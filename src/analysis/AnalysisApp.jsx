@@ -531,6 +531,35 @@ function Btn({ children, onClick, kind = "default", small, disabled, title }) {
   );
 }
 
+// Generic "are you sure?" overlay — used before any destructive action
+// (delete, cancel) so a stray click can't silently remove data.
+function ConfirmDialog({ title = "ยืนยันการทำรายการ", message, confirmLabel = "ยืนยัน", danger = true, onConfirm, onCancel }) {
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(11,42,74,0.35)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: C.panel, borderRadius: 12, border: `1px solid ${C.border}`,
+          padding: "20px 22px", width: "100%", maxWidth: 340, boxShadow: "0 12px 32px rgba(11,42,74,0.18)",
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 6 }}>{title}</div>
+        <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.5, marginBottom: 18 }}>{message}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Btn small onClick={onCancel}>ยกเลิก</Btn>
+          <Btn small kind={danger ? "danger" : "primary"} onClick={onConfirm}>{confirmLabel}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Panel({ children, style }) {
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, ...style }}>
@@ -1205,6 +1234,7 @@ function ParamRepairs({ jobNo, p, onFlagRepair, onResolveRepair }) {
 // ---------- Job Detail ----------
 function JobDetail({ job, onBack, onUpdateParam, onDeleteJob, onEditJob, onFlagRepair, onResolveRepair }) {
   const stats = computeJobStats(job);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <Panel style={{ padding: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
@@ -1293,8 +1323,17 @@ function JobDetail({ job, onBack, onUpdateParam, onDeleteJob, onEditJob, onFlagR
 
       <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Btn small onClick={() => onEditJob(job)}>แก้ไขรหัสงานนี้</Btn>
-        <Btn kind="danger" small onClick={() => onDeleteJob(job.jobNo)}><Trash2 size={13} /> ลบรหัสงานนี้</Btn>
+        <Btn kind="danger" small onClick={() => setConfirmDelete(true)}><Trash2 size={13} /> ลบรหัสงานนี้</Btn>
       </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          title="ลบรหัสงานนี้?"
+          message={`ต้องการลบงาน ${job.jobNo} ใช่ไหม — การลบไม่สามารถกู้คืนได้`}
+          confirmLabel="ลบเลย"
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => { setConfirmDelete(false); onDeleteJob(job.jobNo); }}
+        />
+      )}
     </Panel>
   );
 }
@@ -1936,7 +1975,12 @@ export default function App() {
           // Only the client that actually wins the transaction sends the
           // LINE message — everyone else who raced against it gets
           // claimed:false and stays quiet.
-          if (claimed) notifyLineJobLate(job);
+          // LINE push disabled by request (2026-08) — group push billing
+          // counts once per member, so only "new job" and "repair flagged"
+          // still notify. lateNotifiedAt is still tracked/claimed above so
+          // the in-app "ล่าช้า" badges and dashboard alerts keep working;
+          // it just no longer triggers an actual LINE message.
+          // if (claimed) notifyLineJobLate(job);
         })
         .catch((e) => console.error("claim lateNotifiedAt failed", e));
     });
@@ -1969,7 +2013,9 @@ export default function App() {
             .then((claimed) => {
               // Same race as lateNotifiedAt above: with several tabs open,
               // only the transaction winner should fire the LINE message.
-              if (claimed) notifyLineJobDone(job);
+              // LINE push disabled by request (2026-08) — see note above
+              // lateNotifiedAt; doneNotifiedAt is still tracked as before.
+              // if (claimed) notifyLineJobDone(job);
             })
             .catch((e) => console.error("claim doneNotifiedAt failed", e));
         }
@@ -2095,9 +2141,12 @@ export default function App() {
     const updatedJob = { ...job, parameters };
     try {
       await saveJob(updatedJob);
-      if (targetParam && batchToNotify && batchToNotify.length > 0) {
-        notifyLineRepairDone(updatedJob, targetParam, batchToNotify);
-      }
+      // LINE push disabled by request (2026-08) — only "new job" and
+      // "repair flagged" still notify; resolvedNotifiedAt above is still
+      // set as before so this batch won't re-trigger if checked again.
+      // if (targetParam && batchToNotify && batchToNotify.length > 0) {
+      //   notifyLineRepairDone(updatedJob, targetParam, batchToNotify);
+      // }
     } catch (e) {
       setError("บันทึกการซ่อมเสร็จไม่สำเร็จ");
     }
