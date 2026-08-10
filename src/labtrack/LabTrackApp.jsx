@@ -53,7 +53,7 @@ function alphaCompare(a, b) {
 }
 
 /* ---------- booking (จอง/ยืมเครื่องมือ) helpers ---------- */
-const BOOKING_TYPE_LABEL = { checkout: "เช็คเอาท์ทันที", reservation: "จองล่วงหน้า" };
+const BOOKING_TYPE_LABEL = { checkout: "ขอใช้งาน", reservation: "จองล่วงหน้า" };
 const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
 // A more honest label than the raw status: "approved" alone doesn't say
 // whether the item has actually been returned/finished yet. Used anywhere
@@ -73,7 +73,10 @@ const BOOKING_STATUS_COLOR = { pending: "var(--amber)", approved: "var(--green)"
 // correctly conflicts with anything that would need the equipment later.
 function bookingRange(b) {
   if (b.type === "checkout") {
-    return { start: b.startDate || todayISO(), end: b.returnedAt || "9999-12-31" };
+    // A checkout's real "occupied until" is: the actual return date if
+    // already returned, else the planned กำหนดคืน if one was given, else
+    // truly open-ended (only when nobody ever set a return date at all).
+    return { start: b.startDate || todayISO(), end: b.returnedAt || b.dueBackDate || "9999-12-31" };
   }
   return { start: b.startDate || "", end: b.endDate || b.startDate || "" };
 }
@@ -586,6 +589,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [calibFilter, setCalibFilter] = useState("all"); // "all" | "warn" | "danger"
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
   const [showImport, setShowImport] = useState(false);
@@ -598,7 +602,8 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       const matchQ = (e.code + e.name + (e.brand || "") + (e.model || "") + (e.serialNo || "") + e.location + e.type).toLowerCase().includes(q.toLowerCase());
       const matchS = statusFilter === "all" || e.status === statusFilter;
       const matchT = typeFilter === "all" || e.type === typeFilter;
-      return matchQ && matchS && matchT;
+      const matchC = calibFilter === "all" || statusOf(daysUntil(e.nextDue)) === calibFilter;
+      return matchQ && matchS && matchT && matchC;
     })
     .slice()
     .sort((a, b) => alphaCompare(a.code, b.code));
@@ -668,6 +673,11 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           <option value="maintenance">ซ่อมบำรุง</option>
           <option value="inactive">ปิดใช้งาน</option>
         </select>
+        <select value={calibFilter} onChange={e => setCalibFilter(e.target.value)} style={S.select}>
+          <option value="all">ทุกกำหนดสอบเทียบ</option>
+          <option value="warn">ใกล้ถึงรอบสอบเทียบ</option>
+          <option value="danger">เลยกำหนดสอบเทียบ</option>
+        </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
@@ -683,16 +693,16 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           const st = statusOf(days);
           const bk = equipmentBookingSummary(e.id, bookings);
           return (
-            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden" }} onClick={() => setSelected(e.id)}>
+            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden", height: "100%" }} onClick={() => setSelected(e.id)}>
               {e.imageUrl ? (
                 <img src={e.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-                  style={{ width: "100%", height: 140, objectFit: "contain", background: "#EEF2F6", display: "block" }} />
+                  style={{ width: "100%", height: 140, objectFit: "contain", background: "#EEF2F6", display: "block", flexShrink: 0 }} />
               ) : (
-                <div style={{ width: "100%", height: 140, background: "linear-gradient(135deg, #E9F1FB, #F5F8FC)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ width: "100%", height: 140, background: "linear-gradient(135deg, #E9F1FB, #F5F8FC)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <Wrench size={34} color="#B9C7D6" />
                 </div>
               )}
-              <div style={{ padding: "10px 14px 12px" }}>
+              <div style={{ padding: "10px 14px 12px", display: "flex", flexDirection: "column", flex: 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                   <div style={S.eqCardTop}>
                     <span style={{ ...S.beacon, background: STATUS_COLOR[st] }} />
@@ -710,7 +720,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
                 <div style={{ ...S.eqDue, color: STATUS_COLOR[st] }}>
                   {e.nextDue ? `กำหนดถัดไป ${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "ไม่มีกำหนดสอบเทียบ"}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 11.5, fontWeight: 600, color: bk.color }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: "auto", paddingTop: 6, fontSize: 11.5, fontWeight: 600, color: bk.color }}>
                   <CalendarCheck size={12} /> {bk.text}
                 </div>
               </div>
@@ -1266,7 +1276,7 @@ function ItemForm({ item, onCancel, onSave }) {
 function BookingsTab({ bookings, setBookings, equipment, items = [], notify, restrictToBooking = false, currentUsername = "" }) {
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [view, setView] = useState("pending"); // "pending" | "current" | "history"
+  const [view, setView] = useState("pending"); // "pending" | "current" | "history-equipment" | "history-item"
   const [showForm, setShowForm] = useState(false);
   const [actorName, setActorName] = useState("");
 
@@ -1286,9 +1296,14 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
 
   const pending = withMeta(ownOnly.filter(b => b.status === "pending")).sort((a, b) => (a.requestedAt || "").localeCompare(b.requestedAt || ""));
   const current = withMeta(ownOnly.filter(isBookingCurrent)).sort((a, b) => bookingRange(a).start.localeCompare(bookingRange(b).start));
-  const history = withMeta(ownOnly.filter(b => !isBookingCurrent(b) && b.status !== "pending")).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
+  const historyAll = ownOnly.filter(b => !isBookingCurrent(b) && b.status !== "pending").sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
+  const historyEquipment = withMeta(historyAll.filter(b => b.assetType !== "item"));
+  const historyItem = withMeta(historyAll.filter(b => b.assetType === "item"));
 
-  const shown = view === "pending" ? pending : view === "current" ? current : history;
+  const shown = view === "pending" ? pending
+    : view === "current" ? current
+    : view === "history-equipment" ? historyEquipment
+    : historyItem;
 
   function update(id, patch) {
     setBookings(bookings.map(b => b.id === id ? { ...b, ...patch } : b));
@@ -1304,6 +1319,10 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   function cancel(b) {
     update(b.id, { status: "cancelled" });
     notify("ยกเลิกรายการแล้ว");
+  }
+  function deleteHistoryItem(b) {
+    setBookings(bookings.filter(x => x.id !== b.id));
+    notify("ลบประวัติรายการแล้ว");
   }
   function markReturned(b, qtyReturned) {
     const total = b.qty || 1;
@@ -1377,6 +1396,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         onReject={() => reject(b)}
         onCancel={() => cancel(b)}
         onReturn={(qty) => markReturned(b, qty)}
+        onDelete={() => deleteHistoryItem(b)}
       />,
     ];
   }
@@ -1386,8 +1406,8 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
       <TabHeader
         title="จอง/ยืมเครื่องมือ"
         sub={restrictToBooking
-          ? "ขอใช้เครื่องมือแบบเช็คเอาท์ทันทีหรือจองล่วงหน้า — แสดงเฉพาะคำขอของคุณ (ระบบยังเช็คให้ว่าชนกับของคนอื่นไหมตอนสร้างคำขอ)"
-          : "ขอใช้เครื่องมือแบบเช็คเอาท์ทันทีหรือจองล่วงหน้า — ทุกคำขอต้องผ่านการอนุมัติก่อน"}
+          ? "ขอใช้เครื่องมือแบบขอใช้งานทันทีหรือจองล่วงหน้า — แสดงเฉพาะคำขอของคุณ (ระบบยังเช็คให้ว่าชนกับของคนอื่นไหมตอนสร้างคำขอ)"
+          : "ขอใช้เครื่องมือแบบขอใช้งานทันทีหรือจองล่วงหน้า — ทุกคำขอต้องผ่านการอนุมัติก่อน"}
       />
 
       {!restrictToBooking && (
@@ -1405,14 +1425,15 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <ViewTab active={view === "pending"} onClick={() => setView("pending")} label="รออนุมัติ" count={pending.length} />
         <ViewTab active={view === "current"} onClick={() => setView("current")} label="กำลังใช้งาน/จองอยู่" count={current.length} />
-        <ViewTab active={view === "history"} onClick={() => setView("history")} label="ประวัติ" count={history.length} />
+        <ViewTab active={view === "history-equipment"} onClick={() => setView("history-equipment")} label="ประวัติเครื่องมือ" count={historyEquipment.length} />
+        <ViewTab active={view === "history-item"} onClick={() => setView("history-item")} label="ประวัติอุปกรณ์" count={historyItem.length} />
       </div>
 
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเครื่องมือ, ผู้จอง, วัตถุประสงค์..." />
         <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={S.select}>
           <option value="all">ทุกประเภท</option>
-          <option value="checkout">เช็คเอาท์ทันที</option>
+          <option value="checkout">ขอใช้งาน</option>
           <option value="reservation">จองล่วงหน้า</option>
         </select>
         <button style={S.primaryBtn} onClick={() => setShowForm(true)}>
@@ -1420,28 +1441,16 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         </button>
       </Toolbar>
 
-      {view === "history" ? (
-        <>
-          <div style={{ ...S.panelTitle, marginTop: 4 }}>เครื่องมือ</div>
-          <Table
-            cols={bookingCols}
-            rows={history.filter(b => b.assetType !== "item").map(bookingRow)}
-            empty="ยังไม่มีประวัติเครื่องมือ"
-          />
-          <div style={{ ...S.panelTitle, marginTop: 20 }}>อุปกรณ์</div>
-          <Table
-            cols={bookingCols}
-            rows={history.filter(b => b.assetType === "item").map(bookingRow)}
-            empty="ยังไม่มีประวัติอุปกรณ์"
-          />
-        </>
-      ) : (
-        <Table
-          cols={bookingCols}
-          rows={shown.map(bookingRow)}
-          empty={view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ") : "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"}
-        />
-      )}
+      <Table
+        cols={bookingCols}
+        rows={shown.map(bookingRow)}
+        empty={
+          view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
+          : view === "current" ? "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"
+          : view === "history-equipment" ? "ยังไม่มีประวัติเครื่องมือ"
+          : "ยังไม่มีประวัติอุปกรณ์"
+        }
+      />
 
       {showForm && (
         <BookingForm
@@ -1458,9 +1467,10 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   );
 }
 
-function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel, onReturn }) {
+function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel, onReturn, onDelete }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmReturn, setConfirmReturn] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   if (b.status === "pending") {
     return (
       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
@@ -1517,6 +1527,23 @@ function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel,
       </div>
     );
   }
+  if (!isBookingCurrent(b) && b.status !== "pending") {
+    // History item (rejected/cancelled/returned/finished) — offer a way to
+    // clean up old records. This is a real removal, not a status change.
+    if (!canApprove) return null;
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+        <button style={{ ...S.iconBtnSm, color: "var(--red)" }} title="ลบรายการ" onClick={() => setConfirmDelete(true)}><Trash2 size={13} /></button>
+        {confirmDelete && (
+          <ConfirmDialog
+            message={`ต้องการลบประวัติรายการนี้ (${b.equipmentCode || b.equipmentName}) ใช่ไหม การลบไม่สามารถกู้คืนได้`}
+            onCancel={() => setConfirmDelete(false)}
+            onConfirm={() => { setConfirmDelete(false); onDelete(); }}
+          />
+        )}
+      </div>
+    );
+  }
   return null;
 }
 
@@ -1539,14 +1566,14 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const [equipSubType, setEquipSubType] = useState("checkout"); // checkout | reservation
   const [startDate, setStartDate] = useState(todayISO());
   const [endDate, setEndDate] = useState(todayISO());
-  const [dueBackDate, setDueBackDate] = useState("");
+  const [dueBackDate, setDueBackDate] = useState(todayISO());
 
   // ---- item-mode state: { [itemId]: qty } for every checked item ----
   const [itemQtys, setItemQtys] = useState(() =>
     initialAssetType === "item" && initialEquipmentId ? { [initialEquipmentId]: 1 } : {}
   );
   const [itemStartDate, setItemStartDate] = useState(todayISO());
-  const [itemDueBackDate, setItemDueBackDate] = useState("");
+  const [itemDueBackDate, setItemDueBackDate] = useState(todayISO());
 
   // ---- shared ----
   const [requestedBy, setRequestedBy] = useState(fixedRequestedBy || "");
@@ -1571,12 +1598,18 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
     setItemQtys(prev => ({ ...prev, [id]: q }));
   }
 
+  // A checkout's true "occupied until" date is whatever the person entered
+  // as กำหนดคืน — defaulting to the same day (todayISO) so a same-day
+  // checkout+return doesn't falsely block the rest of the calendar. Only
+  // an explicitly-cleared dueBackDate means "no known return date yet",
+  // which is the one case where treating it as open-ended actually makes
+  // sense.
   const equipRange = equipSubType === "checkout"
-    ? { start: startDate || todayISO(), end: "9999-12-31" }
+    ? { start: startDate || todayISO(), end: dueBackDate || "9999-12-31" }
     : { start: startDate || "", end: endDate || startDate || "" };
   const equipConflicts = mode === "equipment" && equipmentId ? findBookingConflicts(bookings, equipmentId, equipRange, null) : [];
 
-  const itemRange = { start: itemStartDate || todayISO(), end: "9999-12-31" };
+  const itemRange = { start: itemStartDate || todayISO(), end: itemDueBackDate || "9999-12-31" };
 
   // Restricted (booking-only) accounts can cancel only their own conflicting
   // requests; admins can manage anyone's. Marking something "returned" is
@@ -1871,11 +1904,19 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
 /* ================= CHEMICALS ================= */
 function ChemicalsTab({ chemicals, setChemicals, notify }) {
   const [q, setQ] = useState("");
+  const [stockFilter, setStockFilter] = useState("all"); // "all" | "low" | "out"
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const filtered = chemicals
     .filter(c => (c.name + (c.formula || "") + (c.brand || "") + c.location).toLowerCase().includes(q.toLowerCase()))
+    .filter(c => {
+      if (stockFilter === "all") return true;
+      const low = c.quantity <= c.minThreshold;
+      if (stockFilter === "out") return c.quantity <= 0;
+      if (stockFilter === "low") return low && c.quantity > 0;
+      return true;
+    })
     .slice()
     .sort((a, b) => alphaCompare(a.name, b.name));
 
@@ -1945,6 +1986,11 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
       <TabHeader title="สต็อคสารเคมี" sub="ติดตามปริมาณคงเหลือและวันหมดอายุ · เรียงตามตัวอักษร" />
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อสาร, ตำแหน่ง..." />
+        <select value={stockFilter} onChange={e => setStockFilter(e.target.value)} style={S.select}>
+          <option value="all">ทุกสถานะคงเหลือ</option>
+          <option value="low">ใกล้หมด</option>
+          <option value="out">หมดแล้ว</option>
+        </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
@@ -2227,11 +2273,19 @@ function ChemicalsImportForm({ onCancel, onImport }) {
 /* ================= CONSUMABLES ================= */
 function ConsumablesTab({ consumables, setConsumables, notify }) {
   const [q, setQ] = useState("");
+  const [stockFilter, setStockFilter] = useState("all"); // "all" | "low" | "out"
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const filtered = consumables
     .filter(s => s.name.toLowerCase().includes(q.toLowerCase()))
+    .filter(s => {
+      if (stockFilter === "all") return true;
+      const low = s.quantity <= s.minThreshold;
+      if (stockFilter === "out") return s.quantity <= 0;
+      if (stockFilter === "low") return low && s.quantity > 0;
+      return true;
+    })
     .slice()
     .sort((a, b) => alphaCompare(a.name, b.name));
 
@@ -2297,6 +2351,11 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
       <TabHeader title="พัสดุสิ้นเปลือง" sub="ติดตามปริมาณคงเหลือของวัสดุใช้แล้วหมดไป" />
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อพัสดุ..." />
+        <select value={stockFilter} onChange={e => setStockFilter(e.target.value)} style={S.select}>
+          <option value="all">ทุกสถานะคงเหลือ</option>
+          <option value="low">ใกล้หมด</option>
+          <option value="out">หมดแล้ว</option>
+        </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
@@ -3337,7 +3396,7 @@ const S = {
   iconBtn: { background: "transparent", border: "1px solid var(--line)", borderRadius: 7, padding: 6, display: "flex" },
   iconBtnSm: { background: "transparent", border: "1px solid var(--line)", borderRadius: 6, padding: 5, display: "flex" },
 
-  cardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px,1fr))", gap: 12, alignItems: "start" },
+  cardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px,1fr))", gap: 12, alignItems: "stretch" },
   eqCard: { background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10, padding: "12px 14px" },
   eqCardTop: { display: "flex", alignItems: "center", gap: 7 },
   eqCode: { fontFamily: "var(--font-mono)", fontSize: 12.5, fontWeight: 500 },
