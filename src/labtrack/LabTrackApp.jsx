@@ -1860,6 +1860,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                   const maxQty = bk.availableNow;
                   const disabled = maxQty <= 0 && !checked;
                   const isSuggested = it.id === initialEquipmentId && !checked;
+                  const showQtyBox = maxQty > 1;
                   return (
                     <div key={it.id} style={{
                       display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
@@ -1872,13 +1873,24 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                         <div style={{ fontSize: 13, fontWeight: 600, cursor: disabled ? "default" : "pointer" }}>{it.name}</div>
                         <div style={{ fontSize: 11, color: bk.color }}>{bk.text}</div>
                       </div>
-                      {checked && maxQty > 1 && (
-                        <input
-                          type="number" min="1" max={maxQty} value={Math.min(itemQtys[it.id], maxQty)}
-                          onChange={(e) => setItemQty(it.id, e.target.value, maxQty)}
-                          style={{ ...S.input, width: 60, padding: "5px 8px", flexShrink: 0 }}
-                        />
-                      )}
+                      {/* Always reserve this slot's space (even when unchecked)
+                          instead of mounting/unmounting the number input —
+                          conditionally adding it used to change the row's
+                          width/height right as you clicked, which could shift
+                          rows below it enough for a fast second click to land
+                          on the wrong row (usually the first one, since a
+                          taller row above pushes everything down). */}
+                      <input
+                        type="number" min="1" max={maxQty || 1}
+                        value={checked ? Math.min(itemQtys[it.id], maxQty) : 1}
+                        onChange={(e) => setItemQty(it.id, e.target.value, maxQty)}
+                        style={{
+                          ...S.input, width: 60, padding: "5px 8px", flexShrink: 0,
+                          visibility: showQtyBox ? "visible" : "hidden",
+                          pointerEvents: checked ? "auto" : "none",
+                        }}
+                        tabIndex={checked && showQtyBox ? 0 : -1}
+                      />
                     </div>
                   );
                 })}
