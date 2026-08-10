@@ -1651,6 +1651,11 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const [itemQtys, setItemQtys] = useState({});
   const [itemStartDate, setItemStartDate] = useState(todayISO());
   const [itemDueBackDate, setItemDueBackDate] = useState(todayISO());
+  const [itemSearch, setItemSearch] = useState("");
+  const filteredItems = useMemo(() =>
+    activeItems.filter(it => it.name.toLowerCase().includes(itemSearch.toLowerCase())),
+    [activeItems, itemSearch]
+  );
 
   // ---- shared ----
   const [requestedBy, setRequestedBy] = useState(fixedRequestedBy || "");
@@ -1908,8 +1913,47 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           <>
             <Field label="เลือกอุปกรณ์ (เลือกได้หลายรายการ)" full plain>
               {activeItems.length === 0 && <div style={{ fontSize: 12.5, color: "var(--muted)" }}>ยังไม่มีข้อมูลอุปกรณ์</div>}
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {activeItems.map(it => {
+
+              {selectedItemIds.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                  {selectedItemIds.map(id => {
+                    const it = activeItems.find(x => x.id === id);
+                    if (!it) return null;
+                    return (
+                      <span
+                        key={id}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 5,
+                          fontSize: 11.5, fontWeight: 600, color: "var(--teal-dark)",
+                          background: "#E9F1FB", border: "1px solid var(--teal)",
+                          borderRadius: 20, padding: "3px 6px 3px 10px",
+                        }}
+                      >
+                        {it.name}{itemQtys[id] && itemQtys[id] !== 1 ? ` ×${itemQtys[id]}` : ""}
+                        <button
+                          type="button"
+                          onClick={() => toggleItem(id)}
+                          style={{ display: "flex", background: "none", border: "none", padding: 2, cursor: "pointer", color: "inherit" }}
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+
+              {activeItems.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <SearchBox value={itemSearch} onChange={setItemSearch} placeholder="ค้นหาชื่ออุปกรณ์..." />
+                </div>
+              )}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto", paddingRight: 2 }}>
+                {activeItems.length > 0 && filteredItems.length === 0 && (
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "8px 0" }}>ไม่พบอุปกรณ์ที่ตรงกับคำค้นหา</div>
+                )}
+                {filteredItems.map(it => {
                   const checked = it.id in itemQtys;
                   const bk = itemSummaries[it.id];
                   // Cap at what's actually still free right now, not the raw
