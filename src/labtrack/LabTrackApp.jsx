@@ -949,7 +949,7 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
         </div>
       )}
       <div style={S.detailHead}>
-        <div>
+        <div style={{ flex: "1 1 220px", minWidth: 0 }}>
           <div style={S.detailName}>{item.name}</div>
           {(item.brand || item.model) && (
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
@@ -963,7 +963,7 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
           )}
           <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"} · {item.type || "-"}</div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
           {item.status === "active" && (
             <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
           )}
@@ -1341,12 +1341,12 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   function update(id, patch) {
     setBookings(bookings.map(b => b.id === id ? { ...b, ...patch } : b));
   }
-  function approve(b) {
-    update(b.id, { status: "approved", approvedBy: actorName || "-", approvedAt: new Date().toISOString() });
+  function approve(b, note) {
+    update(b.id, { status: "approved", approvedBy: actorName || "-", approvedAt: new Date().toISOString(), approvalNote: note || "" });
     notify("อนุมัติคำขอแล้ว");
   }
-  function reject(b) {
-    update(b.id, { status: "rejected", approvedBy: actorName || "-", approvedAt: new Date().toISOString() });
+  function reject(b, note) {
+    update(b.id, { status: "rejected", approvedBy: actorName || "-", approvedAt: new Date().toISOString(), approvalNote: note || "" });
     notify("ปฏิเสธคำขอแล้ว");
   }
   function cancel(b) {
@@ -1383,9 +1383,9 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   function bookingRow(b) {
     const isReservation = b.type === "reservation";
     return [
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          <span style={{ fontWeight: 600 }}>{b.equipmentCode || b.equipmentName}</span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600, wordBreak: "break-word" }}>{b.equipmentCode || b.equipmentName}</span>
           <Tag color={b.assetType === "item" ? "#7A4FC2" : "var(--teal)"}>{b.assetType === "item" ? "อุปกรณ์" : "เครื่องมือ"}</Tag>
           {b.offSite && <Tag color="var(--amber)">นอกสถานที่</Tag>}
         </div>
@@ -1421,13 +1421,18 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         {b.status !== "pending" && b.approvedBy && (
           <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>โดย {b.approvedBy}</div>
         )}
+        {b.approvalNote && (
+          <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2, fontStyle: "italic", wordBreak: "break-word" }}>
+            หมายเหตุ: {b.approvalNote}
+          </div>
+        )}
       </div>,
       <BookingActions
         booking={b}
         canApprove={!restrictToBooking}
         currentUsername={currentUsername}
-        onApprove={() => approve(b)}
-        onReject={() => reject(b)}
+        onApprove={(note) => approve(b, note)}
+        onReject={(note) => reject(b, note)}
         onCancel={() => cancel(b)}
         onReturn={(qty) => markReturned(b, qty)}
         onDelete={() => deleteHistoryItem(b)}
@@ -1506,13 +1511,14 @@ function BookingActions({ booking: b, canApprove, currentUsername, onApprove, on
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmReturn, setConfirmReturn] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [approvalAction, setApprovalAction] = useState(null); // "approve" | "reject" | null
   if (b.status === "pending") {
     return (
       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
         {canApprove && (
           <>
-            <button style={{ ...S.iconBtnSm, color: "var(--green)" }} title="อนุมัติ" onClick={onApprove}><CheckCircle2 size={14} /></button>
-            <button style={{ ...S.iconBtnSm, color: "var(--red)" }} title="ปฏิเสธ" onClick={onReject}><XCircle size={14} /></button>
+            <button style={{ ...S.iconBtnSm, color: "var(--green)" }} title="อนุมัติ" onClick={() => setApprovalAction("approve")}><CheckCircle2 size={14} /></button>
+            <button style={{ ...S.iconBtnSm, color: "var(--red)" }} title="ปฏิเสธ" onClick={() => setApprovalAction("reject")}><XCircle size={14} /></button>
           </>
         )}
         <button style={S.iconBtnSm} title="ยกเลิกคำขอ" onClick={() => setConfirmCancel(true)}><Trash2 size={13} /></button>
@@ -1522,6 +1528,18 @@ function BookingActions({ booking: b, canApprove, currentUsername, onApprove, on
             confirmLabel="ยกเลิกคำขอ"
             onCancel={() => setConfirmCancel(false)}
             onConfirm={() => { setConfirmCancel(false); onCancel(); }}
+          />
+        )}
+        {approvalAction && (
+          <ApprovalDialog
+            booking={b}
+            action={approvalAction}
+            onCancel={() => setApprovalAction(null)}
+            onConfirm={(note) => {
+              const action = approvalAction;
+              setApprovalAction(null);
+              if (action === "approve") onApprove(note); else onReject(note);
+            }}
           />
         )}
       </div>
@@ -2182,7 +2200,7 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
   return (
     <Modal onClose={onClose} title={item.name} wide>
       <div style={S.detailHead}>
-        <div>
+        <div style={{ flex: "1 1 220px", minWidth: 0 }}>
           <div style={S.detailName}>{item.name}</div>
           {(item.formula || item.brand) && (
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
@@ -2191,7 +2209,7 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
           )}
           <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"}</div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
           <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
         </div>
@@ -2558,8 +2576,8 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
   return (
     <Modal onClose={onClose} title={item.name} wide>
       <div style={S.detailHead}>
-        <div style={S.detailName}>{item.name}</div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ ...S.detailName, flex: "1 1 220px", minWidth: 0 }}>{item.name}</div>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
           <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
         </div>
@@ -3162,8 +3180,8 @@ function Modal({ title, children, onClose, wide }) {
     <div style={S.modalOverlay} onClick={onClose}>
       <div style={{ ...S.modalBox, maxWidth: wide ? 620 : 480 }} onClick={e => e.stopPropagation()}>
         <div style={S.modalHead}>
-          <span style={S.modalTitle}>{title}</span>
-          <button style={S.iconBtn} onClick={onClose}><X size={16} /></button>
+          <span style={{ ...S.modalTitle, flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+          <button style={{ ...S.iconBtn, flexShrink: 0 }} onClick={onClose}><X size={16} /></button>
         </div>
         <div style={{ padding: "16px 20px 20px" }}>{children}</div>
       </div>
@@ -3314,6 +3332,64 @@ function ReturnQtyDialog({ booking, onCancel, onConfirm }) {
   );
 }
 
+
+// Confirmation step before approving/rejecting a booking request, with an
+// optional (but always-shown) notes field — e.g. an approver's condition,
+// or a rejecter's reason — stored on the booking as approvalNote so it's
+// visible to the requester afterwards.
+function ApprovalDialog({ booking, action, onCancel, onConfirm }) {
+  const [note, setNote] = useState("");
+  const isApprove = action === "approve";
+  return (
+    <div
+      onClick={(e) => { e.stopPropagation(); onCancel(); }}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(18,37,59,0.4)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 12, border: "1px solid var(--line)",
+          padding: "20px 22px", width: "100%", maxWidth: 380, boxShadow: "0 12px 32px rgba(18,37,59,0.2)",
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>
+          {isApprove ? "ยืนยันอนุมัติคำขอ" : "ยืนยันปฏิเสธคำขอ"}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+          {booking.equipmentCode || booking.equipmentName} · ผู้ขอ {booking.requestedBy || "-"}
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>
+            หมายเหตุ{isApprove ? " (ถ้ามี)" : " (เช่น เหตุผลที่ปฏิเสธ)"}
+          </label>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={3}
+            placeholder={isApprove ? "ระบุหมายเหตุเพิ่มเติม..." : "ระบุเหตุผลที่ปฏิเสธ..."}
+            style={{ ...S.input, marginTop: 6, resize: "vertical", fontFamily: "inherit" }}
+          />
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+          <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+          <button
+            style={{
+              ...S.primaryBtn,
+              background: isApprove ? "var(--green)" : "var(--red)",
+              borderColor: isApprove ? "var(--green)" : "var(--red)",
+            }}
+            onClick={() => onConfirm(note.trim())}
+          >
+            {isApprove ? "ยืนยันอนุมัติ" : "ยืนยันปฏิเสธ"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Quick "take this out of service" action — sets status to maintenance with
 // a reason, without going through the full edit form. Used from both
@@ -3533,8 +3609,8 @@ const S = {
   fieldLabel: { fontSize: 11.5, color: "var(--muted)", fontWeight: 500 },
   input: { border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px", fontSize: 13, width: "100%" },
 
-  detailHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between" },
-  detailName: { fontSize: 15, fontWeight: 600 },
+  detailHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 10 },
+  detailName: { fontSize: 15, fontWeight: 600, wordBreak: "break-word" },
   notesBox: { fontSize: 12.5, color: "var(--muted)", background: "#F5F8F7", borderRadius: 8, padding: "8px 10px", marginTop: 8 },
   tag: { fontSize: 11, fontWeight: 600, border: "1px solid", borderRadius: 20, padding: "3px 9px" },
   activityRow: { display: "flex", gap: 12, borderBottom: "1px solid var(--line)", paddingBottom: 8 },
