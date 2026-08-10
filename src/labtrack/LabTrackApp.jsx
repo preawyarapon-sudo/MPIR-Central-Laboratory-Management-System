@@ -861,6 +861,8 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDeleteAct, setConfirmDeleteAct] = useState(null);
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
   const bk = equipmentBookingSummary(item.id, bookings);
@@ -915,9 +917,16 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
         <div style={{ display: "flex", gap: 8 }}>
           <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
-          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={onDelete}><Trash2 size={14} /></button>
+          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
         </div>
       </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          message={`ต้องการลบเครื่องมือ ${item.code} · ${item.name} ใช่ไหม การลบไม่สามารถกู้คืนได้`}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => { setConfirmDelete(false); onDelete(); }}
+        />
+      )}
       <div style={{ display: "flex", gap: 10, margin: "12px 0 6px", flexWrap: "wrap" }}>
         <Tag color={item.status === "active" ? "var(--green)" : item.status === "maintenance" ? "var(--amber)" : "var(--muted)"}>
           {item.status === "active" ? "ใช้งานอยู่" : item.status === "maintenance" ? "ซ่อมบำรุง" : "ปิดใช้งาน"}
@@ -974,11 +983,18 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
             </div>
             <div style={{ display: "flex", gap: 4 }}>
               <button style={S.iconBtnSm} onClick={() => setEditingAct(a)}><Pencil size={12} /></button>
-              <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => onDeleteActivity(a.id)}><Trash2 size={12} /></button>
+              <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteAct(a)}><Trash2 size={12} /></button>
             </div>
           </div>
         ))}
       </div>
+      {confirmDeleteAct && (
+        <ConfirmDialog
+          message={`ต้องการลบกิจกรรม "${confirmDeleteAct.detail || confirmDeleteAct.type}" ใช่ไหม การลบไม่สามารถกู้คืนได้`}
+          onCancel={() => setConfirmDeleteAct(null)}
+          onConfirm={() => { const id = confirmDeleteAct.id; setConfirmDeleteAct(null); onDeleteActivity(id); }}
+        />
+      )}
 
       {showAct && (
         <ActivityForm onCancel={() => setShowAct(false)} onSave={(act) => { onAddActivity(act); setShowAct(false); }} />
@@ -1305,6 +1321,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
 }
 
 function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel, onReturn }) {
+  const [confirmCancel, setConfirmCancel] = useState(false);
   if (b.status === "pending") {
     return (
       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
@@ -1314,7 +1331,15 @@ function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel,
             <button style={{ ...S.iconBtnSm, color: "var(--red)" }} title="ปฏิเสธ" onClick={onReject}><XCircle size={14} /></button>
           </>
         )}
-        <button style={S.iconBtnSm} title="ยกเลิกคำขอ" onClick={onCancel}><Trash2 size={13} /></button>
+        <button style={S.iconBtnSm} title="ยกเลิกคำขอ" onClick={() => setConfirmCancel(true)}><Trash2 size={13} /></button>
+        {confirmCancel && (
+          <ConfirmDialog
+            message={`ต้องการยกเลิกคำขอ ${b.equipmentCode || b.equipmentName} ใช่ไหม`}
+            confirmLabel="ยกเลิกคำขอ"
+            onCancel={() => setConfirmCancel(false)}
+            onConfirm={() => { setConfirmCancel(false); onCancel(); }}
+          />
+        )}
       </div>
     );
   }
@@ -1331,7 +1356,15 @@ function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel,
   if (b.status === "approved" && isBookingCurrent(b)) {
     return (
       <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-        <button style={S.iconBtnSm} title="ยกเลิกการจอง" onClick={onCancel}><Trash2 size={13} /></button>
+        <button style={S.iconBtnSm} title="ยกเลิกการจอง" onClick={() => setConfirmCancel(true)}><Trash2 size={13} /></button>
+        {confirmCancel && (
+          <ConfirmDialog
+            message={`ต้องการยกเลิกการจอง ${b.equipmentCode || b.equipmentName} ใช่ไหม`}
+            confirmLabel="ยกเลิกการจอง"
+            onCancel={() => setConfirmCancel(false)}
+            onConfirm={() => { setConfirmCancel(false); onCancel(); }}
+          />
+        )}
       </div>
     );
   }
@@ -1397,6 +1430,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   // admin/lab-only regardless of whose request it is.
   const canCancelBooking = (c) => !!setBookings && (isAdmin || c.requestedBy === fixedRequestedBy);
   const canReturnBooking = () => !!setBookings && isAdmin;
+  const [confirmCancelConflict, setConfirmCancelConflict] = useState(null);
   function cancelConflict(c) {
     setBookings(bookings.map(b => b.id === c.id ? { ...b, status: "cancelled" } : b));
   }
@@ -1422,7 +1456,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
               </span>
               <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                 {c.status === "pending" && canCancelBooking(c) && (
-                  <button type="button" onClick={() => cancelConflict(c)} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer", background: "transparent", color: "var(--red)", border: "1px solid var(--red)" }}>
+                  <button type="button" onClick={() => setConfirmCancelConflict(c)} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer", background: "transparent", color: "var(--red)", border: "1px solid var(--red)" }}>
                     ยกเลิก
                   </button>
                 )}
@@ -1636,6 +1670,14 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
       )}
 
       <ModalFooter onCancel={onCancel} onSave={submit} disabled={!canSave} />
+      {confirmCancelConflict && (
+        <ConfirmDialog
+          message={`ต้องการยกเลิกคำขอของ ${confirmCancelConflict.requestedBy || "-"} (${confirmCancelConflict.equipmentCode || confirmCancelConflict.equipmentName}) ใช่ไหม`}
+          confirmLabel="ยกเลิกคำขอ"
+          onCancel={() => setConfirmCancelConflict(null)}
+          onConfirm={() => { cancelConflict(confirmCancelConflict); setConfirmCancelConflict(null); }}
+        />
+      )}
     </Modal>
   );
 }
@@ -1770,6 +1812,8 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
   const [showForm, setShowForm] = useState(null); // "receive" | "withdraw" | null
   const [editingTx, setEditingTx] = useState(null);
   const [historyFilter, setHistoryFilter] = useState("all");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDeleteTx, setConfirmDeleteTx] = useState(null);
   const low = item.quantity <= item.minThreshold;
   const exp = earliestExpiry(item);
   const days = daysUntil(exp);
@@ -1810,9 +1854,16 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
-          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={onDelete}><Trash2 size={14} /></button>
+          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
         </div>
       </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          message={`ต้องการลบสารเคมี ${item.name} ใช่ไหม การลบไม่สามารถกู้คืนได้`}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => { setConfirmDelete(false); onDelete(); }}
+        />
+      )}
       <div style={{ display: "flex", gap: 10, margin: "12px 0 6px", flexWrap: "wrap" }}>
         <Tag color={low ? (item.quantity <= 0 ? "var(--red)" : "var(--amber)") : "var(--green)"}>
           คงเหลือ {item.quantity} {item.unit} {low ? (item.quantity <= 0 ? "· หมด" : "· ใกล้หมด") : ""}
@@ -1856,12 +1907,20 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
               </div>
               <div style={{ display: "flex", gap: 4 }}>
                 <button style={S.iconBtnSm} onClick={() => setEditingTx(t)}><Pencil size={12} /></button>
-                <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => onDeleteTransaction(t.id)}><Trash2 size={12} /></button>
+                <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteTx(t)}><Trash2 size={12} /></button>
               </div>
             </div>
           ))}
         </div>
       </div>
+
+      {confirmDeleteTx && (
+        <ConfirmDialog
+          message="ต้องการลบรายการรับเข้า/เบิกใช้นี้ใช่ไหม การลบไม่สามารถกู้คืนได้"
+          onCancel={() => setConfirmDeleteTx(null)}
+          onConfirm={() => { const id = confirmDeleteTx.id; setConfirmDeleteTx(null); onDeleteTransaction(id); }}
+        />
+      )}
 
       {showForm && (
         <ChemicalTxForm
@@ -2119,6 +2178,8 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
   const [showForm, setShowForm] = useState(null); // "receive" | "withdraw" | null
   const [editingTx, setEditingTx] = useState(null); // transaction being edited, or null
   const [historyFilter, setHistoryFilter] = useState("all"); // "all" | "receive" | "withdraw"
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDeleteTx, setConfirmDeleteTx] = useState(null);
   const low = item.quantity <= item.minThreshold;
   const txs = item.transactions || [];
   const receiveTxs = txs.filter(t => t.type === "receive");
@@ -2148,9 +2209,16 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
         <div style={S.detailName}>{item.name}</div>
         <div style={{ display: "flex", gap: 8 }}>
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
-          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={onDelete}><Trash2 size={14} /></button>
+          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
         </div>
       </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          message={`ต้องการลบพัสดุ ${item.name} ใช่ไหม การลบไม่สามารถกู้คืนได้`}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => { setConfirmDelete(false); onDelete(); }}
+        />
+      )}
       <div style={{ display: "flex", gap: 10, margin: "12px 0 6px", flexWrap: "wrap" }}>
         <Tag color={low ? (item.quantity <= 0 ? "var(--red)" : "var(--amber)") : "var(--green)"}>
           คงเหลือ {item.quantity} {item.unit} {low ? (item.quantity <= 0 ? "· หมด" : "· ใกล้หมด") : ""}
@@ -2191,12 +2259,20 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
               </div>
               <div style={{ display: "flex", gap: 4 }}>
                 <button style={S.iconBtnSm} onClick={() => setEditingTx(t)}><Pencil size={12} /></button>
-                <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => onDeleteTransaction(t.id)}><Trash2 size={12} /></button>
+                <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteTx(t)}><Trash2 size={12} /></button>
               </div>
             </div>
           ))}
         </div>
       </div>
+
+      {confirmDeleteTx && (
+        <ConfirmDialog
+          message="ต้องการลบรายการรับเข้า/เบิกใช้นี้ใช่ไหม การลบไม่สามารถกู้คืนได้"
+          onCancel={() => setConfirmDeleteTx(null)}
+          onConfirm={() => { const id = confirmDeleteTx.id; setConfirmDeleteTx(null); onDeleteTransaction(id); }}
+        />
+      )}
 
       {showForm && (
         <ConsumableTxForm
@@ -2723,11 +2799,54 @@ function RowTitle({ text, beacon }) {
   </div>;
 }
 function Mono({ children }) { return <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{children}</span>; }
-function RowActions({ onEdit, onDelete }) {
-  return <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-    <button style={S.iconBtnSm} onClick={onEdit}><Pencil size={13} /></button>
-    <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={onDelete}><Trash2 size={13} /></button>
-  </div>;
+function RowActions({ onEdit, onDelete, confirmMessage = "ต้องการลบรายการนี้ใช่ไหม การลบไม่สามารถกู้คืนได้" }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+      <button style={S.iconBtnSm} onClick={onEdit}><Pencil size={13} /></button>
+      <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirming(true)}><Trash2 size={13} /></button>
+      {confirming && (
+        <ConfirmDialog
+          message={confirmMessage}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => { setConfirming(false); onDelete(); }}
+        />
+      )}
+    </div>
+  );
+}
+// Generic "are you sure?" overlay — used before any destructive action
+// (delete, cancel) so a stray click can't silently remove data.
+function ConfirmDialog({ title = "ยืนยันการทำรายการ", message, confirmLabel = "ลบเลย", danger = true, onConfirm, onCancel }) {
+  return (
+    <div
+      onClick={(e) => { e.stopPropagation(); onCancel(); }}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(18,37,59,0.4)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 12, border: "1px solid var(--line)",
+          padding: "20px 22px", width: "100%", maxWidth: 340, boxShadow: "0 12px 32px rgba(18,37,59,0.2)",
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>{title}</div>
+        <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5, marginBottom: 18 }}>{message}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+          <button
+            style={{ ...S.primaryBtn, background: danger ? "var(--red)" : undefined, borderColor: danger ? "var(--red)" : undefined }}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ================= styles ================= */
