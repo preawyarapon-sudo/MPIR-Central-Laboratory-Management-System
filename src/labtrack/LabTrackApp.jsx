@@ -1860,7 +1860,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           </>
         ) : (
           <>
-            <Field label="เลือกอุปกรณ์ (เลือกได้หลายรายการ)" full>
+            <Field label="เลือกอุปกรณ์ (เลือกได้หลายรายการ)" full plain>
               {activeItems.length === 0 && <div style={{ fontSize: 12.5, color: "var(--muted)" }}>ยังไม่มีข้อมูลอุปกรณ์</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {activeItems.map(it => {
@@ -2912,7 +2912,7 @@ function PurchaseRequestForm({ item, onCancel, onSave }) {
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="เลขที่ PR"><input style={S.input} value={f.prNo} onChange={set("prNo")} placeholder="เช่น PR-2569-0045" /></Field>
         <Field label="วันที่ออก PR"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
-        <Field label="หมวดหมู่ (เลือกได้มากกว่า 1 ถ้าสั่งรวมกัน)" full>
+        <Field label="หมวดหมู่ (เลือกได้มากกว่า 1 ถ้าสั่งรวมกัน)" full plain>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "4px 0" }}>
             {Object.entries(PR_CATEGORY_LABEL).map(([k, v]) => (
               <label key={k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
@@ -3112,10 +3112,21 @@ function SearchBox({ value, onChange, placeholder }) {
 function EmptyState({ text, small }) {
   return <div style={{ ...S.emptyState, padding: small ? "16px 0" : "40px 0" }}>{text}</div>;
 }
-function Field({ label, children, full }) {
-  return <label style={{ display: "flex", flexDirection: "column", gap: 5, gridColumn: full ? "1 / -1" : "auto" }}>
+function Field({ label, children, full, plain }) {
+  // Fields normally render as a <label> so clicking the caption focuses the
+  // single input inside — a nice a11y/UX default. But when a field contains
+  // MULTIPLE form controls (e.g. a list of checkboxes), a native <label>
+  // forwards any click that doesn't land directly on a control to the
+  // FIRST form control inside it. That silently double-toggles/cross-checks
+  // items (click item A -> A's own handler fires AND the label forwards a
+  // synthetic click to the first checkbox, e.g. item A again -> cancels
+  // out; click item B -> B toggles correctly AND the first checkbox also
+  // gets toggled). Pass `plain` for any field with more than one control so
+  // it renders a <div> instead and skips that implicit forwarding.
+  const Tag = plain ? "div" : "label";
+  return <Tag style={{ display: "flex", flexDirection: "column", gap: 5, gridColumn: full ? "1 / -1" : "auto" }}>
     <span style={S.fieldLabel}>{label}</span>{children}
-  </label>;
+  </Tag>;
 }
 function Modal({ title, children, onClose, wide }) {
   return (
