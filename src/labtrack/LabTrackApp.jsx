@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
   Clock, ChevronRight, MapPin, CalendarClock, ClipboardList,
-  CalendarCheck, XCircle, Undo2, Box
+  CalendarCheck, XCircle, Undo2, Box, ExternalLink
 } from "lucide-react";
 
 /* ---------- helpers ---------- */
@@ -933,8 +933,20 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
   return (
     <Modal onClose={onClose} title={item.code} wide>
       {item.imageUrl && (
-        <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-          style={{ width: "100%", maxHeight: 260, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, marginBottom: 14 }} />
+        <div style={{ position: "relative", marginBottom: 14 }}>
+          <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+            style={{ width: "100%", maxHeight: 260, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
+          <a
+            href={item.imageUrl} target="_blank" rel="noopener noreferrer"
+            style={{
+              position: "absolute", top: 10, right: 10, display: "flex", alignItems: "center", gap: 5,
+              background: "rgba(18,37,59,0.75)", color: "#fff", fontSize: 12, fontWeight: 600,
+              padding: "6px 10px", borderRadius: 8, textDecoration: "none",
+            }}
+          >
+            <ExternalLink size={13} /> เปิดไฟล์รูปภาพ
+          </a>
+        </div>
       )}
       <div style={S.detailHead}>
         <div>
@@ -1886,7 +1898,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                         onChange={(e) => setItemQty(it.id, e.target.value, maxQty)}
                         style={{
                           ...S.input, width: 60, padding: "5px 8px", flexShrink: 0,
-                          visibility: showQtyBox ? "visible" : "hidden",
+                          visibility: checked && showQtyBox ? "visible" : "hidden",
                           pointerEvents: checked ? "auto" : "none",
                         }}
                         tabIndex={checked && showQtyBox ? 0 : -1}
