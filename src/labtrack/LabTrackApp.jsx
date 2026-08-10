@@ -207,7 +207,7 @@ const NAV = [
   { key: "reports", label: "รายงาน", icon: FileDown },
 ];
 
-export default function App({ restrictToBooking = false, currentUsername = "" }) {
+export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
   const [tab, setTab] = useState(restrictToBooking ? "bookings" : "dashboard");
   const [loading, setLoading] = useState(true);
   const [equipment, setEquipment] = useState([]);
@@ -330,7 +330,7 @@ export default function App({ restrictToBooking = false, currentUsername = "" })
         <main style={S.main} className="ltMain">
           {restrictToBooking ? (
             <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} items={items} notify={notify}
-              restrictToBooking currentUsername={currentUsername} />
+              restrictToBooking currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           ) : (
             <>
               {tab === "dashboard" && (
@@ -1276,7 +1276,7 @@ function ItemForm({ item, onCancel, onSave }) {
 // logged-in role gets to see (see restrictToBooking below). The name typed
 // into "ชื่อผู้ดำเนินการ" is recorded on the booking for an audit trail of
 // who approved/rejected/returned what.
-function BookingsTab({ bookings, setBookings, equipment, items = [], notify, restrictToBooking = false, currentUsername = "" }) {
+function BookingsTab({ bookings, setBookings, equipment, items = [], notify, restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [view, setView] = useState("pending"); // "pending" | "current" | "history-equipment" | "history-item"
@@ -1287,8 +1287,12 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   // (via the conflict warning inside BookingForm, which always checks the
   // full unfiltered list) but the tables here only ever show their own
   // requests — everyone else's requester names/purposes stay out of view.
+  // Matches by login username (requestedByUsername), not the display name
+  // shown in requestedBy — falls back to requestedBy for older records
+  // saved before this field existed, so nothing "disappears" for existing
+  // bookings.
   const ownOnly = restrictToBooking
-    ? bookings.filter(b => b.requestedBy === currentUsername)
+    ? bookings.filter(b => (b.requestedByUsername || b.requestedBy) === currentUsername)
     : bookings;
 
   const withMeta = (list) => list.filter(b => {
@@ -1463,6 +1467,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
           bookings={bookings}
           setBookings={setBookings}
           fixedRequestedBy={restrictToBooking ? currentUsername : null}
+          fixedRequestedByName={restrictToBooking ? currentDisplayName : null}
           onCancel={() => setShowForm(false)}
           onSave={create}
         />
@@ -1502,7 +1507,7 @@ function BookingActions({ booking: b, canApprove, currentUsername, onApprove, on
     // person who requested it themselves (self-service) — but returning an
     // อุปกรณ์ (item) stays lab/admin-only, since quantity accuracy matters
     // more there (see ReturnQtyDialog) and needs a staff check.
-    const isOwnRequest = !isItem && currentUsername && b.requestedBy === currentUsername;
+    const isOwnRequest = !isItem && currentUsername && (b.requestedByUsername || b.requestedBy) === currentUsername;
     const canMarkFinished = canApprove || isOwnRequest;
     if (!canMarkFinished) return null;
     return (
@@ -1555,7 +1560,7 @@ function BookingActions({ booking: b, canApprove, currentUsername, onApprove, on
   return null;
 }
 
-function BookingForm({ equipment, items = [], bookings, setBookings, initialEquipmentId, initialAssetType, fixedRequestedBy, onCancel, onSave }) {
+function BookingForm({ equipment, items = [], bookings, setBookings, initialEquipmentId, initialAssetType, fixedRequestedBy, fixedRequestedByName, onCancel, onSave }) {
   // Air conditioners are fixed-installed, not something anyone checks out —
   // excluded from the equipment picker entirely. Anything under
   // maintenance/disabled (status !== "active") is also excluded — it's not
@@ -1596,10 +1601,15 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const selectedItemIds = Object.keys(itemQtys).filter(id => itemQtys[id] > 0);
 
   function toggleItem(id) {
+    // TEMPORARY diagnostic — open DevTools (F12) > Console before clicking
+    // an item card, then check what gets logged. Safe to leave in; remove
+    // once the reported bug is confirmed fixed.
+    console.log("[toggleItem] called with id:", id, "current itemQtys:", itemQtys);
     setItemQtys(prev => {
       const next = { ...prev };
       if (next[id]) delete next[id];
       else next[id] = 1;
+      console.log("[toggleItem] new itemQtys:", next);
       return next;
     });
   }
@@ -1624,8 +1634,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   // Restricted (booking-only) accounts can cancel only their own conflicting
   // requests; admins can manage anyone's. Marking something "returned" is
   // admin/lab-only regardless of whose request it is.
-  const canCancelBooking = (c) => !!setBookings && (isAdmin || c.requestedBy === fixedRequestedBy);
-  const canReturnBooking = (c) => !!setBookings && (isAdmin || (c.assetType !== "item" && c.requestedBy === fixedRequestedBy));
+  const canCancelBooking = (c) => !!setBookings && (isAdmin || (c.requestedByUsername || c.requestedBy) === fixedRequestedBy);
+  const canReturnBooking = (c) => !!setBookings && (isAdmin || (c.assetType !== "item" && (c.requestedByUsername || c.requestedBy) === fixedRequestedBy));
   const [confirmCancelConflict, setConfirmCancelConflict] = useState(null);
   const [confirmReturnConflict, setConfirmReturnConflict] = useState(null);
   function cancelConflict(c) {
@@ -1691,6 +1701,13 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
       : (selectedItemIds.length > 0 && itemStartDate)
   );
 
+  // requestedBy is what gets shown everywhere (real name when we have one);
+  // requestedByUsername is the stable login identity used for "only show my
+  // own bookings" and self-service permission checks — kept separate so
+  // renaming/display never breaks that matching.
+  const displayRequestedBy = (fixedRequestedByName || requestedBy).trim();
+  const requestedByUsername = fixedRequestedBy || null;
+
   function submit() {
     if (mode === "equipment") {
       if (!eq) return;
@@ -1703,7 +1720,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
         startDate,
         endDate: equipSubType === "reservation" ? endDate : null,
         dueBackDate: equipSubType === "checkout" ? dueBackDate : "",
-        requestedBy: requestedBy.trim(),
+        requestedBy: displayRequestedBy,
+        requestedByUsername,
         purpose: purpose.trim(),
         offSite,
         offSiteLocation: offSite ? offSiteLocation.trim() : "",
@@ -1721,7 +1739,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           startDate: itemStartDate,
           endDate: null,
           dueBackDate: itemDueBackDate,
-          requestedBy: requestedBy.trim(),
+          requestedBy: displayRequestedBy,
+          requestedByUsername,
           purpose: purpose.trim(),
           offSite,
           offSiteLocation: offSite ? offSiteLocation.trim() : "",
@@ -1844,7 +1863,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
 
         <Field label="ผู้จอง/ยืม">
           {fixedRequestedBy ? (
-            <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", display: "flex", alignItems: "center" }}>{fixedRequestedBy}</div>
+            <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", display: "flex", alignItems: "center" }}>{fixedRequestedByName || fixedRequestedBy}</div>
           ) : (
             <input style={S.input} value={requestedBy} onChange={(e) => setRequestedBy(e.target.value)} placeholder="ชื่อ-นามสกุล" />
           )}
