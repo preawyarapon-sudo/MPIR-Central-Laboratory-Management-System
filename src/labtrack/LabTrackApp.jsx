@@ -1565,10 +1565,28 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   // excluded from the equipment picker entirely. Anything under
   // maintenance/disabled (status !== "active") is also excluded — it's not
   // available to book until re-enabled.
-  const activeEquipment = equipment
-    .filter(e => e.status === "active" && e.type !== "เครื่องปรับอากาศ")
-    .slice().sort((a, b) => alphaCompare(a.code, b.code));
-  const activeItems = items.filter(i => i.status === "active").slice().sort((a, b) => alphaCompare(a.name, b.name));
+  //
+  // Memoized: without this, filtering/sorting the full equipment/items
+  // lists (and — worse — scanning the *entire* bookings array once per
+  // item via itemBookingSummary below) reran on every keystroke in this
+  // form (typing a purpose, picking a date, etc.), not just when the
+  // underlying data changed. On a lab with a lot of history that shows up
+  // as clicks not visibly registering right away — exactly the "clicking
+  // one item also selects another" symptom this was mistaken for.
+  const activeEquipment = useMemo(() =>
+    equipment.filter(e => e.status === "active" && e.type !== "เครื่องปรับอากาศ")
+      .slice().sort((a, b) => alphaCompare(a.code, b.code)),
+    [equipment]
+  );
+  const activeItems = useMemo(() =>
+    items.filter(i => i.status === "active").slice().sort((a, b) => alphaCompare(a.name, b.name)),
+    [items]
+  );
+  const itemSummaries = useMemo(() => {
+    const map = {};
+    activeItems.forEach(it => { map[it.id] = itemBookingSummary(it.id, bookings, it.totalQty); });
+    return map;
+  }, [activeItems, bookings]);
 
   const isAdmin = !fixedRequestedBy;
 
@@ -1601,15 +1619,10 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const selectedItemIds = Object.keys(itemQtys).filter(id => itemQtys[id] > 0);
 
   function toggleItem(id) {
-    // TEMPORARY diagnostic — open DevTools (F12) > Console before clicking
-    // an item card, then check what gets logged. Safe to leave in; remove
-    // once the reported bug is confirmed fixed.
-    console.log("[toggleItem] called with id:", id, "current itemQtys:", itemQtys);
     setItemQtys(prev => {
       const next = { ...prev };
       if (next[id]) delete next[id];
       else next[id] = 1;
-      console.log("[toggleItem] new itemQtys:", next);
       return next;
     });
   }
@@ -1630,6 +1643,21 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const equipConflicts = mode === "equipment" && equipmentId ? findBookingConflicts(bookings, equipmentId, equipRange, null) : [];
 
   const itemRange = { start: itemStartDate || todayISO(), end: itemDueBackDate || "9999-12-31" };
+
+  // Computed once per relevant change, then reused for both the per-item
+  // conflict boxes below and the "ยังส่งคำขอได้" hint — previously this ran
+  // findBookingConflicts (which scans the whole bookings array) twice for
+  // the same items on every render.
+  const itemConflictsList = mode === "item"
+    ? selectedItemIds.map(id => ({
+        id,
+        item: items.find(i => i.id === id),
+        conflicts: findBookingConflicts(bookings, id, itemRange, null),
+      }))
+    : [];
+  const hasAnyConflict = mode === "equipment"
+    ? equipConflicts.length > 0
+    : itemConflictsList.some(x => x.conflicts.length > 0);
 
   // Restricted (booking-only) accounts can cancel only their own conflicting
   // requests; admins can manage anyone's. Marking something "returned" is
@@ -1825,7 +1853,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {activeItems.map(it => {
                   const checked = !!itemQtys[it.id];
-                  const bk = itemBookingSummary(it.id, bookings, it.totalQty);
+                  const bk = itemSummaries[it.id];
                   // Cap at what's actually still free right now, not the raw
                   // total — otherwise the form would let people request more
                   // than physically exists once some units are already out.
@@ -1889,23 +1917,19 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
       {mode === "equipment" && (
         <ConflictBox conflicts={equipConflicts} assetKey={equipmentId} capacityNote="" />
       )}
-      {mode === "item" && selectedItemIds.map(id => {
-        const it = items.find(i => i.id === id);
-        const conflicts = findBookingConflicts(bookings, id, itemRange, null);
-        return (
-          <div key={id}>
-            {conflicts.length > 0 && (
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--ink)", marginTop: 10 }}>{it?.name}</div>
-            )}
-            <ConflictBox
-              conflicts={conflicts}
-              assetKey={id}
-              capacityNote={it?.totalQty > 1 ? ` — มีทั้งหมด ${it.totalQty} ชิ้น` : ""}
-            />
-          </div>
-        );
-      })}
-      {((mode === "equipment" && equipConflicts.length > 0) || (mode === "item" && selectedItemIds.some(id => findBookingConflicts(bookings, id, itemRange, null).length > 0))) && (
+      {mode === "item" && itemConflictsList.map(({ id, item: it, conflicts }) => (
+        <div key={id}>
+          {conflicts.length > 0 && (
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--ink)", marginTop: 10 }}>{it?.name}</div>
+          )}
+          <ConflictBox
+            conflicts={conflicts}
+            assetKey={id}
+            capacityNote={it?.totalQty > 1 ? ` — มีทั้งหมด ${it.totalQty} ชิ้น` : ""}
+          />
+        </div>
+      ))}
+      {hasAnyConflict && (
         <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>
           ยังส่งคำขอได้ — ผู้อนุมัติจะเห็นความชนกันนี้ตอนพิจารณาด้วย
         </div>
