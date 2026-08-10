@@ -135,10 +135,13 @@ function itemBookingSummary(itemId, bookings, totalQty) {
   const checkedOutQty = activeCheckouts.reduce((sum, b) => sum + (Number(b.qty) || 1), 0);
   const availableNow = Math.max(0, qty - checkedOutQty);
   if (availableNow <= 0) {
-    return { busy: true, availableNow: 0, text: `ถูกยืมครบแล้ว (${checkedOutQty}/${qty})`, color: "var(--red)" };
+    return { busy: true, availableNow: 0, text: `ถูกยืมครบแล้วทั้ง ${qty} ชิ้น`, color: "var(--red)" };
   }
   if (checkedOutQty > 0) {
-    return { busy: false, availableNow, text: `เหลือว่าง ${availableNow}/${qty} ชิ้น`, color: "var(--amber)" };
+    // Spelled out as "X ชิ้น จากทั้งหมด Y ชิ้น" rather than "X/Y" — the slash
+    // notation reads like a fraction (e.g. "1/2" looked like "a half") and
+    // was getting misread as the availability, not a count-out-of-total.
+    return { busy: false, availableNow, text: `เหลือว่าง ${availableNow} ชิ้น จากทั้งหมด ${qty} ชิ้น`, color: "var(--amber)" };
   }
   const reservations = live.filter((b) => b.type === "reservation");
   if (reservations.length > 0) {
@@ -1392,6 +1395,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
       <BookingActions
         booking={b}
         canApprove={!restrictToBooking}
+        currentUsername={currentUsername}
         onApprove={() => approve(b)}
         onReject={() => reject(b)}
         onCancel={() => cancel(b)}
@@ -1467,7 +1471,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   );
 }
 
-function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel, onReturn, onDelete }) {
+function BookingActions({ booking: b, canApprove, currentUsername, onApprove, onReject, onCancel, onReturn, onDelete }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmReturn, setConfirmReturn] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1493,10 +1497,14 @@ function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel,
     );
   }
   if (b.status === "approved" && b.type === "checkout" && !b.returnedAt) {
-    // Marking something returned confirms the physical item is actually
-    // back — restricted to lab/admin so a borrower can't just self-certify.
-    if (!canApprove) return null;
     const isItem = b.assetType === "item";
+    // Marking equipment as finished can be done by lab/admin OR by the
+    // person who requested it themselves (self-service) — but returning an
+    // อุปกรณ์ (item) stays lab/admin-only, since quantity accuracy matters
+    // more there (see ReturnQtyDialog) and needs a staff check.
+    const isOwnRequest = !isItem && currentUsername && b.requestedBy === currentUsername;
+    const canMarkFinished = canApprove || isOwnRequest;
+    if (!canMarkFinished) return null;
     return (
       <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
         <button style={S.smallBtn} onClick={() => setConfirmReturn(true)}>
@@ -1569,9 +1577,11 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const [dueBackDate, setDueBackDate] = useState(todayISO());
 
   // ---- item-mode state: { [itemId]: qty } for every checked item ----
-  const [itemQtys, setItemQtys] = useState(() =>
-    initialAssetType === "item" && initialEquipmentId ? { [initialEquipmentId]: 1 } : {}
-  );
+  // Deliberately starts empty even when opened from a specific item's
+  // "จอง/ยืม" button — auto-checking that item used to silently leave it
+  // selected if the person then clicked a *different* item to compare,
+  // making it look like clicking one item "stuck" another one too.
+  const [itemQtys, setItemQtys] = useState({});
   const [itemStartDate, setItemStartDate] = useState(todayISO());
   const [itemDueBackDate, setItemDueBackDate] = useState(todayISO());
 
@@ -1615,7 +1625,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   // requests; admins can manage anyone's. Marking something "returned" is
   // admin/lab-only regardless of whose request it is.
   const canCancelBooking = (c) => !!setBookings && (isAdmin || c.requestedBy === fixedRequestedBy);
-  const canReturnBooking = () => !!setBookings && isAdmin;
+  const canReturnBooking = (c) => !!setBookings && (isAdmin || (c.assetType !== "item" && c.requestedBy === fixedRequestedBy));
   const [confirmCancelConflict, setConfirmCancelConflict] = useState(null);
   const [confirmReturnConflict, setConfirmReturnConflict] = useState(null);
   function cancelConflict(c) {
@@ -1802,11 +1812,12 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                   // than physically exists once some units are already out.
                   const maxQty = bk.availableNow;
                   const disabled = maxQty <= 0 && !checked;
+                  const isSuggested = it.id === initialEquipmentId && !checked;
                   return (
                     <div key={it.id} style={{
                       display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
-                      border: `1px solid ${checked ? "var(--teal)" : "var(--line)"}`,
-                      borderRadius: 8, background: checked ? "#E9F1FB" : disabled ? "#F5F5F5" : "#fff",
+                      border: `1px solid ${checked ? "var(--teal)" : isSuggested ? "var(--amber)" : "var(--line)"}`,
+                      borderRadius: 8, background: checked ? "#E9F1FB" : disabled ? "#F5F5F5" : isSuggested ? "#FDF6E9" : "#fff",
                       opacity: disabled ? 0.6 : 1,
                     }}>
                       <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleItem(it.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
