@@ -52,6 +52,23 @@ function alphaCompare(a, b) {
   return String(a || "").localeCompare(String(b || ""), "th", { numeric: true, sensitivity: "base" });
 }
 
+/* ---------- return-tracking helpers (chemicals / consumables withdrawals) ---------- */
+// A withdraw transaction can be partially returned over multiple visits —
+// `returnedQty` tracks the running total returned so far; `returned` is
+// just a convenience flag meaning "fully returned" (kept for old records
+// that only ever stored a boolean).
+function txReturnedQty(t) {
+  return t.returned ? (t.qty || 0) : (t.returnedQty || 0);
+}
+function txReturnRemaining(t) {
+  return Math.max(0, (t.qty || 0) - txReturnedQty(t));
+}
+function pendingReturnQty(item) {
+  return (item.transactions || [])
+    .filter(t => t.type === "withdraw" && t.needsReturn)
+    .reduce((sum, t) => sum + txReturnRemaining(t), 0);
+}
+
 /* ---------- booking (จอง/ยืมเครื่องมือ) helpers ---------- */
 const BOOKING_TYPE_LABEL = { checkout: "ขอใช้งาน", reservation: "จองล่วงหน้า" };
 const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
@@ -2084,6 +2101,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
       const low = c.quantity <= c.minThreshold;
       if (stockFilter === "out") return c.quantity <= 0;
       if (stockFilter === "low") return low && c.quantity > 0;
+      if (stockFilter === "pendingReturn") return pendingReturnQty(c) > 0;
       return true;
     })
     .slice()
@@ -2148,24 +2166,27 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
     notify("ลบรายการแล้ว");
   }
 
-  function markReturned(itemId, txId) {
+  function markReturned(itemId, txId, qty) {
     setChemicals(chemicals.map(c => {
       if (c.id !== itemId) return c;
       const tx = (c.transactions || []).find(t => t.id === txId);
-      if (!tx || tx.returned) return c;
+      if (!tx) return c;
+      const remaining = txReturnRemaining(tx);
+      const amount = Math.max(0, Math.min(Number(qty) || 0, remaining));
+      if (amount <= 0) return c;
+      const newReturnedQty = txReturnedQty(tx) + amount;
       return {
         ...c,
-        quantity: (c.quantity || 0) + tx.qty,
-        transactions: (c.transactions || []).map(t => t.id === txId ? { ...t, returned: true, returnedDate: todayISO() } : t),
+        quantity: (c.quantity || 0) + amount,
+        transactions: (c.transactions || []).map(t => t.id === txId
+          ? { ...t, returnedQty: newReturnedQty, returned: newReturnedQty >= (t.qty || 0), returnedDate: todayISO() }
+          : t),
       };
     }));
     notify("บันทึกการคืนแล้ว");
   }
 
   const selectedItem = chemicals.find(c => c.id === selected);
-  const pendingReturnQty = (c) => (c.transactions || [])
-    .filter(t => t.type === "withdraw" && t.needsReturn && !t.returned)
-    .reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
 
   return (
     <div>
@@ -2176,6 +2197,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
           <option value="all">ทุกสถานะคงเหลือ</option>
           <option value="low">ใกล้หมด</option>
           <option value="out">หมดแล้ว</option>
+          <option value="pendingReturn">รอคืน</option>
         </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
@@ -2195,14 +2217,15 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
           const pendingQty = pendingReturnQty(c);
           return [
             <div>
-              <RowTitle beacon={low ? (c.quantity <= 0 ? "var(--red)" : "var(--amber)") : "transparent"} text={c.name} />
+              <RowTitle
+                beacon={low ? (c.quantity <= 0 ? "var(--red)" : "var(--amber)") : "transparent"}
+                text={c.name}
+                badge={pendingQty > 0 ? <span style={S.returnBadge}>รอคืน {pendingQty} {c.unit}</span> : null}
+              />
               {(c.formula || c.brand) && (
                 <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, marginLeft: 15 }}>
                   {[c.formula, c.brand].filter(Boolean).join(" · ")}
                 </div>
-              )}
-              {pendingQty > 0 && (
-                <div style={{ marginLeft: 15 }}><span style={S.returnTag}>รอคืน {pendingQty} {c.unit}</span></div>
               )}
             </div>,
             <span>{c.quantity} {c.unit}{low && <span style={S.lowTag}>{c.quantity <= 0 ? "หมด" : "ใกล้หมด"}</span>}</span>,
@@ -2224,7 +2247,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
           onAddTransaction={(tx) => addTransaction(selectedItem.id, tx)}
           onEditTransaction={(tx) => editTransaction(selectedItem.id, tx)}
           onDeleteTransaction={(txId) => deleteTransaction(selectedItem.id, txId)}
-          onMarkReturned={(txId) => markReturned(selectedItem.id, txId)}
+          onMarkReturned={(txId, qty) => markReturned(selectedItem.id, txId, qty)}
         />
       )}
     </div>
@@ -2237,6 +2260,7 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
   const [historyFilter, setHistoryFilter] = useState("all");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDeleteTx, setConfirmDeleteTx] = useState(null);
+  const [returningTx, setReturningTx] = useState(null);
   const low = item.quantity <= item.minThreshold;
   const exp = earliestExpiry(item);
   const days = daysUntil(exp);
@@ -2267,7 +2291,12 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
     <Modal onClose={onClose} title={item.name} wide>
       <div style={S.detailHead}>
         <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-          <div style={S.detailName}>{item.name}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={S.detailName}>{item.name}</div>
+            {pendingReturnQty(item) > 0 && (
+              <span style={S.returnBadge}>รอคืน {pendingReturnQty(item)} {item.unit}</span>
+            )}
+          </div>
           {(item.formula || item.brand) && (
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
               {[item.formula, item.brand].filter(Boolean).join(" · ")}
@@ -2312,7 +2341,10 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
         </div>
         <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
           {shownTxs.length === 0 && <EmptyState text="ยังไม่มีรายการในหมวดนี้" small />}
-          {shownTxs.map(t => (
+          {shownTxs.map(t => {
+            const remaining = t.type === "withdraw" && t.needsReturn ? txReturnRemaining(t) : 0;
+            const already = t.type === "withdraw" && t.needsReturn ? txReturnedQty(t) : 0;
+            return (
             <div key={t.id} style={{ ...S.activityRow, alignItems: "center" }}>
               <div style={S.activityDate}>{fmtDate(t.date)}</div>
               <div style={{ flex: 1 }}>
@@ -2321,9 +2353,9 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
                     {t.type === "receive" ? `รับเข้า +${t.qty} ${item.unit}` : `เบิกใช้ -${t.qty} ${item.unit}`}
                   </span>
                   {t.type === "withdraw" && t.needsReturn && (
-                    t.returned
-                      ? <span style={{ ...S.returnTag, color: "var(--muted)" }}>คืนแล้ว{t.returnedDate ? ` · ${fmtDate(t.returnedDate)}` : ""}</span>
-                      : <span style={S.returnTag}>รอคืน</span>
+                    remaining <= 0
+                      ? <span style={{ ...S.returnBadge, background: "var(--muted)" }}>คืนแล้ว{t.returnedDate ? ` · ${fmtDate(t.returnedDate)}` : ""}</span>
+                      : <span style={S.returnBadge}>{already > 0 ? `รอคืนอีก ${remaining} ${item.unit}` : "รอคืน"}</span>
                   )}
                 </div>
                 <div style={S.activityDetail}>
@@ -2334,14 +2366,14 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
                 </div>
               </div>
               <div style={{ display: "flex", gap: 4 }}>
-                {t.type === "withdraw" && t.needsReturn && !t.returned && (
-                  <button style={S.iconBtnSm} title="บันทึกว่าคืนแล้ว" onClick={() => onMarkReturned(t.id)}><Undo2 size={12} /></button>
+                {t.type === "withdraw" && t.needsReturn && remaining > 0 && (
+                  <button style={S.iconBtnSm} title="บันทึกว่าคืนแล้ว" onClick={() => setReturningTx(t)}><Undo2 size={12} /></button>
                 )}
                 <button style={S.iconBtnSm} onClick={() => setEditingTx(t)}><Pencil size={12} /></button>
                 <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteTx(t)}><Trash2 size={12} /></button>
               </div>
             </div>
-          ))}
+          );})}
         </div>
       </div>
 
@@ -2350,6 +2382,15 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
           message="ต้องการลบรายการรับเข้า/เบิกใช้นี้ใช่ไหม การลบไม่สามารถกู้คืนได้"
           onCancel={() => setConfirmDeleteTx(null)}
           onConfirm={() => { const id = confirmDeleteTx.id; setConfirmDeleteTx(null); onDeleteTransaction(id); }}
+        />
+      )}
+
+      {returningTx && (
+        <ReturnTxQtyDialog
+          tx={returningTx}
+          unit={item.unit}
+          onCancel={() => setReturningTx(null)}
+          onConfirm={(qty) => { onMarkReturned(returningTx.id, qty); setReturningTx(null); }}
         />
       )}
 
@@ -2491,6 +2532,7 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
       const low = s.quantity <= s.minThreshold;
       if (stockFilter === "out") return s.quantity <= 0;
       if (stockFilter === "low") return low && s.quantity > 0;
+      if (stockFilter === "pendingReturn") return pendingReturnQty(s) > 0;
       return true;
     })
     .slice()
@@ -2551,24 +2593,27 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
     notify("ลบรายการแล้ว");
   }
 
-  function markReturned(itemId, txId) {
+  function markReturned(itemId, txId, qty) {
     setConsumables(consumables.map(s => {
       if (s.id !== itemId) return s;
       const tx = (s.transactions || []).find(t => t.id === txId);
-      if (!tx || tx.returned) return s;
+      if (!tx) return s;
+      const remaining = txReturnRemaining(tx);
+      const amount = Math.max(0, Math.min(Number(qty) || 0, remaining));
+      if (amount <= 0) return s;
+      const newReturnedQty = txReturnedQty(tx) + amount;
       return {
         ...s,
-        quantity: (s.quantity || 0) + tx.qty,
-        transactions: (s.transactions || []).map(t => t.id === txId ? { ...t, returned: true, returnedDate: todayISO() } : t),
+        quantity: (s.quantity || 0) + amount,
+        transactions: (s.transactions || []).map(t => t.id === txId
+          ? { ...t, returnedQty: newReturnedQty, returned: newReturnedQty >= (t.qty || 0), returnedDate: todayISO() }
+          : t),
       };
     }));
     notify("บันทึกการคืนแล้ว");
   }
 
   const selectedItem = consumables.find(s => s.id === selected);
-  const pendingReturnQty = (s) => (s.transactions || [])
-    .filter(t => t.type === "withdraw" && t.needsReturn && !t.returned)
-    .reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
 
   return (
     <div>
@@ -2579,6 +2624,7 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
           <option value="all">ทุกสถานะคงเหลือ</option>
           <option value="low">ใกล้หมด</option>
           <option value="out">หมดแล้ว</option>
+          <option value="pendingReturn">รอคืน</option>
         </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
@@ -2595,10 +2641,11 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
           const pendingQty = pendingReturnQty(s);
           return [
             <div>
-              <RowTitle beacon={low ? (s.quantity <= 0 ? "var(--red)" : "var(--amber)") : "transparent"} text={s.name} />
-              {pendingQty > 0 && (
-                <div style={{ marginLeft: 15 }}><span style={S.returnTag}>รอคืน {pendingQty} {s.unit}</span></div>
-              )}
+              <RowTitle
+                beacon={low ? (s.quantity <= 0 ? "var(--red)" : "var(--amber)") : "transparent"}
+                text={s.name}
+                badge={pendingQty > 0 ? <span style={S.returnBadge}>รอคืน {pendingQty} {s.unit}</span> : null}
+              />
             </div>,
             <span>{s.quantity} {s.unit}{low && <span style={S.lowTag}>{s.quantity <= 0 ? "หมด" : "ใกล้หมด"}</span>}</span>,
             <RowActions onEdit={() => setEditing(s)} onDelete={() => remove(s.id)} />,
@@ -2617,7 +2664,7 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
           onAddTransaction={(tx) => addTransaction(selectedItem.id, tx)}
           onEditTransaction={(tx) => editTransaction(selectedItem.id, tx)}
           onDeleteTransaction={(txId) => deleteTransaction(selectedItem.id, txId)}
-          onMarkReturned={(txId) => markReturned(selectedItem.id, txId)}
+          onMarkReturned={(txId, qty) => markReturned(selectedItem.id, txId, qty)}
         />
       )}
     </div>
@@ -2656,6 +2703,7 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
   const [historyFilter, setHistoryFilter] = useState("all"); // "all" | "receive" | "withdraw"
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDeleteTx, setConfirmDeleteTx] = useState(null);
+  const [returningTx, setReturningTx] = useState(null);
   const low = item.quantity <= item.minThreshold;
   const txs = item.transactions || [];
   const receiveTxs = txs.filter(t => t.type === "receive");
@@ -2682,7 +2730,12 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
   return (
     <Modal onClose={onClose} title={item.name} wide>
       <div style={S.detailHead}>
-        <div style={{ ...S.detailName, flex: "1 1 220px", minWidth: 0 }}>{item.name}</div>
+        <div style={{ flex: "1 1 220px", minWidth: 0, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={S.detailName}>{item.name}</div>
+          {pendingReturnQty(item) > 0 && (
+            <span style={S.returnBadge}>รอคืน {pendingReturnQty(item)} {item.unit}</span>
+          )}
+        </div>
         <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
           <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
@@ -2719,7 +2772,10 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
         </div>
         <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
           {shownTxs.length === 0 && <EmptyState text="ยังไม่มีรายการในหมวดนี้" small />}
-          {shownTxs.map(t => (
+          {shownTxs.map(t => {
+            const remaining = t.type === "withdraw" && t.needsReturn ? txReturnRemaining(t) : 0;
+            const already = t.type === "withdraw" && t.needsReturn ? txReturnedQty(t) : 0;
+            return (
             <div key={t.id} style={{ ...S.activityRow, alignItems: "center" }}>
               <div style={S.activityDate}>{fmtDate(t.date)}</div>
               <div style={{ flex: 1 }}>
@@ -2728,9 +2784,9 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
                     {t.type === "receive" ? `รับเข้า +${t.qty} ${item.unit}` : `เบิกใช้ -${t.qty} ${item.unit}`}
                   </span>
                   {t.type === "withdraw" && t.needsReturn && (
-                    t.returned
-                      ? <span style={{ ...S.returnTag, color: "var(--muted)" }}>คืนแล้ว{t.returnedDate ? ` · ${fmtDate(t.returnedDate)}` : ""}</span>
-                      : <span style={S.returnTag}>รอคืน</span>
+                    remaining <= 0
+                      ? <span style={{ ...S.returnBadge, background: "var(--muted)" }}>คืนแล้ว{t.returnedDate ? ` · ${fmtDate(t.returnedDate)}` : ""}</span>
+                      : <span style={S.returnBadge}>{already > 0 ? `รอคืนอีก ${remaining} ${item.unit}` : "รอคืน"}</span>
                   )}
                 </div>
                 <div style={S.activityDetail}>
@@ -2739,14 +2795,14 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
                 </div>
               </div>
               <div style={{ display: "flex", gap: 4 }}>
-                {t.type === "withdraw" && t.needsReturn && !t.returned && (
-                  <button style={S.iconBtnSm} title="บันทึกว่าคืนแล้ว" onClick={() => onMarkReturned(t.id)}><Undo2 size={12} /></button>
+                {t.type === "withdraw" && t.needsReturn && remaining > 0 && (
+                  <button style={S.iconBtnSm} title="บันทึกว่าคืนแล้ว" onClick={() => setReturningTx(t)}><Undo2 size={12} /></button>
                 )}
                 <button style={S.iconBtnSm} onClick={() => setEditingTx(t)}><Pencil size={12} /></button>
                 <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteTx(t)}><Trash2 size={12} /></button>
               </div>
             </div>
-          ))}
+          );})}
         </div>
       </div>
 
@@ -2755,6 +2811,15 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
           message="ต้องการลบรายการรับเข้า/เบิกใช้นี้ใช่ไหม การลบไม่สามารถกู้คืนได้"
           onCancel={() => setConfirmDeleteTx(null)}
           onConfirm={() => { const id = confirmDeleteTx.id; setConfirmDeleteTx(null); onDeleteTransaction(id); }}
+        />
+      )}
+
+      {returningTx && (
+        <ReturnTxQtyDialog
+          tx={returningTx}
+          unit={item.unit}
+          onCancel={() => setReturningTx(null)}
+          onConfirm={(qty) => { onMarkReturned(returningTx.id, qty); setReturningTx(null); }}
         />
       )}
 
@@ -3347,9 +3412,9 @@ function Table({ cols, rows, empty, onRowClick }) {
     </div>
   );
 }
-function RowTitle({ text, beacon }) {
-  return <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-    <span style={{ ...S.beaconSm, background: beacon }} />{text}
+function RowTitle({ text, beacon, badge }) {
+  return <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+    <span style={{ ...S.beaconSm, background: beacon }} />{text}{badge}
   </div>;
 }
 function Mono({ children }) { return <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{children}</span>; }
@@ -3448,6 +3513,55 @@ function ReturnQtyDialog({ booking, onCancel, onConfirm }) {
           <button style={S.primaryBtn} onClick={() => onConfirm(isItem ? qty : maxQty)}>
             {isItem ? "ยืนยันคืน" : "ยืนยันเสร็จสิ้น"}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Quantity-aware "mark as returned" dialog for chemical/consumable withdraw
+// transactions. Handles partial returns: if less than the full outstanding
+// amount is entered, the transaction stays flagged as pending (needsReturn)
+// for whatever's left.
+function ReturnTxQtyDialog({ tx, unit, onCancel, onConfirm }) {
+  const already = txReturnedQty(tx);
+  const remaining = txReturnRemaining(tx);
+  const [qty, setQty] = useState(remaining);
+  return (
+    <div
+      onClick={(e) => { e.stopPropagation(); onCancel(); }}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(18,37,59,0.4)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 12, border: "1px solid var(--line)",
+          padding: "20px 22px", width: "100%", maxWidth: 340, boxShadow: "0 12px 32px rgba(18,37,59,0.2)",
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>บันทึกการคืน</div>
+        <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+          เบิกไปทั้งหมด {tx.qty} {unit}{already > 0 ? ` · คืนแล้ว ${already} ${unit}` : ""} · ค้างคืน {remaining} {unit}
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>จำนวนที่คืนครั้งนี้ (สูงสุด {remaining} {unit})</label>
+          <input
+            type="number" min="1" max={remaining} value={qty}
+            onChange={(e) => setQty(Math.max(1, Math.min(remaining, Number(e.target.value) || 1)))}
+            style={{ ...S.input, marginTop: 6 }}
+          />
+          {qty < remaining && (
+            <div style={{ fontSize: 11.5, color: "var(--amber)", marginTop: 6 }}>
+              คืนไม่ครบ — ระบบจะคงสถานะ "รอคืน" ไว้สำหรับส่วนที่เหลืออีก {remaining - qty} {unit}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+          <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+          <button style={S.primaryBtn} onClick={() => onConfirm(qty)}>ยืนยันคืน</button>
         </div>
       </div>
     </div>
@@ -3747,6 +3861,11 @@ const S = {
   td: { padding: "11px 14px", fontSize: 13 },
   lowTag: { marginLeft: 8, fontSize: 10.5, color: "var(--amber)", fontWeight: 600 },
   returnTag: { marginLeft: 8, fontSize: 10.5, color: "var(--teal-dark)", fontWeight: 600 },
+  returnBadge: {
+    display: "inline-flex", alignItems: "center", gap: 4,
+    fontSize: 12, fontWeight: 700, color: "#fff", background: "var(--amber)",
+    borderRadius: 20, padding: "3px 10px", whiteSpace: "nowrap",
+  },
 
   toast: { position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", background: "var(--ink)", color: "#fff", padding: "9px 18px", borderRadius: 30, fontSize: 12.5, zIndex: 60 },
 };
