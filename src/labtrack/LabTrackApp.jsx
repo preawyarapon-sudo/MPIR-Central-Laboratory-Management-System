@@ -85,6 +85,17 @@ function bookingLiveStatusLabel(b) {
 }
 const BOOKING_STATUS_COLOR = { pending: "var(--amber)", approved: "var(--green)", rejected: "var(--red)", cancelled: "var(--muted)" };
 
+// Status label for the history table: plain "approved" doesn't say whether
+// the item has actually come back yet, so once a checkout has a returnedAt
+// this reports it as finished/returned instead of leaving it looking like
+// it's still "just approved" and in progress.
+function bookingHistoryStatusLabel(b) {
+  if (b.status === "approved" && b.returnedAt) {
+    return b.assetType === "item" ? "คืนแล้ว" : "เสร็จสิ้นแล้ว";
+  }
+  return BOOKING_STATUS_LABEL[b.status] || "";
+}
+
 // Normalizes a booking into a comparable {start, end} date range. A checkout
 // with no returnedAt yet is treated as open-ended (far-future end) so it
 // correctly conflicts with anything that would need the equipment later.
@@ -1036,7 +1047,7 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
                   <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type]} · {b.requestedBy || "-"}</div>
                   <div style={S.activityDetail}>{b.purpose || "-"}</div>
                 </div>
-                <Tag color={BOOKING_STATUS_COLOR[b.status]}>{BOOKING_STATUS_LABEL[b.status]}</Tag>
+                <Tag color={BOOKING_STATUS_COLOR[b.status]}>{bookingHistoryStatusLabel(b)}</Tag>
               </div>
             ))}
           </div>
@@ -1434,9 +1445,14 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         {b.purpose && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{b.purpose}</div>}
       </div>,
       <div>
-        <Tag color={BOOKING_STATUS_COLOR[b.status]}>{BOOKING_STATUS_LABEL[b.status]}</Tag>
+        <Tag color={BOOKING_STATUS_COLOR[b.status]}>{bookingHistoryStatusLabel(b)}</Tag>
         {b.status !== "pending" && b.approvedBy && (
-          <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>โดย {b.approvedBy}</div>
+          <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>
+            {b.status === "rejected" ? "ปฏิเสธโดย" : "อนุมัติโดย"} {b.approvedBy}
+          </div>
+        )}
+        {b.returnedAt && b.returnedBy && (
+          <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2 }}>รับคืนโดย {b.returnedBy}</div>
         )}
         {b.approvalNote && (
           <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2, fontStyle: "italic", wordBreak: "break-word" }}>
@@ -3523,7 +3539,11 @@ function ReturnQtyDialog({ booking, defaultName = "", onCancel, onConfirm }) {
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
           <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
-          <button style={S.primaryBtn} onClick={() => onConfirm(isItem ? qty : maxQty, returnedByName.trim())}>
+          <button
+            style={{ ...S.primaryBtn, opacity: returnedByName.trim() ? 1 : 0.5, cursor: returnedByName.trim() ? "pointer" : "not-allowed" }}
+            disabled={!returnedByName.trim()}
+            onClick={() => onConfirm(isItem ? qty : maxQty, returnedByName.trim())}
+          >
             {isItem ? "ยืนยันคืน" : "ยืนยันเสร็จสิ้น"}
           </button>
         </div>
@@ -3641,7 +3661,10 @@ function ApprovalDialog({ booking, action, defaultName = "", onCancel, onConfirm
               ...S.primaryBtn,
               background: isApprove ? "var(--green)" : "var(--red)",
               borderColor: isApprove ? "var(--green)" : "var(--red)",
+              opacity: approverName.trim() ? 1 : 0.5,
+              cursor: approverName.trim() ? "pointer" : "not-allowed",
             }}
+            disabled={!approverName.trim()}
             onClick={() => onConfirm(note.trim(), approverName.trim())}
           >
             {isApprove ? "ยืนยันอนุมัติ" : "ยืนยันปฏิเสธ"}
