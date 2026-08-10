@@ -1327,8 +1327,9 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
     setShowForm(false);
   }
 
-  const bookingCols = ["รายการที่ยืม", "ประเภท / ช่วงเวลา", "ผู้จอง / วัตถุประสงค์", "สถานะ", ""];
+  const bookingCols = ["รายการที่ยืม", "วันที่ขอใช้งาน", "วันที่คืน / เสร็จสิ้น", "ผู้จอง / วัตถุประสงค์", "สถานะ", ""];
   function bookingRow(b) {
+    const isReservation = b.type === "reservation";
     return [
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -1338,15 +1339,25 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         </div>
         {b.equipmentCode && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{b.equipmentName}</div>}
         {b.assetType === "item" && b.qty > 1 && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>จำนวน {b.qty} ชิ้น</div>}
+        {b.offSiteLocation && <div style={{ fontSize: 11, color: "var(--amber)" }}>ใช้ที่: {b.offSiteLocation}</div>}
       </div>,
       <div>
-        <div>{BOOKING_TYPE_LABEL[b.type]}</div>
-        <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
-          {b.type === "checkout"
-            ? `${fmtDate(b.startDate)}${b.returnedAt ? ` → คืนแล้ว ${fmtDate(b.returnedAt)}` : b.dueBackDate ? ` · กำหนดคืน ${fmtDate(b.dueBackDate)}` : ""}`
-            : `${fmtDate(b.startDate)}${b.endDate && b.endDate !== b.startDate ? ` - ${fmtDate(b.endDate)}` : ""}`}
-        </div>
-        {b.offSiteLocation && <div style={{ fontSize: 11, color: "var(--amber)" }}>ใช้ที่: {b.offSiteLocation}</div>}
+        <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{BOOKING_TYPE_LABEL[b.type]}</div>
+        <div>{fmtDate(b.startDate)}</div>
+      </div>,
+      <div>
+        {isReservation ? (
+          b.endDate && b.endDate !== b.startDate
+            ? <div>{fmtDate(b.endDate)}</div>
+            : <div style={{ color: "var(--muted)" }}>วันเดียวกัน</div>
+        ) : b.returnedAt ? (
+          <div style={{ color: "var(--green)" }}>{fmtDate(b.returnedAt)}</div>
+        ) : (
+          <>
+            <div style={{ color: "var(--muted)" }}>ยังไม่คืน</div>
+            {b.dueBackDate && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>กำหนดคืน {fmtDate(b.dueBackDate)}</div>}
+          </>
+        )}
         {isBookingOverdue(b) && <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 2 }}>เลยกำหนดคืน {Math.abs(daysUntil(b.dueBackDate))} วัน</div>}
       </div>,
       <div>
@@ -2547,6 +2558,17 @@ function isPRFullyReceived(r) {
   const items = getPRItems(r);
   return items.length > 0 && items.every(it => it.received);
 }
+// A PR can now have more than one PO — older records only ever had a single
+// poNo string, so this normalizes both shapes into a consistent array of
+// { poNo, fileUrl }. Checking `!== undefined` (not just truthy/length) matters
+// here: once a record has been through the new form, r.pos is a real array
+// even if the person removed every PO — falling back to the old poNo string
+// in that case would wrongly resurrect a PO the person just deleted.
+function getPRPos(r) {
+  if (r.pos !== undefined) return r.pos;
+  if (r.poNo) return [{ id: uid(), poNo: r.poNo, fileUrl: r.poFileUrl || "" }];
+  return [];
+}
 
 function PurchaseRequestsTab({ requests, setRequests, notify }) {
   const [q, setQ] = useState("");
@@ -2559,7 +2581,7 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
   const historyCount = requests.filter(r => isPRFullyReceived(r)).length;
 
   const filtered = requests
-    .filter(r => (r.prNo + getPRItems(r).map(i => i.text).join(" ") + r.requestedBy + (r.poNo || "")).toLowerCase().includes(q.toLowerCase()))
+    .filter(r => (r.prNo + getPRItems(r).map(i => i.text).join(" ") + r.requestedBy + getPRPos(r).map(p => p.poNo).join(" ")).toLowerCase().includes(q.toLowerCase()))
     .filter(r => categoryFilter === "all" || (r.categories || []).includes(categoryFilter))
     .filter(r => view === "history" ? isPRFullyReceived(r) : !isPRFullyReceived(r))
     .slice()
@@ -2595,7 +2617,7 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
 
   return (
     <div>
-      <TabHeader title="ใบขอซื้อ (PR)" sub="บันทึกรายการที่สั่งซื้อ/ออก PR ทั้งสารเคมี พัสดุ และซ่อมบำรุงเครื่องมือ · 1 PR = 1 PO" />
+      <TabHeader title="ใบขอซื้อ (PR)" sub="บันทึกรายการที่สั่งซื้อ/ออก PR ทั้งสารเคมี พัสดุ และซ่อมบำรุงเครื่องมือ · 1 PR ออกได้หลาย PO" />
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <ViewTab active={view === "active"} onClick={() => setView("active")} label="กำลังดำเนินการ" count={activeCount} />
         <ViewTab active={view === "history"} onClick={() => setView("history")} label="ประวัติ (รับครบแล้ว)" count={historyCount} />
@@ -2620,7 +2642,13 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
         rows={filtered.map(r => [
           <div>
             <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{r.prNo || "-"}</span>
-            {r.poNo && <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>PO: {r.poNo}</div>}
+            {getPRPos(r).map(p => (
+              <div key={p.id} style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
+                PO: {p.fileUrl ? (
+                  <a href={p.fileUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal-dark)", textDecoration: "underline" }}>{p.poNo}</a>
+                ) : p.poNo}
+              </div>
+            ))}
           </div>,
           fmtDate(r.date),
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -2725,7 +2753,7 @@ function PRItemsCell({ items, onUpdateItems, onReceiveAll }) {
 }
 
 function PurchaseRequestForm({ item, onCancel, onSave }) {
-  const [f, setF] = useState({ ...item, categories: item.categories || [] });
+  const [f, setF] = useState({ ...item, categories: item.categories || [], pos: getPRPos(item) });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const toggleCategory = (key) => {
     setF({
@@ -2733,8 +2761,17 @@ function PurchaseRequestForm({ item, onCancel, onSave }) {
       categories: f.categories.includes(key) ? f.categories.filter(c => c !== key) : [...f.categories, key],
     });
   };
+  function addPO() {
+    setF({ ...f, pos: [...f.pos, { id: uid(), poNo: "", fileUrl: "" }] });
+  }
+  function updatePO(id, patch) {
+    setF({ ...f, pos: f.pos.map(p => p.id === id ? { ...p, ...patch } : p) });
+  }
+  function removePO(id) {
+    setF({ ...f, pos: f.pos.filter(p => p.id !== id) });
+  }
   return (
-    <Modal onClose={onCancel} title={item.itemName ? "แก้ไขใบขอซื้อ" : "ออกใบขอซื้อ (PR)"}>
+    <Modal onClose={onCancel} title={item.itemName ? "แก้ไขใบขอซื้อ" : "ออกใบขอซื้อ (PR)"} wide>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="เลขที่ PR"><input style={S.input} value={f.prNo} onChange={set("prNo")} placeholder="เช่น PR-2569-0045" /></Field>
         <Field label="วันที่ออก PR"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
@@ -2757,7 +2794,31 @@ function PurchaseRequestForm({ item, onCancel, onSave }) {
           />
         </Field>
         <Field label="ผู้ขอซื้อ"><input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} /></Field>
-        <Field label="เลขที่ PO (ถ้ามี)"><input style={S.input} value={f.poNo} onChange={set("poNo")} placeholder="กรอกภายหลังเมื่อได้รับ PO" /></Field>
+        <div />
+        <Field label="เลขที่ PO (1 PR ออกได้หลาย PO — ใส่ลิงก์ไฟล์ PO ได้ถ้ามี)" full>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {f.pos.map(p => (
+              <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  style={{ ...S.input, flex: "0 0 160px" }}
+                  value={p.poNo}
+                  onChange={(e) => updatePO(p.id, { poNo: e.target.value })}
+                  placeholder="เลขที่ PO"
+                />
+                <input
+                  style={{ ...S.input, flex: 1 }}
+                  value={p.fileUrl}
+                  onChange={(e) => updatePO(p.id, { fileUrl: e.target.value })}
+                  placeholder="ลิงก์ไฟล์ PO (SharePoint, Google Drive ฯลฯ) — ไม่บังคับ"
+                />
+                <button type="button" onClick={() => removePO(p.id)} style={{ ...S.iconBtnSm, color: "var(--red)", flexShrink: 0 }}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <button type="button" onClick={addPO} style={{ ...S.ghostBtn, alignSelf: "flex-start" }}>
+              <Plus size={13} /> เพิ่มเลขที่ PO
+            </button>
+          </div>
+        </Field>
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.notes} onChange={set("notes")} /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.itemName} />
@@ -2852,8 +2913,9 @@ function ReportsTab({ equipment, activities, chemicals, consumables, purchaseReq
     const rows = [];
     purchaseRequests.forEach(r => {
       const cats = (r.categories || []).map(c => PR_CATEGORY_LABEL[c] || c).join("; ");
+      const poList = getPRPos(r).map(p => p.poNo).filter(Boolean).join("; ");
       getPRItems(r).forEach(it => {
-        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", r.poNo || "", r.requestedBy, r.notes || ""]);
+        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", poList, r.requestedBy, r.notes || ""]);
       });
     });
     download("purchase-requests.csv", toCSV(
