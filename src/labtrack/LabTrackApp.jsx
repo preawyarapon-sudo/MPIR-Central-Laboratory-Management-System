@@ -2104,7 +2104,24 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
     notify("ลบรายการแล้ว");
   }
 
+  function markReturned(itemId, txId) {
+    setChemicals(chemicals.map(c => {
+      if (c.id !== itemId) return c;
+      const tx = (c.transactions || []).find(t => t.id === txId);
+      if (!tx || tx.returned) return c;
+      return {
+        ...c,
+        quantity: (c.quantity || 0) + tx.qty,
+        transactions: (c.transactions || []).map(t => t.id === txId ? { ...t, returned: true, returnedDate: todayISO() } : t),
+      };
+    }));
+    notify("บันทึกการคืนแล้ว");
+  }
+
   const selectedItem = chemicals.find(c => c.id === selected);
+  const pendingReturnQty = (c) => (c.transactions || [])
+    .filter(t => t.type === "withdraw" && t.needsReturn && !t.returned)
+    .reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
 
   return (
     <div>
@@ -2131,6 +2148,7 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
           const days = daysUntil(exp);
           const st = statusOf(days);
           const low = c.quantity <= c.minThreshold;
+          const pendingQty = pendingReturnQty(c);
           return [
             <div>
               <RowTitle beacon={low ? (c.quantity <= 0 ? "var(--red)" : "var(--amber)") : "transparent"} text={c.name} />
@@ -2138,6 +2156,9 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
                 <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, marginLeft: 15 }}>
                   {[c.formula, c.brand].filter(Boolean).join(" · ")}
                 </div>
+              )}
+              {pendingQty > 0 && (
+                <div style={{ marginLeft: 15 }}><span style={S.returnTag}>รอคืน {pendingQty} {c.unit}</span></div>
               )}
             </div>,
             <span>{c.quantity} {c.unit}{low && <span style={S.lowTag}>{c.quantity <= 0 ? "หมด" : "ใกล้หมด"}</span>}</span>,
@@ -2159,13 +2180,14 @@ function ChemicalsTab({ chemicals, setChemicals, notify }) {
           onAddTransaction={(tx) => addTransaction(selectedItem.id, tx)}
           onEditTransaction={(tx) => editTransaction(selectedItem.id, tx)}
           onDeleteTransaction={(txId) => deleteTransaction(selectedItem.id, txId)}
+          onMarkReturned={(txId) => markReturned(selectedItem.id, txId)}
         />
       )}
     </div>
   );
 }
 
-function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onEditTransaction, onDeleteTransaction }) {
+function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onEditTransaction, onDeleteTransaction, onMarkReturned }) {
   const [showForm, setShowForm] = useState(null); // "receive" | "withdraw" | null
   const [editingTx, setEditingTx] = useState(null);
   const [historyFilter, setHistoryFilter] = useState("all");
@@ -2254,6 +2276,11 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
                   <span style={{ color: t.type === "receive" ? "var(--green)" : "var(--red)" }}>
                     {t.type === "receive" ? `รับเข้า +${t.qty} ${item.unit}` : `เบิกใช้ -${t.qty} ${item.unit}`}
                   </span>
+                  {t.type === "withdraw" && t.needsReturn && (
+                    t.returned
+                      ? <span style={{ ...S.returnTag, color: "var(--muted)" }}>คืนแล้ว{t.returnedDate ? ` · ${fmtDate(t.returnedDate)}` : ""}</span>
+                      : <span style={S.returnTag}>รอคืน</span>
+                  )}
                 </div>
                 <div style={S.activityDetail}>
                   {t.type === "receive"
@@ -2263,6 +2290,9 @@ function ChemicalDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onE
                 </div>
               </div>
               <div style={{ display: "flex", gap: 4 }}>
+                {t.type === "withdraw" && t.needsReturn && !t.returned && (
+                  <button style={S.iconBtnSm} title="บันทึกว่าคืนแล้ว" onClick={() => onMarkReturned(t.id)}><Undo2 size={12} /></button>
+                )}
                 <button style={S.iconBtnSm} onClick={() => setEditingTx(t)}><Pencil size={12} /></button>
                 <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteTx(t)}><Trash2 size={12} /></button>
               </div>
@@ -2304,8 +2334,8 @@ function ChemicalTxForm({ type, item, initial, onCancel, onSave }) {
   const isReceive = type === "receive";
   const isEdit = !!initial;
   const [f, setF] = useState(initial
-    ? { date: initial.date, qty: String(initial.qty), poNo: initial.poNo || "", expiryDate: initial.expiryDate || "", by: initial.by || "", note: initial.note || "" }
-    : { date: todayISO(), qty: "", poNo: "", expiryDate: "", by: "", note: "" });
+    ? { date: initial.date, qty: String(initial.qty), poNo: initial.poNo || "", expiryDate: initial.expiryDate || "", by: initial.by || "", note: initial.note || "", needsReturn: !!initial.needsReturn }
+    : { date: todayISO(), qty: "", poNo: "", expiryDate: "", by: "", note: "", needsReturn: false });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const qtyNum = Number(f.qty) || 0;
   const baseQty = initial ? item.quantity - (initial.type === "receive" ? initial.qty : -initial.qty) : item.quantity;
@@ -2326,6 +2356,14 @@ function ChemicalTxForm({ type, item, initial, onCancel, onSave }) {
           <Field label="ผู้เบิก / แผนก" full><input style={S.input} value={f.by} onChange={set("by")} placeholder="เช่น สมชาย / ฝ่ายควบคุมคุณภาพ" /></Field>
         )}
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.note} onChange={set("note")} /></Field>
+        {!isReceive && (
+          <Field label=" " full plain>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={f.needsReturn} onChange={(e) => setF({ ...f, needsReturn: e.target.checked })} style={{ width: 16, height: 16 }} />
+              ต้องคืน (เช่น บุคคลภายนอกขอยืมแล้วจะนำมาคืนภายหลัง)
+            </label>
+          </Field>
+        )}
       </div>
       {wouldGoNegative && (
         <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>
@@ -2334,7 +2372,7 @@ function ChemicalTxForm({ type, item, initial, onCancel, onSave }) {
       )}
       <ModalFooter
         onCancel={onCancel}
-        onSave={() => onSave({ id: initial?.id, type, date: f.date, qty: qtyNum, poNo: f.poNo, expiryDate: f.expiryDate, by: f.by, note: f.note })}
+        onSave={() => onSave({ id: initial?.id, type, date: f.date, qty: qtyNum, poNo: f.poNo, expiryDate: f.expiryDate, by: f.by, note: f.note, needsReturn: !isReceive && f.needsReturn, returned: isEdit ? !!initial.returned : false })}
         disabled={!f.date || qtyNum <= 0}
       />
     </Modal>
@@ -2469,7 +2507,24 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
     notify("ลบรายการแล้ว");
   }
 
+  function markReturned(itemId, txId) {
+    setConsumables(consumables.map(s => {
+      if (s.id !== itemId) return s;
+      const tx = (s.transactions || []).find(t => t.id === txId);
+      if (!tx || tx.returned) return s;
+      return {
+        ...s,
+        quantity: (s.quantity || 0) + tx.qty,
+        transactions: (s.transactions || []).map(t => t.id === txId ? { ...t, returned: true, returnedDate: todayISO() } : t),
+      };
+    }));
+    notify("บันทึกการคืนแล้ว");
+  }
+
   const selectedItem = consumables.find(s => s.id === selected);
+  const pendingReturnQty = (s) => (s.transactions || [])
+    .filter(t => t.type === "withdraw" && t.needsReturn && !t.returned)
+    .reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
 
   return (
     <div>
@@ -2493,8 +2548,14 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
         onRowClick={(i) => setSelected(filtered[i].id)}
         rows={filtered.map(s => {
           const low = s.quantity <= s.minThreshold;
+          const pendingQty = pendingReturnQty(s);
           return [
-            <RowTitle beacon={low ? (s.quantity <= 0 ? "var(--red)" : "var(--amber)") : "transparent"} text={s.name} />,
+            <div>
+              <RowTitle beacon={low ? (s.quantity <= 0 ? "var(--red)" : "var(--amber)") : "transparent"} text={s.name} />
+              {pendingQty > 0 && (
+                <div style={{ marginLeft: 15 }}><span style={S.returnTag}>รอคืน {pendingQty} {s.unit}</span></div>
+              )}
+            </div>,
             <span>{s.quantity} {s.unit}{low && <span style={S.lowTag}>{s.quantity <= 0 ? "หมด" : "ใกล้หมด"}</span>}</span>,
             <RowActions onEdit={() => setEditing(s)} onDelete={() => remove(s.id)} />,
           ];
@@ -2512,6 +2573,7 @@ function ConsumablesTab({ consumables, setConsumables, notify }) {
           onAddTransaction={(tx) => addTransaction(selectedItem.id, tx)}
           onEditTransaction={(tx) => editTransaction(selectedItem.id, tx)}
           onDeleteTransaction={(txId) => deleteTransaction(selectedItem.id, txId)}
+          onMarkReturned={(txId) => markReturned(selectedItem.id, txId)}
         />
       )}
     </div>
@@ -2544,7 +2606,7 @@ function ConsumablesImportForm({ onCancel, onImport }) {
   );
 }
 
-function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onEditTransaction, onDeleteTransaction }) {
+function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, onEditTransaction, onDeleteTransaction, onMarkReturned }) {
   const [showForm, setShowForm] = useState(null); // "receive" | "withdraw" | null
   const [editingTx, setEditingTx] = useState(null); // transaction being edited, or null
   const [historyFilter, setHistoryFilter] = useState("all"); // "all" | "receive" | "withdraw"
@@ -2621,6 +2683,11 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
                   <span style={{ color: t.type === "receive" ? "var(--green)" : "var(--red)" }}>
                     {t.type === "receive" ? `รับเข้า +${t.qty} ${item.unit}` : `เบิกใช้ -${t.qty} ${item.unit}`}
                   </span>
+                  {t.type === "withdraw" && t.needsReturn && (
+                    t.returned
+                      ? <span style={{ ...S.returnTag, color: "var(--muted)" }}>คืนแล้ว{t.returnedDate ? ` · ${fmtDate(t.returnedDate)}` : ""}</span>
+                      : <span style={S.returnTag}>รอคืน</span>
+                  )}
                 </div>
                 <div style={S.activityDetail}>
                   {t.type === "receive" && t.poNo ? `PO: ${t.poNo}` : t.type === "withdraw" && t.by ? `ผู้เบิก: ${t.by}` : ""}
@@ -2628,6 +2695,9 @@ function ConsumableDetail({ item, onClose, onEdit, onDelete, onAddTransaction, o
                 </div>
               </div>
               <div style={{ display: "flex", gap: 4 }}>
+                {t.type === "withdraw" && t.needsReturn && !t.returned && (
+                  <button style={S.iconBtnSm} title="บันทึกว่าคืนแล้ว" onClick={() => onMarkReturned(t.id)}><Undo2 size={12} /></button>
+                )}
                 <button style={S.iconBtnSm} onClick={() => setEditingTx(t)}><Pencil size={12} /></button>
                 <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteTx(t)}><Trash2 size={12} /></button>
               </div>
@@ -2669,8 +2739,8 @@ function ConsumableTxForm({ type, item, initial, onCancel, onSave }) {
   const isReceive = type === "receive";
   const isEdit = !!initial;
   const [f, setF] = useState(initial
-    ? { date: initial.date, qty: String(initial.qty), poNo: initial.poNo || "", by: initial.by || "", note: initial.note || "" }
-    : { date: todayISO(), qty: "", poNo: "", by: "", note: "" });
+    ? { date: initial.date, qty: String(initial.qty), poNo: initial.poNo || "", by: initial.by || "", note: initial.note || "", needsReturn: !!initial.needsReturn }
+    : { date: todayISO(), qty: "", poNo: "", by: "", note: "", needsReturn: false });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const qtyNum = Number(f.qty) || 0;
   // When editing, check against the item's quantity as if this transaction's old effect were reversed first.
@@ -2689,6 +2759,14 @@ function ConsumableTxForm({ type, item, initial, onCancel, onSave }) {
           <Field label="ผู้เบิก / แผนก" full><input style={S.input} value={f.by} onChange={set("by")} placeholder="เช่น สมชาย / ฝ่ายควบคุมคุณภาพ" /></Field>
         )}
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.note} onChange={set("note")} /></Field>
+        {!isReceive && (
+          <Field label=" " full plain>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={f.needsReturn} onChange={(e) => setF({ ...f, needsReturn: e.target.checked })} style={{ width: 16, height: 16 }} />
+              ต้องคืน (เช่น บุคคลภายนอกขอยืมแล้วจะนำมาคืนภายหลัง)
+            </label>
+          </Field>
+        )}
       </div>
       {wouldGoNegative && (
         <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>
@@ -2697,7 +2775,7 @@ function ConsumableTxForm({ type, item, initial, onCancel, onSave }) {
       )}
       <ModalFooter
         onCancel={onCancel}
-        onSave={() => onSave({ id: initial?.id, type, date: f.date, qty: qtyNum, poNo: f.poNo, by: f.by, note: f.note })}
+        onSave={() => onSave({ id: initial?.id, type, date: f.date, qty: qtyNum, poNo: f.poNo, by: f.by, note: f.note, needsReturn: !isReceive && f.needsReturn, returned: isEdit ? !!initial.returned : false })}
         disabled={!f.date || qtyNum <= 0}
       />
     </Modal>
@@ -3624,6 +3702,7 @@ const S = {
   tr: { borderBottom: "1px solid var(--line)" },
   td: { padding: "11px 14px", fontSize: 13 },
   lowTag: { marginLeft: 8, fontSize: 10.5, color: "var(--amber)", fontWeight: 600 },
+  returnTag: { marginLeft: 8, fontSize: 10.5, color: "var(--teal-dark)", fontWeight: 600 },
 
   toast: { position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", background: "var(--ink)", color: "#fff", padding: "9px 18px", borderRadius: 30, fontSize: 12.5, zIndex: 60 },
 };
