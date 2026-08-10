@@ -55,6 +55,17 @@ function alphaCompare(a, b) {
 /* ---------- booking (จอง/ยืมเครื่องมือ) helpers ---------- */
 const BOOKING_TYPE_LABEL = { checkout: "เช็คเอาท์ทันที", reservation: "จองล่วงหน้า" };
 const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
+// A more honest label than the raw status: "approved" alone doesn't say
+// whether the item has actually been returned/finished yet. Used anywhere
+// we show a live claim on equipment (conflict warnings, current-use lists).
+function bookingLiveStatusLabel(b) {
+  if (b.status === "pending") return "รออนุมัติ";
+  if (b.status === "approved") {
+    if (b.type === "checkout") return "มีการใช้งานอยู่";
+    return b.startDate > todayISO() ? "จองไว้แล้ว" : "มีการใช้งานอยู่";
+  }
+  return BOOKING_STATUS_LABEL[b.status] || "";
+}
 const BOOKING_STATUS_COLOR = { pending: "var(--amber)", approved: "var(--green)", rejected: "var(--red)", cancelled: "var(--muted)" };
 
 // Normalizes a booking into a comparable {start, end} date range. A checkout
@@ -69,12 +80,16 @@ function bookingRange(b) {
 function rangesOverlap(aStart, aEnd, bStart, bEnd) {
   return aStart <= bEnd && bStart <= aEnd;
 }
-// Only pending/approved bookings can conflict — rejected/cancelled ones are
-// no longer live claims on the equipment.
+// Only "live" claims can conflict: a still-pending request, or an approved
+// one that hasn't been returned/finished yet. Once something is returned
+// (checkout) or its reservation period has passed, it's no longer a real
+// claim on the equipment and should stop showing up as a conflict.
 function findBookingConflicts(bookings, equipmentId, range, excludeId) {
   return bookings.filter((b) => {
     if (b.equipmentId !== equipmentId || b.id === excludeId) return false;
-    if (b.status !== "pending" && b.status !== "approved") return false;
+    if (b.status === "pending") { /* still a live claim */ }
+    else if (b.status === "approved") { if (!isBookingCurrent(b)) return false; }
+    else return false; // rejected/cancelled
     const r = bookingRange(b);
     return rangesOverlap(range.start, range.end, r.start, r.end);
   });
@@ -604,6 +619,13 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
     notify("ลบเครื่องมือแล้ว");
     if (selected === id) setSelected(null);
   }
+  function setAvailability(id, disabled, reason) {
+    setEquipment(equipment.map(e => e.id === id
+      ? (disabled ? { ...e, status: "maintenance", unavailableReason: reason } : { ...e, status: "active", unavailableReason: "" })
+      : e
+    ));
+    notify(disabled ? "ปิดใช้งานชั่วคราวแล้ว" : "เปิดใช้งานอีกครั้งแล้ว");
+  }
 
   function importItems(items) {
     const newItems = items.map(it => ({
@@ -710,6 +732,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           onEdit={() => { setEditing(selectedItem); setSelected(null); }}
           onDelete={() => remove(selectedItem.id)}
           onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
+          onSetAvailability={(disabled, reason) => setAvailability(selectedItem.id, disabled, reason)}
           onAddActivity={(act) => {
             setActivities([{ ...act, id: uid(), equipmentId: selectedItem.id }, ...activities]);
             applyCalibrationDates(selectedItem.id, act);
@@ -857,12 +880,13 @@ function EquipmentImportForm({ onCancel, onImport }) {
   );
 }
 
-function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete, onBook, onAddActivity, onEditActivity, onDeleteActivity }) {
+function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity }) {
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDeleteAct, setConfirmDeleteAct] = useState(null);
+  const [showDisable, setShowDisable] = useState(false);
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
   const bk = equipmentBookingSummary(item.id, bookings);
@@ -915,11 +939,34 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
           <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"} · {item.type || "-"}</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
+          {item.status === "active" && (
+            <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
+          )}
+          {item.status === "maintenance" ? (
+            <button style={{ ...S.smallBtn, color: "var(--green)", borderColor: "var(--green)" }} onClick={() => onSetAvailability(false, "")}>
+              <CheckCircle2 size={13} /> เปิดใช้งานอีกครั้ง
+            </button>
+          ) : (
+            <button style={{ ...S.smallBtn, color: "var(--amber)", borderColor: "var(--amber)" }} onClick={() => setShowDisable(true)}>
+              <AlertTriangle size={13} /> ปิดใช้งานชั่วคราว
+            </button>
+          )}
           <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
           <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
         </div>
       </div>
+      {item.status === "maintenance" && item.unavailableReason && (
+        <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", marginTop: 4, fontSize: 12.5, color: "var(--ink)" }}>
+          <strong>ปิดใช้งานชั่วคราว:</strong> {item.unavailableReason}
+        </div>
+      )}
+      {showDisable && (
+        <DisableAssetDialog
+          asset={item}
+          onCancel={() => setShowDisable(false)}
+          onConfirm={(reason) => { setShowDisable(false); onSetAvailability(true, reason); }}
+        />
+      )}
       {confirmDelete && (
         <ConfirmDialog
           message={`ต้องการลบเครื่องมือ ${item.code} · ${item.name} ใช่ไหม การลบไม่สามารถกู้คืนได้`}
@@ -954,9 +1001,12 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
         </>
       )}
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 18, flexWrap: "wrap", gap: 8 }}>
         <div style={S.panelTitle}>ประวัติกิจกรรม</div>
-        <button style={S.smallBtn} onClick={() => setShowAct(true)}><Plus size={13} /> บันทึกกิจกรรม</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={S.ghostBtn} onClick={() => setShowAct("external-cal")}>ส่งสอบเทียบภายนอก</button>
+          <button style={S.smallBtn} onClick={() => setShowAct(true)}><Plus size={13} /> บันทึกกิจกรรม</button>
+        </div>
       </div>
       <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
         {filterTab("all", "ทั้งหมด")}
@@ -997,7 +1047,11 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
       )}
 
       {showAct && (
-        <ActivityForm onCancel={() => setShowAct(false)} onSave={(act) => { onAddActivity(act); setShowAct(false); }} />
+        <ActivityForm
+          initial={showAct === "external-cal" ? { type: "calibration", external: true } : undefined}
+          onCancel={() => setShowAct(false)}
+          onSave={(act) => { onAddActivity(act); setShowAct(false); }}
+        />
       )}
       {editingAct && (
         <ActivityForm
@@ -1011,9 +1065,8 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
 }
 
 function ActivityForm({ initial, onCancel, onSave }) {
-  const [f, setF] = useState(initial
-    ? { date: initial.date, type: initial.type, detail: initial.detail || "", by: initial.by || "", poNo: initial.poNo || "", certUrl: initial.certUrl || "" }
-    : { date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", certUrl: "" });
+  const defaults = { date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", certUrl: "", external: false, externalLocation: "" };
+  const [f, setF] = useState({ ...defaults, ...initial });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
     <Modal onClose={onCancel} title={initial ? "แก้ไขกิจกรรม" : "บันทึกกิจกรรม"}>
@@ -1029,6 +1082,22 @@ function ActivityForm({ initial, onCancel, onSave }) {
         </Field>
         <Field label="ผู้ดำเนินการ / บริษัท"><input style={S.input} value={f.by} onChange={set("by")} /></Field>
         <Field label="เลขที่ PO"><input style={S.input} value={f.poNo} onChange={set("poNo")} placeholder="เช่น PO-2569-0123" /></Field>
+        {f.type === "calibration" && (
+          <Field label="สถานที่สอบเทียบ" full>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={f.external} onChange={(e) => setF({ ...f, external: e.target.checked })} style={{ width: 16, height: 16 }} />
+              ส่งสอบเทียบภายนอกบริษัท
+            </label>
+            {f.external && (
+              <input
+                style={{ ...S.input, marginTop: 8 }}
+                value={f.externalLocation}
+                onChange={(e) => setF({ ...f, externalLocation: e.target.value })}
+                placeholder="ชื่อหน่วยงาน/สถานที่ที่ส่งสอบเทียบ"
+              />
+            )}
+          </Field>
+        )}
         <Field label="รายละเอียด" full><textarea style={{ ...S.input, minHeight: 70 }} value={f.detail} onChange={set("detail")} /></Field>
         <Field label="ลิงก์ใบ Certificate" full>
           <input style={S.input} value={f.certUrl} onChange={set("certUrl")} placeholder="วางลิงก์ใบรับรองผลสอบเทียบ เช่น SharePoint, Google Drive" />
@@ -1048,6 +1117,7 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
   const [statusFilter, setStatusFilter] = useState("all");
   const [editing, setEditing] = useState(null);
   const [bookingFor, setBookingFor] = useState(null);
+  const [disabling, setDisabling] = useState(null);
 
   const filtered = items
     .filter(i => (i.code + i.name + (i.category || "") + i.location).toLowerCase().includes(q.toLowerCase()))
@@ -1068,6 +1138,13 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
   function remove(id) {
     setItems(items.filter(i => i.id !== id));
     notify("ลบอุปกรณ์แล้ว");
+  }
+  function setAvailability(id, disabled, reason) {
+    setItems(items.map(i => i.id === id
+      ? (disabled ? { ...i, status: "maintenance", unavailableReason: reason } : { ...i, status: "active", unavailableReason: "" })
+      : i
+    ));
+    notify(disabled ? "ปิดใช้งานชั่วคราวแล้ว" : "เปิดใช้งานอีกครั้งแล้ว");
   }
 
   return (
@@ -1094,6 +1171,9 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
             <div>
               <div style={{ fontWeight: 600 }}>{i.name}</div>
               {i.code && <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{i.code}</div>}
+              {i.status === "maintenance" && (
+                <Tag color="var(--amber)">ปิดใช้งาน{i.unavailableReason ? `: ${i.unavailableReason}` : ""}</Tag>
+              )}
             </div>,
             <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{i.category || "-"} · {i.location || "-"}</div>,
             <span style={{ fontFamily: "var(--font-mono)" }}>{i.totalQty || 1} ชิ้น</span>,
@@ -1101,7 +1181,18 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
               <CalendarCheck size={12} /> {bk.text}
             </div>,
             <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-              <button style={S.smallBtn} onClick={() => setBookingFor(i)}><CalendarCheck size={13} /> จอง/ยืม</button>
+              {i.status === "active" && (
+                <button style={S.smallBtn} onClick={() => setBookingFor(i)}><CalendarCheck size={13} /> จอง/ยืม</button>
+              )}
+              {i.status === "maintenance" ? (
+                <button style={{ ...S.iconBtnSm, color: "var(--green)" }} title="เปิดใช้งานอีกครั้ง" onClick={() => setAvailability(i.id, false, "")}>
+                  <CheckCircle2 size={13} />
+                </button>
+              ) : (
+                <button style={{ ...S.iconBtnSm, color: "var(--amber)" }} title="ปิดใช้งานชั่วคราว" onClick={() => setDisabling(i)}>
+                  <AlertTriangle size={13} />
+                </button>
+              )}
               <RowActions onEdit={() => setEditing(i)} onDelete={() => remove(i.id)} />
             </div>,
           ];
@@ -1110,6 +1201,13 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
       />
 
       {editing && <ItemForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {disabling && (
+        <DisableAssetDialog
+          asset={disabling}
+          onCancel={() => setDisabling(null)}
+          onConfirm={(reason) => { setAvailability(disabling.id, true, reason); setDisabling(null); }}
+        />
+      )}
       {bookingFor && (
         <BookingForm
           equipment={equipment}
@@ -1207,9 +1305,18 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
     update(b.id, { status: "cancelled" });
     notify("ยกเลิกรายการแล้ว");
   }
-  function markReturned(b) {
-    update(b.id, { returnedAt: todayISO(), returnedBy: actorName || currentUsername || "-" });
-    notify("บันทึกการคืนแล้ว");
+  function markReturned(b, qtyReturned) {
+    const total = b.qty || 1;
+    const remaining = total - (qtyReturned || total);
+    if (b.assetType === "item" && remaining > 0) {
+      // Partial return: reduce the outstanding qty, keep the booking active
+      // for what's still out.
+      update(b.id, { qty: remaining });
+      notify(`บันทึกคืนอุปกรณ์ ${qtyReturned} ชิ้น (เหลือค้างอีก ${remaining} ชิ้น)`);
+    } else {
+      update(b.id, { returnedAt: todayISO(), returnedBy: actorName || currentUsername || "-" });
+      notify(b.assetType === "item" ? "บันทึกคืนอุปกรณ์ครบแล้ว" : "บันทึกใช้งานเสร็จสิ้นแล้ว");
+    }
   }
 
   function create(list) {
@@ -1218,6 +1325,49 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
     setBookings([...records, ...bookings]);
     notify(records.length > 1 ? `ส่งคำขอจอง/ยืม ${records.length} รายการแล้ว รออนุมัติ` : "ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
     setShowForm(false);
+  }
+
+  const bookingCols = ["รายการที่ยืม", "ประเภท / ช่วงเวลา", "ผู้จอง / วัตถุประสงค์", "สถานะ", ""];
+  function bookingRow(b) {
+    return [
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <span style={{ fontWeight: 600 }}>{b.equipmentCode || b.equipmentName}</span>
+          <Tag color={b.assetType === "item" ? "#7A4FC2" : "var(--teal)"}>{b.assetType === "item" ? "อุปกรณ์" : "เครื่องมือ"}</Tag>
+          {b.offSite && <Tag color="var(--amber)">นอกสถานที่</Tag>}
+        </div>
+        {b.equipmentCode && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{b.equipmentName}</div>}
+        {b.assetType === "item" && b.qty > 1 && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>จำนวน {b.qty} ชิ้น</div>}
+      </div>,
+      <div>
+        <div>{BOOKING_TYPE_LABEL[b.type]}</div>
+        <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+          {b.type === "checkout"
+            ? `${fmtDate(b.startDate)}${b.returnedAt ? ` → คืนแล้ว ${fmtDate(b.returnedAt)}` : b.dueBackDate ? ` · กำหนดคืน ${fmtDate(b.dueBackDate)}` : ""}`
+            : `${fmtDate(b.startDate)}${b.endDate && b.endDate !== b.startDate ? ` - ${fmtDate(b.endDate)}` : ""}`}
+        </div>
+        {b.offSiteLocation && <div style={{ fontSize: 11, color: "var(--amber)" }}>ใช้ที่: {b.offSiteLocation}</div>}
+        {isBookingOverdue(b) && <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 2 }}>เลยกำหนดคืน {Math.abs(daysUntil(b.dueBackDate))} วัน</div>}
+      </div>,
+      <div>
+        <div style={{ fontWeight: 600 }}>{b.requestedBy || "-"}</div>
+        {b.purpose && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{b.purpose}</div>}
+      </div>,
+      <div>
+        <Tag color={BOOKING_STATUS_COLOR[b.status]}>{BOOKING_STATUS_LABEL[b.status]}</Tag>
+        {b.status !== "pending" && b.approvedBy && (
+          <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>โดย {b.approvedBy}</div>
+        )}
+      </div>,
+      <BookingActions
+        booking={b}
+        canApprove={!restrictToBooking}
+        onApprove={() => approve(b)}
+        onReject={() => reject(b)}
+        onCancel={() => cancel(b)}
+        onReturn={(qty) => markReturned(b, qty)}
+      />,
+    ];
   }
 
   return (
@@ -1259,51 +1409,28 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         </button>
       </Toolbar>
 
-      <Table
-        cols={["รายการที่ยืม", "ประเภท / ช่วงเวลา", "ผู้จอง / วัตถุประสงค์", "สถานะ", ""]}
-        rows={shown.map(b => [
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <span style={{ fontWeight: 600 }}>{b.equipmentCode || b.equipmentName}</span>
-              <Tag color={b.assetType === "item" ? "#7A4FC2" : "var(--teal)"}>{b.assetType === "item" ? "อุปกรณ์" : "เครื่องมือ"}</Tag>
-            </div>
-            {b.equipmentCode && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{b.equipmentName}</div>}
-            {b.assetType === "item" && b.qty > 1 && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>จำนวน {b.qty} ชิ้น</div>}
-          </div>,
-          <div>
-            <div>{BOOKING_TYPE_LABEL[b.type]}</div>
-            <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
-              {b.type === "checkout"
-                ? `${fmtDate(b.startDate)}${b.returnedAt ? ` → คืนแล้ว ${fmtDate(b.returnedAt)}` : b.dueBackDate ? ` · กำหนดคืน ${fmtDate(b.dueBackDate)}` : ""}`
-                : `${fmtDate(b.startDate)}${b.endDate && b.endDate !== b.startDate ? ` - ${fmtDate(b.endDate)}` : ""}`}
-            </div>
-            {isBookingOverdue(b) && <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 2 }}>เลยกำหนดคืน {Math.abs(daysUntil(b.dueBackDate))} วัน</div>}
-          </div>,
-          <div>
-            <div style={{ fontWeight: 600 }}>{b.requestedBy || "-"}</div>
-            {b.purpose && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{b.purpose}</div>}
-          </div>,
-          <div>
-            <Tag color={BOOKING_STATUS_COLOR[b.status]}>{BOOKING_STATUS_LABEL[b.status]}</Tag>
-            {b.status !== "pending" && b.approvedBy && (
-              <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>โดย {b.approvedBy}</div>
-            )}
-          </div>,
-          <BookingActions
-            booking={b}
-            canApprove={!restrictToBooking}
-            onApprove={() => approve(b)}
-            onReject={() => reject(b)}
-            onCancel={() => cancel(b)}
-            onReturn={() => markReturned(b)}
-          />,
-        ])}
-        empty={
-          view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
-          : view === "current" ? "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"
-          : "ยังไม่มีประวัติ"
-        }
-      />
+      {view === "history" ? (
+        <>
+          <div style={{ ...S.panelTitle, marginTop: 4 }}>เครื่องมือ</div>
+          <Table
+            cols={bookingCols}
+            rows={history.filter(b => b.assetType !== "item").map(bookingRow)}
+            empty="ยังไม่มีประวัติเครื่องมือ"
+          />
+          <div style={{ ...S.panelTitle, marginTop: 20 }}>อุปกรณ์</div>
+          <Table
+            cols={bookingCols}
+            rows={history.filter(b => b.assetType === "item").map(bookingRow)}
+            empty="ยังไม่มีประวัติอุปกรณ์"
+          />
+        </>
+      ) : (
+        <Table
+          cols={bookingCols}
+          rows={shown.map(bookingRow)}
+          empty={view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ") : "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"}
+        />
+      )}
 
       {showForm && (
         <BookingForm
@@ -1322,6 +1449,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
 
 function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel, onReturn }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmReturn, setConfirmReturn] = useState(false);
   if (b.status === "pending") {
     return (
       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
@@ -1347,9 +1475,19 @@ function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel,
     // Marking something returned confirms the physical item is actually
     // back — restricted to lab/admin so a borrower can't just self-certify.
     if (!canApprove) return null;
+    const isItem = b.assetType === "item";
     return (
       <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-        <button style={S.smallBtn} onClick={onReturn}><Undo2 size={13} /> บันทึกคืนแล้ว</button>
+        <button style={S.smallBtn} onClick={() => setConfirmReturn(true)}>
+          <Undo2 size={13} /> {isItem ? "คืนอุปกรณ์แล้ว" : "ใช้งานเสร็จสิ้นแล้ว"}
+        </button>
+        {confirmReturn && (
+          <ReturnQtyDialog
+            booking={b}
+            onCancel={() => setConfirmReturn(false)}
+            onConfirm={(qty) => { setConfirmReturn(false); onReturn(qty); }}
+          />
+        )}
       </div>
     );
   }
@@ -1373,11 +1511,13 @@ function BookingActions({ booking: b, canApprove, onApprove, onReject, onCancel,
 
 function BookingForm({ equipment, items = [], bookings, setBookings, initialEquipmentId, initialAssetType, fixedRequestedBy, onCancel, onSave }) {
   // Air conditioners are fixed-installed, not something anyone checks out —
-  // excluded from the equipment picker entirely.
+  // excluded from the equipment picker entirely. Anything under
+  // maintenance/disabled (status !== "active") is also excluded — it's not
+  // available to book until re-enabled.
   const activeEquipment = equipment
-    .filter(e => e.status !== "inactive" && e.type !== "เครื่องปรับอากาศ")
+    .filter(e => e.status === "active" && e.type !== "เครื่องปรับอากาศ")
     .slice().sort((a, b) => alphaCompare(a.code, b.code));
-  const activeItems = items.filter(i => i.status !== "inactive").slice().sort((a, b) => alphaCompare(a.name, b.name));
+  const activeItems = items.filter(i => i.status === "active").slice().sort((a, b) => alphaCompare(a.name, b.name));
 
   const isAdmin = !fixedRequestedBy;
 
@@ -1400,6 +1540,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   // ---- shared ----
   const [requestedBy, setRequestedBy] = useState(fixedRequestedBy || "");
   const [purpose, setPurpose] = useState("");
+  const [offSite, setOffSite] = useState(false);
+  const [offSiteLocation, setOffSiteLocation] = useState("");
   const [expanded, setExpanded] = useState({}); // per asset id -> show all conflicts
 
   const eq = equipment.find(e => e.id === equipmentId);
@@ -1431,11 +1573,18 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const canCancelBooking = (c) => !!setBookings && (isAdmin || c.requestedBy === fixedRequestedBy);
   const canReturnBooking = () => !!setBookings && isAdmin;
   const [confirmCancelConflict, setConfirmCancelConflict] = useState(null);
+  const [confirmReturnConflict, setConfirmReturnConflict] = useState(null);
   function cancelConflict(c) {
     setBookings(bookings.map(b => b.id === c.id ? { ...b, status: "cancelled" } : b));
   }
-  function returnConflict(c) {
-    setBookings(bookings.map(b => b.id === c.id ? { ...b, returnedAt: todayISO(), returnedBy: "-" } : b));
+  function returnConflict(c, qtyReturned) {
+    const total = c.qty || 1;
+    const remaining = total - (qtyReturned || total);
+    if (c.assetType === "item" && remaining > 0) {
+      setBookings(bookings.map(b => b.id === c.id ? { ...b, qty: remaining } : b));
+    } else {
+      setBookings(bookings.map(b => b.id === c.id ? { ...b, returnedAt: todayISO(), returnedBy: "-" } : b));
+    }
   }
 
   function ConflictBox({ conflicts, assetKey, capacityNote }) {
@@ -1451,7 +1600,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           {shown.map(c => (
             <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, color: "var(--ink)" }}>
               <span>
-                {BOOKING_STATUS_LABEL[c.status]} · {BOOKING_TYPE_LABEL[c.type]} โดย {c.requestedBy || "-"}
+                {bookingLiveStatusLabel(c)} · {BOOKING_TYPE_LABEL[c.type]} โดย {c.requestedBy || "-"}
                 {" "}({fmtDate(bookingRange(c).start)}{bookingRange(c).end !== "9999-12-31" ? ` - ${fmtDate(bookingRange(c).end)}` : " เป็นต้นไป"})
               </span>
               <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
@@ -1461,8 +1610,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                   </button>
                 )}
                 {c.status === "approved" && c.type === "checkout" && !c.returnedAt && canReturnBooking(c) && (
-                  <button type="button" onClick={() => returnConflict(c)} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer", background: "transparent", color: "var(--green)", border: "1px solid var(--green)" }}>
-                    ใช้งานเสร็จแล้ว
+                  <button type="button" onClick={() => setConfirmReturnConflict(c)} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, cursor: "pointer", background: "transparent", color: "var(--green)", border: "1px solid var(--green)" }}>
+                    {c.assetType === "item" ? "คืนอุปกรณ์แล้ว" : "ใช้งานเสร็จแล้ว"}
                   </button>
                 )}
               </span>
@@ -1502,6 +1651,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
         dueBackDate: equipSubType === "checkout" ? dueBackDate : "",
         requestedBy: requestedBy.trim(),
         purpose: purpose.trim(),
+        offSite,
+        offSiteLocation: offSite ? offSiteLocation.trim() : "",
       }]);
     } else {
       const records = selectedItemIds.map(id => {
@@ -1518,6 +1669,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           dueBackDate: itemDueBackDate,
           requestedBy: requestedBy.trim(),
           purpose: purpose.trim(),
+          offSite,
+          offSiteLocation: offSite ? offSiteLocation.trim() : "",
         };
       });
       onSave(records);
@@ -1642,6 +1795,21 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           )}
         </Field>
         <Field label="วัตถุประสงค์/งานที่ใช้" full><textarea style={{ ...S.input, minHeight: 60 }} value={purpose} onChange={(e) => setPurpose(e.target.value)} /></Field>
+
+        <Field label="สถานที่ใช้งาน" full>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={offSite} onChange={(e) => setOffSite(e.target.checked)} style={{ width: 16, height: 16 }} />
+            ขอใช้นอกสถานที่ (ไม่ได้ใช้งานภายในแล็บ)
+          </label>
+          {offSite && (
+            <input
+              style={{ ...S.input, marginTop: 8 }}
+              value={offSiteLocation}
+              onChange={(e) => setOffSiteLocation(e.target.value)}
+              placeholder="ระบุสถานที่ที่จะนำไปใช้ (ถ้ามี)"
+            />
+          )}
+        </Field>
       </div>
 
       {mode === "equipment" && (
@@ -1676,6 +1844,13 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
           confirmLabel="ยกเลิกคำขอ"
           onCancel={() => setConfirmCancelConflict(null)}
           onConfirm={() => { cancelConflict(confirmCancelConflict); setConfirmCancelConflict(null); }}
+        />
+      )}
+      {confirmReturnConflict && (
+        <ReturnQtyDialog
+          booking={confirmReturnConflict}
+          onCancel={() => setConfirmReturnConflict(null)}
+          onConfirm={(qty) => { returnConflict(confirmReturnConflict, qty); setConfirmReturnConflict(null); }}
         />
       )}
     </Modal>
@@ -2849,7 +3024,113 @@ function ConfirmDialog({ title = "ยืนยันการทำรายก�
   );
 }
 
-/* ================= styles ================= */
+// Confirms a return/finish action. For "อุปกรณ์" (items) with more than one
+// unit borrowed, asks how many are actually coming back — partial returns
+// reduce the remaining qty on the booking instead of closing it outright.
+// For "เครื่องมือ" (equipment) there's nothing to count, just a straight
+// confirm with the "ใช้งานเสร็จสิ้นแล้ว" wording.
+function ReturnQtyDialog({ booking, onCancel, onConfirm }) {
+  const isItem = booking.assetType === "item";
+  const maxQty = booking.qty || 1;
+  const [qty, setQty] = useState(maxQty);
+  return (
+    <div
+      onClick={(e) => { e.stopPropagation(); onCancel(); }}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(18,37,59,0.4)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 12, border: "1px solid var(--line)",
+          padding: "20px 22px", width: "100%", maxWidth: 340, boxShadow: "0 12px 32px rgba(18,37,59,0.2)",
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>
+          {isItem ? "คืนอุปกรณ์แล้ว" : "ใช้งานเสร็จสิ้นแล้ว"}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+          {booking.equipmentCode || booking.equipmentName} · ผู้ยืม {booking.requestedBy || "-"}
+        </div>
+        {isItem && maxQty > 1 && (
+          <div style={{ marginTop: 14 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>จำนวนที่คืน (จากทั้งหมด {maxQty} ชิ้น)</label>
+            <input
+              type="number" min="1" max={maxQty} value={qty}
+              onChange={(e) => setQty(Math.max(1, Math.min(maxQty, Number(e.target.value) || 1)))}
+              style={{ ...S.input, marginTop: 6 }}
+            />
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+          <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+          <button style={S.primaryBtn} onClick={() => onConfirm(isItem ? qty : maxQty)}>
+            {isItem ? "ยืนยันคืน" : "ยืนยันเสร็จสิ้น"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// Quick "take this out of service" action — sets status to maintenance with
+// a reason, without going through the full edit form. Used from both
+// Equipment and Items so staff can mark something unbookable right when
+// they notice it's broken/in use/unavailable.
+function DisableAssetDialog({ asset, onCancel, onConfirm }) {
+  const presets = ["ชำรุด", "แลปใช้งานอยู่ ไม่ว่าง", "ส่งซ่อม/สอบเทียบ", "อื่นๆ"];
+  const initialPreset = presets.includes(asset.unavailableReason) ? asset.unavailableReason : (asset.unavailableReason ? "อื่นๆ" : presets[0]);
+  const [reason, setReason] = useState(initialPreset);
+  const [customReason, setCustomReason] = useState(initialPreset === "อื่นๆ" ? (asset.unavailableReason || "") : "");
+  return (
+    <div
+      onClick={(e) => { e.stopPropagation(); onCancel(); }}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(18,37,59,0.4)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 12, border: "1px solid var(--line)",
+          padding: "20px 22px", width: "100%", maxWidth: 360, boxShadow: "0 12px 32px rgba(18,37,59,0.2)",
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>ปิดใช้งานชั่วคราว</div>
+        <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>
+          {asset.code ? `${asset.code} · ` : ""}{asset.name} — จะไม่แสดงในตัวเลือกจอง/ยืมจนกว่าจะเปิดใช้งานอีกครั้ง
+        </div>
+        <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>เหตุผล</label>
+        <select style={{ ...S.input, marginTop: 6 }} value={reason} onChange={(e) => setReason(e.target.value)}>
+          {presets.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        {reason === "อื่นๆ" && (
+          <input
+            style={{ ...S.input, marginTop: 8 }}
+            value={customReason}
+            onChange={(e) => setCustomReason(e.target.value)}
+            placeholder="ระบุเหตุผล"
+          />
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+          <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+          <button
+            style={{ ...S.primaryBtn, background: "var(--amber)", borderColor: "var(--amber)" }}
+            onClick={() => onConfirm(reason === "อื่นๆ" ? customReason.trim() : reason)}
+          >
+            ปิดใช้งาน
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 * { box-sizing: border-box; }
