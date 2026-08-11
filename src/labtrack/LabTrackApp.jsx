@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo } from "react";
 import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  Clock, ChevronRight, MapPin, CalendarClock, ClipboardList,
-  CalendarCheck, XCircle, Undo2, Box, ExternalLink
+  Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
+  CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
+  LayoutGrid
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -297,11 +298,17 @@ const NAV = [
   { key: "equipment", label: "เครื่องมือ", icon: Wrench },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
+  { key: "usageCalendar", label: "ปฏิทินการใช้งาน", icon: CalendarClock },
+  { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
   { key: "consumables", label: "พัสดุสิ้นเปลือง", icon: Package },
   { key: "purchase", label: "ใบขอซื้อ (PR)", icon: ClipboardList },
   { key: "reports", label: "รายงาน", icon: FileDown },
 ];
+// Keys visible to booking-only (restricted) accounts — these external/limited
+// logins never see the full admin nav, only booking + the two read-mostly
+// pages that help them see what's free/busy without exposing admin tools.
+const BOOKING_ONLY_NAV_KEYS = ["bookings", "usageCalendar", "catalog"];
 
 export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
   const [tab, setTab] = useState(restrictToBooking ? "bookings" : "dashboard");
@@ -381,7 +388,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   const totalAlertCount = alerts.calib.length + alerts.expiry.length + alerts.lowStock.length
     + alerts.lowChem.length + alerts.pendingBookings.length + alerts.overdueBookings.length;
 
-  const visibleNav = restrictToBooking ? NAV.filter(n => n.key === "bookings") : NAV;
+  const visibleNav = restrictToBooking ? NAV.filter(n => BOOKING_ONLY_NAV_KEYS.includes(n.key)) : NAV;
 
   if (loading) {
     return (
@@ -430,44 +437,46 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
             </nav>
           )}
           <div style={S.sidebarFoot} className="ltSidebarFoot">
-            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืมเครื่องมือ" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
+            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน และรายการที่ยืมได้" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
           </div>
         </aside>
 
         {/* main */}
         <main style={S.main} className="ltMain">
-          {restrictToBooking ? (
+          {!restrictToBooking && tab === "dashboard" && (
+            <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} />
+          )}
+          {!restrictToBooking && tab === "equipment" && (
+            <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
+              activities={activities} setActivities={persist.activities}
+              bookings={bookings} setBookings={persist.bookings} items={items} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "items" && (
+            <ItemsTab items={items} setItems={persist.items} bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
+          )}
+          {tab === "bookings" && (
             <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} items={items} notify={notify}
-              restrictToBooking currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
-          ) : (
-            <>
-              {tab === "dashboard" && (
-                <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} />
-              )}
-              {tab === "equipment" && (
-                <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
-                  activities={activities} setActivities={persist.activities}
-                  bookings={bookings} setBookings={persist.bookings} items={items} notify={notify} />
-              )}
-              {tab === "items" && (
-                <ItemsTab items={items} setItems={persist.items} bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
-              )}
-              {tab === "bookings" && (
-                <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} items={items} notify={notify} />
-              )}
-              {tab === "chemicals" && (
-                <ChemicalsTab chemicals={chemicals} setChemicals={persist.chemicals} notify={notify} />
-              )}
-              {tab === "consumables" && (
-                <ConsumablesTab consumables={consumables} setConsumables={persist.consumables} notify={notify} />
-              )}
-              {tab === "purchase" && (
-                <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} />
-              )}
-              {tab === "reports" && (
-                <ReportsTab equipment={equipment} activities={activities} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests} />
-              )}
-            </>
+              restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+          )}
+          {tab === "usageCalendar" && (
+            <UsageCalendarTab bookings={bookings} equipment={equipment} items={items}
+              restrictToBooking={restrictToBooking} currentUsername={currentUsername} goto={setTab} />
+          )}
+          {tab === "catalog" && (
+            <CatalogTab equipment={equipment} items={items} bookings={bookings} setBookings={persist.bookings} notify={notify}
+              restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+          )}
+          {!restrictToBooking && tab === "chemicals" && (
+            <ChemicalsTab chemicals={chemicals} setChemicals={persist.chemicals} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "consumables" && (
+            <ConsumablesTab consumables={consumables} setConsumables={persist.consumables} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "purchase" && (
+            <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "reports" && (
+            <ReportsTab equipment={equipment} activities={activities} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests} />
           )}
         </main>
       </div>
@@ -1318,7 +1327,7 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
           <option value="maintenance">ซ่อมบำรุง</option>
           <option value="inactive">ปิดใช้งาน</option>
         </select>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", category: "", location: "", status: "active", totalQty: 1, notes: "" })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", category: "", location: "", status: "active", totalQty: 1, notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มอุปกรณ์
         </button>
       </Toolbar>
@@ -1328,12 +1337,15 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
         rows={filtered.map(i => {
           const bk = itemBookingSummary(i.id, bookings, i.totalQty);
           return [
-            <div>
-              <div style={{ fontWeight: 600 }}>{i.name}</div>
-              {i.code && <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{i.code}</div>}
-              {i.status === "maintenance" && (
-                <Tag color="var(--amber)">ปิดใช้งาน{i.unavailableReason ? `: ${i.unavailableReason}` : ""}</Tag>
-              )}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Thumb src={i.imageUrl} size={34} />
+              <div>
+                <div style={{ fontWeight: 600 }}>{i.name}</div>
+                {i.code && <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{i.code}</div>}
+                {i.status === "maintenance" && (
+                  <Tag color="var(--amber)">ปิดใช้งาน{i.unavailableReason ? `: ${i.unavailableReason}` : ""}</Tag>
+                )}
+              </div>
             </div>,
             <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{i.category || "-"} · {i.location || "-"}</div>,
             <span style={{ fontFamily: "var(--font-mono)" }}>{i.totalQty || 1} ชิ้น</span>,
@@ -1392,6 +1404,7 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
 
 function ItemForm({ item, onCancel, onSave }) {
   const [f, setF] = useState(item);
+  const [imgError, setImgError] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
     <Modal onClose={onCancel} title={item.name ? "แก้ไขอุปกรณ์" : "เพิ่มอุปกรณ์ใหม่"}>
@@ -1423,6 +1436,26 @@ function ItemForm({ item, onCancel, onSave }) {
             <option value="maintenance">ซ่อมบำรุง</option>
             <option value="inactive">ปิดใช้งาน</option>
           </select>
+        </Field>
+        <Field label="ลิงก์รูปภาพอุปกรณ์" full>
+          <input
+            style={S.input}
+            value={f.imageUrl || ""}
+            onChange={(e) => { setImgError(false); setF({ ...f, imageUrl: e.target.value }); }}
+            placeholder="วางลิงก์รูปภาพ เช่น https://..."
+          />
+          {f.imageUrl && (
+            imgError ? (
+              <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>โหลดรูปภาพจากลิงก์นี้ไม่ได้ กรุณาตรวจสอบลิงก์</div>
+            ) : (
+              <img
+                src={f.imageUrl}
+                alt=""
+                onError={() => setImgError(true)}
+                style={{ width: "100%", maxHeight: 160, objectFit: "contain", background: "#EEF2F6", borderRadius: 8, marginTop: 8, border: "1px solid var(--line)" }}
+              />
+            )
+          )}
         </Field>
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.notes || ""} onChange={set("notes")} /></Field>
       </div>
@@ -3836,6 +3869,286 @@ function DisableAssetDialog({ asset, onCancel, onConfirm }) {
   );
 }
 
+
+/* ================= shared: asset thumbnails ================= */
+// Small image chip used across the calendar & catalog pages, with a
+// graceful icon fallback when no photo is on file / the link is broken.
+function Thumb({ src, size = 40, radius = 8 }) {
+  const [broken, setBroken] = useState(false);
+  if (!src || broken) {
+    return (
+      <div style={{
+        width: size, height: size, borderRadius: radius, background: "#EEF2F6",
+        border: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "center",
+        color: "var(--muted)", flexShrink: 0,
+      }}>
+        <ImageOff size={Math.round(size * 0.42)} strokeWidth={1.6} />
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src} alt="" onError={() => setBroken(true)}
+      style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", border: "1px solid var(--line)", background: "#EEF2F6", flexShrink: 0 }}
+    />
+  );
+}
+
+// Combined equipment+item lookup keyed by id, used by both the calendar and
+// catalog pages so a booking's equipmentId resolves to a name/photo/status
+// regardless of which asset type it points at.
+function buildAssetMap(equipment, items) {
+  const map = {};
+  equipment.forEach(e => { map[e.id] = { ...e, kind: "equipment", kindLabel: "เครื่องมือ" }; });
+  items.forEach(i => { map[i.id] = { ...i, kind: "item", kindLabel: "อุปกรณ์" }; });
+  return map;
+}
+
+/* ================= USAGE CALENDAR (ปฏิทินการใช้งาน) ================= */
+// Read-mostly page — used by both admins and booking-only accounts — showing
+// per-day which equipment/items are checked out or reserved, plus photo
+// cards for whatever is actually out the door right now. Only APPROVED
+// bookings are shown (a pending request isn't a real hold yet). Booking-only
+// accounts never see WHO else has something out, matching the privacy rule
+// already used in BookingsTab — only that a slot is busy.
+function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, currentUsername }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
+  const [selectedDate, setSelectedDate] = useState(null);
+  const assetMap = useMemo(() => buildAssetMap(equipment, items), [equipment, items]);
+
+  const liveBookings = useMemo(() => bookings.filter(b => b.status === "approved"), [bookings]);
+
+  function isMine(b) {
+    return (b.requestedByUsername || b.requestedBy) === currentUsername;
+  }
+  function eventLabel(b) {
+    if (!restrictToBooking || isMine(b)) return b.requestedBy || "-";
+    return b.type === "checkout" ? "มีผู้ใช้งาน" : "มีผู้จองไว้";
+  }
+
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+
+  const dateStrOf = (d) => `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const today = todayISO();
+
+  function eventsOn(dateStr) {
+    return liveBookings.filter(b => {
+      const r = bookingRange(b);
+      return r.start <= dateStr && dateStr <= r.end;
+    });
+  }
+
+  const monthLabel = cursor.toLocaleDateString("th-TH", { month: "long", year: "numeric" });
+
+  const inUseNow = liveBookings
+    .filter(b => b.type === "checkout" && !b.returnedAt && (b.startDate || "") <= today)
+    .sort((a, b) => (a.startDate || "").localeCompare(b.startDate || ""));
+
+  const selectedEvents = selectedDate ? eventsOn(selectedDate) : [];
+
+  return (
+    <div>
+      <TabHeader title="ปฏิทินการใช้งาน" sub="ดูว่าเครื่องมือ/อุปกรณ์ชิ้นไหนกำลังใช้งานอยู่ หรือถูกจองล่วงหน้าไว้ในแต่ละวัน" />
+
+      {inUseNow.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ ...S.panelTitle, marginBottom: 10 }}>กำลังใช้งานอยู่ตอนนี้ ({inUseNow.length})</div>
+          <div style={S.cardGrid}>
+            {inUseNow.map(b => {
+              const asset = assetMap[b.equipmentId];
+              return (
+                <div key={b.id} style={{ ...S.eqCard, display: "flex", gap: 10 }}>
+                  <Thumb src={asset?.imageUrl} size={52} radius={9} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={S.eqName}>{b.equipmentName}</div>
+                    {b.equipmentCode && <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{b.equipmentCode}</div>}
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>
+                      <User size={12} /> {eventLabel(b)}
+                    </div>
+                    {b.dueBackDate && (
+                      <div style={{ fontSize: 11, marginTop: 3, color: isBookingOverdue(b) ? "var(--red)" : "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                        กำหนดคืน {fmtDate(b.dueBackDate)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div style={{ ...S.panel, padding: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <button style={S.iconBtnSm} onClick={() => setCursor(new Date(year, month - 1, 1))}><ChevronLeft size={15} /></button>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14.5 }}>{monthLabel}</div>
+          <button style={S.iconBtnSm} onClick={() => setCursor(new Date(year, month + 1, 1))}><ChevronRight size={15} /></button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, fontSize: 11, color: "var(--muted)", fontWeight: 600, textAlign: "center", marginBottom: 4 }}>
+          {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map(w => <div key={w}>{w}</div>)}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+          {weeks.map((week, wi) => week.map((d, di) => {
+            if (d === null) return <div key={`${wi}-${di}`} />;
+            const dateStr = dateStrOf(d);
+            const events = eventsOn(dateStr);
+            const isToday = dateStr === today;
+            return (
+              <button
+                key={dateStr}
+                onClick={() => events.length > 0 && setSelectedDate(dateStr)}
+                style={{
+                  minHeight: 64, textAlign: "left", background: isToday ? "#EAF4FB" : "#fff",
+                  border: `1px solid ${isToday ? "var(--teal)" : "var(--line)"}`, borderRadius: 8, padding: 5,
+                  cursor: events.length > 0 ? "pointer" : "default", display: "flex", flexDirection: "column", gap: 2,
+                  fontFamily: "inherit",
+                }}
+              >
+                <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: isToday ? "var(--teal-dark)" : "var(--muted)", fontWeight: isToday ? 700 : 500 }}>{d}</div>
+                {events.slice(0, 2).map(b => (
+                  <div key={b.id} style={{
+                    display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, borderRadius: 4, padding: "1px 3px",
+                    background: b.type === "checkout" ? "#FCEAEA" : "#FDF3E3",
+                    color: b.type === "checkout" ? "var(--red)" : "var(--amber)", overflow: "hidden", whiteSpace: "nowrap",
+                  }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{b.equipmentName}</span>
+                  </div>
+                ))}
+                {events.length > 2 && <div style={{ fontSize: 9.5, color: "var(--muted)" }}>+{events.length - 2} รายการ</div>}
+              </button>
+            );
+          }))}
+        </div>
+      </div>
+
+      {selectedDate && (
+        <Modal onClose={() => setSelectedDate(null)} title={fmtDate(selectedDate)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {selectedEvents.length === 0 && <EmptyState text="ไม่มีรายการในวันนี้" />}
+            {selectedEvents.map(b => {
+              const asset = assetMap[b.equipmentId];
+              return (
+                <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "center", border: "1px solid var(--line)", borderRadius: 10, padding: 10 }}>
+                  <Thumb src={asset?.imageUrl} size={48} radius={8} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{b.equipmentName}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{eventLabel(b)}</div>
+                  </div>
+                  <Tag color={b.type === "checkout" ? "var(--red)" : "var(--amber)"}>{BOOKING_TYPE_LABEL[b.type]}</Tag>
+                </div>
+              );
+            })}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ================= CATALOG (รายการที่ยืมได้) ================= */
+// Browsable, photo-first list of every active equipment + item, so people
+// (especially booking-only accounts, who have no admin tables to browse)
+// can see what's available before opening the booking form. Tapping a card
+// jumps straight into a pre-filled booking request, reusing the same
+// BookingForm modal the admin Equipment/Items tables use.
+function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictToBooking, currentUsername, currentDisplayName }) {
+  const [q, setQ] = useState("");
+  const [kindFilter, setKindFilter] = useState("all"); // all | equipment | item
+  const [bookingFor, setBookingFor] = useState(null); // { id, assetType }
+
+  const catalog = useMemo(() => {
+    const eq = equipment
+      .filter(e => e.status === "active" && e.type !== "เครื่องปรับอากาศ")
+      .map(e => ({ ...e, assetType: "equipment", summary: equipmentBookingSummary(e.id, bookings) }));
+    const it = items
+      .filter(i => i.status === "active")
+      .map(i => ({ ...i, assetType: "item", summary: itemBookingSummary(i.id, bookings, i.totalQty) }));
+    return [...eq, ...it].sort((a, b) => alphaCompare(a.name, b.name));
+  }, [equipment, items, bookings]);
+
+  const filtered = catalog
+    .filter(a => kindFilter === "all" || a.assetType === kindFilter)
+    .filter(a => (a.name + (a.code || "") + (a.category || a.type || "") + (a.location || "")).toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <div>
+      <TabHeader title="รายการที่ยืมได้" sub="เครื่องมือและอุปกรณ์ทั้งหมดที่พร้อมให้จอง/ยืม พร้อมรูปภาพและสถานะว่าง/ไม่ว่างล่าสุด" />
+      <Toolbar>
+        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาชื่อ, รหัส, ประเภท, ตำแหน่ง..." />
+        <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)} style={S.select}>
+          <option value="all">ทุกประเภท</option>
+          <option value="equipment">เครื่องมือ</option>
+          <option value="item">อุปกรณ์</option>
+        </select>
+      </Toolbar>
+
+      <div style={S.cardGrid}>
+        {filtered.map(a => (
+          <div key={`${a.assetType}-${a.id}`} style={{ ...S.eqCard, padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            <div style={{ width: "100%", aspectRatio: "4 / 3", background: "#EEF2F6", position: "relative" }}>
+              {a.imageUrl ? (
+                <img src={a.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+              ) : (
+                <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)" }}>
+                  <ImageOff size={26} strokeWidth={1.5} />
+                </div>
+              )}
+              <div style={{ position: "absolute", top: 8, left: 8, ...S.tag, background: "#fff", border: "1px solid var(--line)", fontSize: 10.5, padding: "2px 8px" }}>
+                {a.assetType === "equipment" ? "เครื่องมือ" : "อุปกรณ์"}
+              </div>
+            </div>
+            <div style={{ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+              {a.code && <div style={S.eqCode}>{a.code}</div>}
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</div>
+              <div style={S.eqMeta}><MapPin size={12} /> {a.location || "-"} · {a.category || a.type || "-"}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 600, color: a.summary.color, marginTop: "auto", paddingTop: 6 }}>
+                <CalendarCheck size={12} /> {restrictToBooking && a.summary.busy && a.assetType === "equipment" ? "ไม่ว่าง" : a.summary.text}
+              </div>
+              <button
+                style={{ ...S.smallBtn, justifyContent: "center", marginTop: 6 }}
+                onClick={() => setBookingFor(a)}
+              >
+                <CalendarCheck size={13} /> จอง/ยืม
+              </button>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && <EmptyState text="ไม่พบเครื่องมือ/อุปกรณ์ที่ตรงกับเงื่อนไข" />}
+      </div>
+
+      {bookingFor && (
+        <BookingForm
+          equipment={equipment}
+          items={items}
+          initialAssetType={bookingFor.assetType}
+          initialEquipmentId={bookingFor.id}
+          bookings={bookings}
+          setBookings={setBookings}
+          fixedRequestedBy={restrictToBooking ? currentUsername : null}
+          fixedRequestedByName={restrictToBooking ? currentDisplayName : null}
+          onCancel={() => setBookingFor(null)}
+          onSave={(list) => {
+            const now = new Date().toISOString();
+            const records = list.map(b => ({ ...b, id: uid(), status: "pending", requestedAt: now }));
+            setBookings([...records, ...bookings]);
+            notify(records.length > 1 ? `ส่งคำขอจอง/ยืม ${records.length} รายการแล้ว รออนุมัติ` : "ส่งคำขอจอง/ยืมแล้ว รออนุมัติ");
+            setBookingFor(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
