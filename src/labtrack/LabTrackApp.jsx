@@ -1647,6 +1647,31 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
           : "ขอใช้เครื่องมือแบบขอใช้งานทันทีหรือจองล่วงหน้า — ทุกคำขอต้องผ่านการอนุมัติก่อน"}
       />
 
+      {embedExtras && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          <button
+            onClick={() => setView("calendar")}
+            style={{
+              ...S.smallBtn, padding: "8px 14px", fontSize: 13,
+              background: view === "calendar" ? "var(--teal)" : "#E9F1FB",
+              color: view === "calendar" ? "#fff" : "var(--teal-dark)",
+            }}
+          >
+            <CalendarClock size={14} /> ปฏิทินการใช้งาน {liveBookingsCount > 0 ? `(${liveBookingsCount})` : ""}
+          </button>
+          <button
+            onClick={() => setView("catalog")}
+            style={{
+              ...S.smallBtn, padding: "8px 14px", fontSize: 13,
+              background: view === "catalog" ? "var(--teal)" : "#E9F1FB",
+              color: view === "catalog" ? "#fff" : "var(--teal-dark)",
+            }}
+          >
+            <LayoutGrid size={14} /> รายการที่ยืมได้ ({catalogCount})
+          </button>
+        </div>
+      )}
+
       {!restrictToBooking && (
         <div style={{ ...S.notesBox, marginBottom: 14, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600 }}>ชื่อผู้ดำเนินการ (สำหรับอนุมัติ/ปฏิเสธ/บันทึกคืน):</span>
@@ -1664,12 +1689,6 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         <ViewTab active={view === "current"} onClick={() => setView("current")} label="กำลังใช้งาน/จองอยู่" count={current.length} />
         <ViewTab active={view === "history-equipment"} onClick={() => setView("history-equipment")} label="ประวัติเครื่องมือ" count={historyEquipment.length} />
         <ViewTab active={view === "history-item"} onClick={() => setView("history-item")} label="ประวัติอุปกรณ์" count={historyItem.length} />
-        {embedExtras && (
-          <>
-            <ViewTab active={view === "calendar"} onClick={() => setView("calendar")} label="ปฏิทินการใช้งาน" count={liveBookingsCount} />
-            <ViewTab active={view === "catalog"} onClick={() => setView("catalog")} label="รายการที่ยืมได้" count={catalogCount} />
-          </>
-        )}
       </div>
 
       {embedExtras && view === "calendar" && (
