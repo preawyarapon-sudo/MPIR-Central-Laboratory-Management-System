@@ -5,6 +5,74 @@ import {
   Clock, ChevronRight, MapPin, CalendarClock, ClipboardList,
   CalendarCheck, XCircle, Undo2, Box, ExternalLink
 } from "lucide-react";
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getDatabase, ref, onValue } from "firebase/database";
+
+/* ---------- Lab Analysis Tracker (separate Firebase project) ----------
+   Read-only connection into the analysis-job database so the dashboard can
+   show live "ล่าช้า / ใกล้ครบกำหนด / งานที่ต้องทำ" counts. This app and the
+   analysis tracker keep separate databases by design (see labtrack notes) —
+   this is a second, independently-initialized Firebase app instance, not a
+   merge of the data itself. */
+const ANALYSIS_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCWgyRZEXzJXkftXpJSvHTOCPWWnDsE33U",
+  authDomain: "planning-with-ai-a162c.firebaseapp.com",
+  databaseURL: "https://planning-with-ai-a162c-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "planning-with-ai-a162c",
+  storageBucket: "planning-with-ai-a162c.firebasestorage.app",
+  messagingSenderId: "137382280837",
+  appId: "1:137382280837:web:01d67c8821bc736983b3ec",
+};
+function getAnalysisDb() {
+  const existing = getApps().find(a => a.name === "analysis");
+  const app = existing || initializeApp(ANALYSIS_FIREBASE_CONFIG, "analysis");
+  return getDatabase(app);
+}
+// Subscribes to every job in the analysis tracker's "jobs" node. Returns an
+// unsubscribe function (mirrors the analysis app's own subscribeJobs).
+function subscribeAnalysisJobs(callback) {
+  try {
+    const jobsRef = ref(getAnalysisDb(), "jobs");
+    return onValue(
+      jobsRef,
+      (snap) => {
+        const val = snap.val() || {};
+        callback(Object.values(val));
+      },
+      () => callback([])
+    );
+  } catch (e) {
+    console.error("analysis jobs subscribe failed", e);
+    callback([]);
+    return () => {};
+  }
+}
+// Mirrors the analysis app's own STATUS / deadline thresholds so the counts
+// shown here agree with what that app itself calls "late" / "warn".
+const ANALYSIS_STATUS = { WAIT: "Waiting", RUN: "Running", DONE: "Complete" };
+const ANALYSIS_WARN_DAYS = 10;
+const ANALYSIS_LATE_DAYS = 15;
+function analysisJobOverallStatus(job) {
+  const params = job.parameters || [];
+  const total = params.length;
+  const complete = params.filter(p => p.status === ANALYSIS_STATUS.DONE).length;
+  const running = params.filter(p => p.status === ANALYSIS_STATUS.RUN).length;
+  return total > 0 && complete === total ? ANALYSIS_STATUS.DONE : running > 0 ? ANALYSIS_STATUS.RUN : ANALYSIS_STATUS.WAIT;
+}
+// Buckets every not-yet-complete job into late / warn / ok (still "to do"),
+// using the same day thresholds as the analysis tracker itself.
+function analysisJobBuckets(jobs) {
+  let late = 0, warn = 0, todo = 0;
+  const now = Date.now();
+  for (const job of jobs) {
+    if (analysisJobOverallStatus(job) === ANALYSIS_STATUS.DONE) continue;
+    const days = job.createdAt ? Math.floor((now - job.createdAt) / 86400000) : 0;
+    if (days >= ANALYSIS_LATE_DAYS) late++;
+    else if (days >= ANALYSIS_WARN_DAYS) warn++;
+    else todo++;
+  }
+  return { late, warn, todo };
+}
 
 /* ---------- helpers ---------- */
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -136,15 +204,6 @@ function isBookingCurrent(b) {
 function isBookingOverdue(b) {
   return b.type === "checkout" && b.status === "approved" && !b.returnedAt && b.dueBackDate && daysUntil(b.dueBackDate) < 0;
 }
-// Checked out (or reserved) and due within the next 3 days, but not yet
-// overdue — the "keep an eye on this" middle bucket between fine and late.
-function isBookingDueSoon(b) {
-  if (b.status !== "approved" || b.returnedAt) return false;
-  const due = b.type === "checkout" ? b.dueBackDate : b.endDate;
-  if (!due) return false;
-  const d = daysUntil(due);
-  return d >= 0 && d <= 3;
-}
 // Human-readable one-line status of a piece of equipment right now, shown on
 // the equipment card/detail — e.g. "ว่าง", "ถูกยืมโดย สมชาย", "มีการจองล่วงหน้า".
 function equipmentBookingSummary(equipmentId, bookings) {
@@ -255,6 +314,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   const [consumables, setConsumables] = useState([]);
   const [purchaseRequests, setPurchaseRequests] = useState([]);
   const [toast, setToast] = useState(null);
+  const [analysisJobs, setAnalysisJobs] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -271,6 +331,15 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
       setLoading(false);
     })();
   }, []);
+
+  // Live, read-only subscription into the Lab Analysis Tracker's own
+  // Firebase project — just for the dashboard status counts.
+  useEffect(() => {
+    const unsubscribe = subscribeAnalysisJobs(setAnalysisJobs);
+    return unsubscribe;
+  }, []);
+
+  const analysisStats = useMemo(() => analysisJobBuckets(analysisJobs), [analysisJobs]);
 
   function notify(msg) {
     setToast(msg);
@@ -306,8 +375,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
       .filter(b => b.status === "pending")
       .sort((a, b) => (a.requestedAt || "").localeCompare(b.requestedAt || ""));
     const overdueBookings = bookings.filter(isBookingOverdue);
-    const dueSoonBookings = bookings.filter(isBookingDueSoon);
-    return { calib, expiry, lowStock, lowChem, pendingBookings, overdueBookings, dueSoonBookings };
+    return { calib, expiry, lowStock, lowChem, pendingBookings, overdueBookings };
   }, [equipment, chemicals, consumables, bookings]);
 
   const totalAlertCount = alerts.calib.length + alerts.expiry.length + alerts.lowStock.length
@@ -374,7 +442,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           ) : (
             <>
               {tab === "dashboard" && (
-                <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} goto={setTab} />
+                <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} />
               )}
               {tab === "equipment" && (
                 <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
@@ -434,7 +502,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
 }
 
 /* ================= DASHBOARD ================= */
-function Dashboard({ equipment, chemicals, consumables, bookings, alerts, goto }) {
+function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analysisStats, goto }) {
   const activeCount = equipment.filter(e => e.status === "active").length;
   const stats = [
     { label: "เครื่องมือทั้งหมด", value: equipment.length, sub: `${activeCount} ใช้งานอยู่`, icon: Wrench, tint: "#E9F1FB", color: "var(--teal)", goto: "equipment" },
@@ -501,16 +569,11 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, goto }
         <div style={{ ...S.panel, flex: "1 1 380px", marginBottom: 0 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={S.panelHead}>
-              <CalendarCheck size={15} color="var(--ink)" />
-              <span style={S.panelTitle}>งานที่ต้องติดตามวิเคราะห์</span>
+              <FlaskConical size={15} color="var(--ink)" />
+              <span style={S.panelTitle}>ติดตามงานวิเคราะห์ · Lab Analysis Tracker</span>
             </div>
-            <button onClick={() => goto("bookings")} style={S.panelLink}>ดูทั้งหมด <ChevronRight size={13} /></button>
           </div>
-          <BookingFollowupDonut
-            overdue={alerts.overdueBookings.length}
-            dueSoon={alerts.dueSoonBookings.length}
-            todo={alerts.pendingBookings.length}
-          />
+          <AnalysisJobsDonut late={analysisStats.late} warn={analysisStats.warn} todo={analysisStats.todo} />
         </div>
       </div>
 
@@ -568,11 +631,12 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, goto }
 
 // Donut for booking/loan items needing follow-up: overdue returns, items due
 // back soon, and pending approval requests still to action.
-function BookingFollowupDonut({ overdue, dueSoon, todo }) {
-  const total = overdue + dueSoon + todo;
+// Job counts pulled live from the Lab Analysis Tracker's own Firebase
+// project — "late"/"warn" thresholds mirror that app's own definitions.
+function AnalysisJobsDonut({ late, warn, todo }) {
   const segs = [
-    { value: overdue, color: "var(--red)", label: "ล่าช้า" },
-    { value: dueSoon, color: "var(--amber)", label: "ใกล้ครบกำหนด" },
+    { value: late, color: "var(--red)", label: "ล่าช้า" },
+    { value: warn, color: "var(--amber)", label: "ใกล้ครบกำหนด" },
     { value: todo, color: "var(--teal)", label: "งานที่ต้องทำ" },
   ];
   return <DonutChart segs={segs} centerLabel="ทั้งหมด" />;
