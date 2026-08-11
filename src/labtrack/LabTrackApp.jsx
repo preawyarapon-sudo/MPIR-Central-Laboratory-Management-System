@@ -3,8 +3,7 @@ import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
-  CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
-  LayoutGrid
+  CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -298,17 +297,11 @@ const NAV = [
   { key: "equipment", label: "เครื่องมือ", icon: Wrench },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
-  { key: "usageCalendar", label: "ปฏิทินการใช้งาน", icon: CalendarClock },
-  { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
   { key: "consumables", label: "พัสดุสิ้นเปลือง", icon: Package },
   { key: "purchase", label: "ใบขอซื้อ (PR)", icon: ClipboardList },
   { key: "reports", label: "รายงาน", icon: FileDown },
 ];
-// Keys visible to booking-only (restricted) accounts — these external/limited
-// logins never see the full admin nav, only booking + the two read-mostly
-// pages that help them see what's free/busy without exposing admin tools.
-const BOOKING_ONLY_NAV_KEYS = ["bookings", "usageCalendar", "catalog"];
 
 export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
   const [tab, setTab] = useState(restrictToBooking ? "bookings" : "dashboard");
@@ -388,7 +381,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   const totalAlertCount = alerts.calib.length + alerts.expiry.length + alerts.lowStock.length
     + alerts.lowChem.length + alerts.pendingBookings.length + alerts.overdueBookings.length;
 
-  const visibleNav = restrictToBooking ? NAV.filter(n => BOOKING_ONLY_NAV_KEYS.includes(n.key)) : NAV;
+  const visibleNav = restrictToBooking ? NAV.filter(n => n.key === "bookings") : NAV;
 
   if (loading) {
     return (
@@ -437,7 +430,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
             </nav>
           )}
           <div style={S.sidebarFoot} className="ltSidebarFoot">
-            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน และรายการที่ยืมได้" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
+            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืมเครื่องมือ" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
           </div>
         </aside>
 
@@ -456,14 +449,6 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           )}
           {tab === "bookings" && (
             <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} items={items} notify={notify}
-              restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
-          )}
-          {tab === "usageCalendar" && (
-            <UsageCalendarTab bookings={bookings} equipment={equipment} items={items}
-              restrictToBooking={restrictToBooking} currentUsername={currentUsername} goto={setTab} />
-          )}
-          {tab === "catalog" && (
-            <CatalogTab equipment={equipment} items={items} bookings={bookings} setBookings={persist.bookings} notify={notify}
               restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "chemicals" && (
@@ -1473,7 +1458,7 @@ function ItemForm({ item, onCancel, onSave }) {
 function BookingsTab({ bookings, setBookings, equipment, items = [], notify, restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [view, setView] = useState("pending"); // "pending" | "current" | "history-equipment" | "history-item"
+  const [view, setView] = useState("pending"); // "pending" | "current" | "history-equipment" | "history-item" | "calendar" | "catalog"
   const [showForm, setShowForm] = useState(false);
   const [actorName, setActorName] = useState("");
 
@@ -1500,6 +1485,13 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   const historyAll = ownOnly.filter(b => !isBookingCurrent(b) && b.status !== "pending").sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
   const historyEquipment = withMeta(historyAll.filter(b => b.assetType !== "item"));
   const historyItem = withMeta(historyAll.filter(b => b.assetType === "item"));
+
+  // Counts for the two merged read-mostly sub-pages below — these are
+  // always company-wide (not ownOnly), since "what's busy right now" and
+  // "what's available to borrow" are shared facts, not personal history.
+  const liveBookingsCount = bookings.filter(b => b.status === "approved").length;
+  const catalogCount = equipment.filter(e => e.status === "active" && e.type !== "เครื่องปรับอากาศ").length
+    + items.filter(i => i.status === "active").length;
 
   const shown = view === "pending" ? pending
     : view === "current" ? current
@@ -1640,30 +1632,46 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         <ViewTab active={view === "current"} onClick={() => setView("current")} label="กำลังใช้งาน/จองอยู่" count={current.length} />
         <ViewTab active={view === "history-equipment"} onClick={() => setView("history-equipment")} label="ประวัติเครื่องมือ" count={historyEquipment.length} />
         <ViewTab active={view === "history-item"} onClick={() => setView("history-item")} label="ประวัติอุปกรณ์" count={historyItem.length} />
+        <ViewTab active={view === "calendar"} onClick={() => setView("calendar")} label="ปฏิทินการใช้งาน" count={liveBookingsCount} />
+        <ViewTab active={view === "catalog"} onClick={() => setView("catalog")} label="รายการที่ยืมได้" count={catalogCount} />
       </div>
 
-      <Toolbar>
-        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเครื่องมือ, ผู้จอง, วัตถุประสงค์..." />
-        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={S.select}>
-          <option value="all">ทุกประเภท</option>
-          <option value="checkout">ขอใช้งาน</option>
-          <option value="reservation">จองล่วงหน้า</option>
-        </select>
-        <button style={S.primaryBtn} onClick={() => setShowForm(true)}>
-          <Plus size={15} /> จอง/ยืมเครื่องมือ
-        </button>
-      </Toolbar>
+      {view === "calendar" && (
+        <UsageCalendarTab bookings={bookings} equipment={equipment} items={items}
+          restrictToBooking={restrictToBooking} currentUsername={currentUsername} />
+      )}
 
-      <Table
-        cols={bookingCols}
-        rows={shown.map(bookingRow)}
-        empty={
-          view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
-          : view === "current" ? "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"
-          : view === "history-equipment" ? "ยังไม่มีประวัติเครื่องมือ"
-          : "ยังไม่มีประวัติอุปกรณ์"
-        }
-      />
+      {view === "catalog" && (
+        <CatalogTab equipment={equipment} items={items} bookings={bookings} setBookings={setBookings} notify={notify}
+          restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+      )}
+
+      {view !== "calendar" && view !== "catalog" && (
+        <>
+          <Toolbar>
+            <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเครื่องมือ, ผู้จอง, วัตถุประสงค์..." />
+            <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={S.select}>
+              <option value="all">ทุกประเภท</option>
+              <option value="checkout">ขอใช้งาน</option>
+              <option value="reservation">จองล่วงหน้า</option>
+            </select>
+            <button style={S.primaryBtn} onClick={() => setShowForm(true)}>
+              <Plus size={15} /> จอง/ยืมเครื่องมือ
+            </button>
+          </Toolbar>
+
+          <Table
+            cols={bookingCols}
+            rows={shown.map(bookingRow)}
+            empty={
+              view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
+              : view === "current" ? "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"
+              : view === "history-equipment" ? "ยังไม่มีประวัติเครื่องมือ"
+              : "ยังไม่มีประวัติอุปกรณ์"
+            }
+          />
+        </>
+      )}
 
       {showForm && (
         <BookingForm
