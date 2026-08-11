@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { FlaskConical, Plus, X, RefreshCw, LayoutGrid, ListChecks, Users, Layers, Trash2, Play, CheckCircle2, CircleDot, Circle, ChevronRight, ChevronDown, AlertCircle, AlertTriangle, Clock, ClipboardPaste, Sparkles, Search, Wrench } from "lucide-react";
+import { FlaskConical, Plus, X, RefreshCw, LayoutGrid, ListChecks, Users, Layers, Trash2, Play, CheckCircle2, CircleDot, Circle, ChevronRight, ChevronDown, AlertCircle, AlertTriangle, Clock, ClipboardPaste, Sparkles, Search, Wrench, BarChart3 } from "lucide-react";
 import { db } from "./firebase";
 import { ref, onValue, set, remove, runTransaction } from "firebase/database";
 
@@ -96,6 +96,54 @@ function deadlineInfo(job) {
   if (days >= LATE_DAYS) return { level: "late", days };
   if (days >= WARN_DAYS) return { level: "warn", days };
   return { level: "ok", days };
+}
+
+// Converts a timestamp to a "YYYY-M" month key and a short Thai label
+// (used to bucket jobs into monthly summary chart columns).
+function monthKey(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}`;
+}
+function monthShortLabel(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString("th-TH", { month: "short", year: "2-digit" });
+}
+// Builds the last `count` months (oldest first) as buckets, then tallies
+// each job into them:
+//  - newCount: job created in that month
+//  - onTime: job completed in that month, and finished within LATE_DAYS
+//  - late: job completed in that month, but took LATE_DAYS or longer
+// Jobs that are still open (no doneNotifiedAt yet) only count toward
+// newCount, never onTime/late — those are about completions, not backlog.
+function monthlyJobSummary(jobs, count = 6) {
+  const now = new Date();
+  const months = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({
+      key: `${d.getFullYear()}-${d.getMonth()}`,
+      label: monthShortLabel(d.getTime()),
+      newCount: 0,
+      onTime: 0,
+      late: 0,
+    });
+  }
+  const byKey = Object.fromEntries(months.map((m) => [m.key, m]));
+  for (const job of jobs) {
+    if (job.createdAt) {
+      const bucket = byKey[monthKey(job.createdAt)];
+      if (bucket) bucket.newCount += 1;
+    }
+    if (job.doneNotifiedAt) {
+      const bucket = byKey[monthKey(job.doneNotifiedAt)];
+      if (bucket) {
+        const tookMs = job.doneNotifiedAt - (job.createdAt || job.doneNotifiedAt);
+        if (tookMs >= LATE_DAYS * DAY_MS) bucket.late += 1;
+        else bucket.onTime += 1;
+      }
+    }
+  }
+  return months;
 }
 
 // Converts a dd/mm/yyyy string (as printed on lab documents) to a timestamp.
@@ -1889,17 +1937,7 @@ function Dashboard({ jobs, onOpen }) {
   const dueSoonCount = jobs.filter((j) => deadlineInfo(j).level === "warn").length;
   const lateCount = jobs.filter((j) => deadlineInfo(j).level === "late").length;
 
-  // Active (not-yet-complete) jobs, sorted most urgent first: late -> due
-  // soon -> on track. Within the same urgency level, newest first.
-  const activeJobs = useMemo(() => {
-    const active = jobs.filter((j) => computeJobStats(j).status !== STATUS.DONE);
-    const rank = { late: 0, warn: 1, ok: 2, done: 3 };
-    return [...active].sort((a, b) => {
-      const da = deadlineInfo(a), db = deadlineInfo(b);
-      if (rank[da.level] !== rank[db.level]) return rank[da.level] - rank[db.level];
-      return (b.createdAt || 0) - (a.createdAt || 0);
-    });
-  }, [jobs]);
+  const monthlySummary = useMemo(() => monthlyJobSummary(jobs, 6), [jobs]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1911,15 +1949,65 @@ function Dashboard({ jobs, onOpen }) {
         <MetricCard label="ล่าช้า (15+ วัน)" value={lateCount} color={C.red} icon={AlertTriangle} tint={C.redDim} />
       </div>
 
-      <Panel style={{ padding: "8px 16px" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 4px 2px" }}>
-          งานที่กำลังดำเนินการ — เรียงตามความเร่งด่วน
+      <Panel style={{ padding: "22px 22px 28px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <BarChart3 size={17} color={C.text} />
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>สรุปรายเดือน</div>
         </div>
-        {activeJobs.map((job) => <JobRow key={job.jobNo} job={job} onOpen={onOpen} />)}
-        {activeJobs.length === 0 && (
-          <div style={{ padding: "20px 4px", color: C.textFaint, fontSize: 13 }}>ไม่มีงานที่กำลังดำเนินการ</div>
-        )}
+        <div style={{ fontSize: 12.5, color: C.textFaint, marginBottom: 6 }}>
+          จำนวนงานเข้าใหม่ เทียบกับงานที่เสร็จตรงเวลาและล่าช้า ในแต่ละเดือน
+        </div>
+        <MonthlySummaryChart months={monthlySummary} />
       </Panel>
+    </div>
+  );
+}
+
+// Grouped bar chart: for each of the last few months, three bars —
+// jobs created that month, jobs completed on time, jobs completed late.
+function MonthlySummaryChart({ months }) {
+  const maxVal = Math.max(1, ...months.flatMap((m) => [m.newCount, m.onTime, m.late]));
+  const chartH = 240;
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "14px 0 26px" }}>
+        <ChartLegendDot color={C.cyan} label="เข้าใหม่" />
+        <ChartLegendDot color={C.green} label="เสร็จตรงเวลา" />
+        <ChartLegendDot color={C.red} label="ล่าช้า" />
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, borderBottom: `2px solid ${C.border}`, padding: "0 4px" }}>
+        {months.map((m) => (
+          <div key={m.key} style={{ flex: 1, display: "flex", justifyContent: "center", gap: 7 }}>
+            <ChartBar value={m.newCount} max={maxVal} color={C.cyan} chartH={chartH} />
+            <ChartBar value={m.onTime} max={maxVal} color={C.green} chartH={chartH} />
+            <ChartBar value={m.late} max={maxVal} color={C.red} chartH={chartH} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6, padding: "0 4px", marginTop: 12 }}>
+        {months.map((m) => (
+          <div key={m.key} style={{ flex: 1, textAlign: "center", fontSize: 13, color: C.textMuted, fontWeight: 600 }}>{m.label}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+function ChartBar({ value, max, color, chartH }) {
+  const h = value > 0 ? Math.max(6, Math.round((value / max) * (chartH - 26))) : 0;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", width: 34, height: chartH }}>
+      {value > 0 && (
+        <div style={{ fontSize: 12.5, fontWeight: 700, color, marginBottom: 6, fontFamily: "monospace" }}>{value}</div>
+      )}
+      <div style={{ width: "100%", height: h, background: color, borderRadius: "6px 6px 0 0" }} />
+    </div>
+  );
+}
+function ChartLegendDot({ color, label }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, color: C.textMuted, fontWeight: 600 }}>
+      <span style={{ width: 12, height: 12, borderRadius: 3, background: color, display: "inline-block" }} />
+      {label}
     </div>
   );
 }
