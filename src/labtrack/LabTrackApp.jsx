@@ -3,7 +3,8 @@ import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
-  CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User
+  CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
+  LayoutGrid
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -302,6 +303,17 @@ const NAV = [
   { key: "purchase", label: "ใบขอซื้อ (PR)", icon: ClipboardList },
   { key: "reports", label: "รายงาน", icon: FileDown },
 ];
+// Booking-only (restricted) accounts get their own, separate sidebar: just
+// the booking page plus the two read-mostly pages (calendar/catalog) as
+// their own top-level items — they have no admin tables to reach these
+// from, so these stay one tap away in the sidebar rather than buried as
+// sub-tabs. Admin accounts instead reach the same two pages as sub-tabs
+// inside the "จอง/ยืมเครื่องมือ" page itself (see BookingsTab).
+const RESTRICTED_NAV = [
+  { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
+  { key: "usageCalendar", label: "ปฏิทินการใช้งาน", icon: CalendarClock },
+  { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
+];
 
 export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
   const [tab, setTab] = useState(restrictToBooking ? "bookings" : "dashboard");
@@ -381,7 +393,14 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   const totalAlertCount = alerts.calib.length + alerts.expiry.length + alerts.lowStock.length
     + alerts.lowChem.length + alerts.pendingBookings.length + alerts.overdueBookings.length;
 
-  const visibleNav = restrictToBooking ? NAV.filter(n => n.key === "bookings") : NAV;
+  const visibleNav = restrictToBooking ? RESTRICTED_NAV : NAV;
+  // Restricted accounts' sidebar badge must only ever count THIS account's
+  // own pending requests — never the company-wide pending count — both to
+  // match what the bookings page itself shows them, and so the badge never
+  // hints that other people's requests exist.
+  const bookingsNavBadgeCount = restrictToBooking
+    ? bookings.filter(b => b.status === "pending" && (b.requestedByUsername || b.requestedBy) === currentUsername).length
+    : alerts.pendingBookings.length;
 
   if (loading) {
     return (
@@ -415,9 +434,13 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
                 const pendingCount = n.key === "dashboard"
                   ? totalAlertCount
                   : n.key === "bookings"
-                  ? alerts.pendingBookings.length
+                  ? bookingsNavBadgeCount
                   : 0;
-                const activeBookingCount = n.key === "bookings" ? bookings.filter(isBookingCurrent).length : 0;
+                const activeBookingCount = n.key === "bookings"
+                  ? (restrictToBooking
+                      ? bookings.filter(b => isBookingCurrent(b) && (b.requestedByUsername || b.requestedBy) === currentUsername).length
+                      : bookings.filter(isBookingCurrent).length)
+                  : 0;
                 return (
                   <button key={n.key} onClick={() => setTab(n.key)} style={{ ...S.navBtn, ...(active ? S.navBtnActive : {}) }} className="ltNavBtn">
                     <Icon size={16} strokeWidth={2} />
@@ -430,7 +453,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
             </nav>
           )}
           <div style={S.sidebarFoot} className="ltSidebarFoot">
-            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืมเครื่องมือ" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
+            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน และรายการที่ยืมได้" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
           </div>
         </aside>
 
@@ -449,6 +472,15 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           )}
           {tab === "bookings" && (
             <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} items={items} notify={notify}
+              restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName}
+              embedExtras={!restrictToBooking} />
+          )}
+          {restrictToBooking && tab === "usageCalendar" && (
+            <UsageCalendarTab bookings={bookings} equipment={equipment} items={items}
+              restrictToBooking={restrictToBooking} currentUsername={currentUsername} />
+          )}
+          {restrictToBooking && tab === "catalog" && (
+            <CatalogTab equipment={equipment} items={items} bookings={bookings} setBookings={persist.bookings} notify={notify}
               restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "chemicals" && (
@@ -475,7 +507,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
             const count = n.key === "dashboard"
               ? totalAlertCount
               : n.key === "bookings"
-              ? alerts.pendingBookings.length
+              ? bookingsNavBadgeCount
               : 0;
             return (
               <button key={n.key} onClick={() => setTab(n.key)} className="ltBottomNavBtn" style={{ color: active ? "var(--teal-dark)" : "var(--muted)" }}>
@@ -1455,7 +1487,7 @@ function ItemForm({ item, onCancel, onSave }) {
 // logged-in role gets to see (see restrictToBooking below). The name typed
 // into "ชื่อผู้ดำเนินการ" is recorded on the booking for an audit trail of
 // who approved/rejected/returned what.
-function BookingsTab({ bookings, setBookings, equipment, items = [], notify, restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
+function BookingsTab({ bookings, setBookings, equipment, items = [], notify, restrictToBooking = false, currentUsername = "", currentDisplayName = "", embedExtras = false }) {
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [view, setView] = useState("pending"); // "pending" | "current" | "history-equipment" | "history-item" | "calendar" | "catalog"
@@ -1632,21 +1664,25 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         <ViewTab active={view === "current"} onClick={() => setView("current")} label="กำลังใช้งาน/จองอยู่" count={current.length} />
         <ViewTab active={view === "history-equipment"} onClick={() => setView("history-equipment")} label="ประวัติเครื่องมือ" count={historyEquipment.length} />
         <ViewTab active={view === "history-item"} onClick={() => setView("history-item")} label="ประวัติอุปกรณ์" count={historyItem.length} />
-        <ViewTab active={view === "calendar"} onClick={() => setView("calendar")} label="ปฏิทินการใช้งาน" count={liveBookingsCount} />
-        <ViewTab active={view === "catalog"} onClick={() => setView("catalog")} label="รายการที่ยืมได้" count={catalogCount} />
+        {embedExtras && (
+          <>
+            <ViewTab active={view === "calendar"} onClick={() => setView("calendar")} label="ปฏิทินการใช้งาน" count={liveBookingsCount} />
+            <ViewTab active={view === "catalog"} onClick={() => setView("catalog")} label="รายการที่ยืมได้" count={catalogCount} />
+          </>
+        )}
       </div>
 
-      {view === "calendar" && (
+      {embedExtras && view === "calendar" && (
         <UsageCalendarTab bookings={bookings} equipment={equipment} items={items}
           restrictToBooking={restrictToBooking} currentUsername={currentUsername} />
       )}
 
-      {view === "catalog" && (
+      {embedExtras && view === "catalog" && (
         <CatalogTab equipment={equipment} items={items} bookings={bookings} setBookings={setBookings} notify={notify}
           restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
       )}
 
-      {view !== "calendar" && view !== "catalog" && (
+      {(!embedExtras || (view !== "calendar" && view !== "catalog")) && (
         <>
           <Toolbar>
             <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเครื่องมือ, ผู้จอง, วัตถุประสงค์..." />
