@@ -136,6 +136,15 @@ function isBookingCurrent(b) {
 function isBookingOverdue(b) {
   return b.type === "checkout" && b.status === "approved" && !b.returnedAt && b.dueBackDate && daysUntil(b.dueBackDate) < 0;
 }
+// Checked out (or reserved) and due within the next 3 days, but not yet
+// overdue — the "keep an eye on this" middle bucket between fine and late.
+function isBookingDueSoon(b) {
+  if (b.status !== "approved" || b.returnedAt) return false;
+  const due = b.type === "checkout" ? b.dueBackDate : b.endDate;
+  if (!due) return false;
+  const d = daysUntil(due);
+  return d >= 0 && d <= 3;
+}
 // Human-readable one-line status of a piece of equipment right now, shown on
 // the equipment card/detail — e.g. "ว่าง", "ถูกยืมโดย สมชาย", "มีการจองล่วงหน้า".
 function equipmentBookingSummary(equipmentId, bookings) {
@@ -297,7 +306,8 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
       .filter(b => b.status === "pending")
       .sort((a, b) => (a.requestedAt || "").localeCompare(b.requestedAt || ""));
     const overdueBookings = bookings.filter(isBookingOverdue);
-    return { calib, expiry, lowStock, lowChem, pendingBookings, overdueBookings };
+    const dueSoonBookings = bookings.filter(isBookingDueSoon);
+    return { calib, expiry, lowStock, lowChem, pendingBookings, overdueBookings, dueSoonBookings };
   }, [equipment, chemicals, consumables, bookings]);
 
   const totalAlertCount = alerts.calib.length + alerts.expiry.length + alerts.lowStock.length
@@ -334,16 +344,18 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
               {visibleNav.map(n => {
                 const Icon = n.icon;
                 const active = tab === n.key;
-                const count = n.key === "dashboard"
+                const pendingCount = n.key === "dashboard"
                   ? totalAlertCount
                   : n.key === "bookings"
                   ? alerts.pendingBookings.length
                   : 0;
+                const activeBookingCount = n.key === "bookings" ? bookings.filter(isBookingCurrent).length : 0;
                 return (
                   <button key={n.key} onClick={() => setTab(n.key)} style={{ ...S.navBtn, ...(active ? S.navBtnActive : {}) }} className="ltNavBtn">
                     <Icon size={16} strokeWidth={2} />
                     <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
-                    {count > 0 && <span style={S.navBadge}>{count}</span>}
+                    {activeBookingCount > 0 && <span style={S.navBadgeGreen}>{activeBookingCount}</span>}
+                    {pendingCount > 0 && <span style={S.navBadge}>{pendingCount}</span>}
                   </button>
                 );
               })}
@@ -429,7 +441,6 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, goto }
     { label: "คำขอจอง/ยืมรออนุมัติ", value: alerts.pendingBookings.length, sub: `${bookings.filter(isBookingCurrent).length} รายการกำลังใช้งาน/จองอยู่`, icon: CalendarCheck, tint: "#FDF3E3", color: "var(--amber)", goto: "bookings" },
     { label: "รายการสารเคมี", value: chemicals.length, sub: `${alerts.expiry.length} ใกล้/เลยหมดอายุ`, icon: FlaskConical, tint: "#FBE9E4", color: "#D9622E", goto: "chemicals" },
     { label: "พัสดุสิ้นเปลือง", value: consumables.length, sub: `${alerts.lowStock.length} ใกล้หมด`, icon: Package, tint: "#F0EAFB", color: "#7A4FC2", goto: "consumables" },
-    { label: "รายการที่ต้องติดตาม", value: alerts.calib.length + alerts.expiry.length + alerts.lowStock.length + alerts.lowChem.length + alerts.pendingBookings.length + alerts.overdueBookings.length, sub: "รวมทุกประเภท", icon: AlertTriangle, tint: "#FBE4E1", color: "var(--red)", goto: null },
   ];
 
   const calibOk = equipment.filter(e => statusOf(daysUntil(e.nextDue)) === "ok" && e.nextDue).length;
@@ -474,18 +485,34 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, goto }
         })}
       </div>
 
-      {equipment.length > 0 && (
-        <div style={{ ...S.panel, marginBottom: 20 }}>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
+        {equipment.length > 0 && (
+          <div style={{ ...S.panel, flex: "1 1 380px", marginBottom: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={S.panelHead}>
+                <CalendarClock size={15} color="var(--ink)" />
+                <span style={S.panelTitle}>การสอบเทียบเครื่องมือ</span>
+              </div>
+              <button onClick={() => goto("equipment")} style={S.panelLink}>ดูทั้งหมด <ChevronRight size={13} /></button>
+            </div>
+            <CalibrationDonut ok={calibOk} warn={calibWarn} danger={calibDanger} />
+          </div>
+        )}
+        <div style={{ ...S.panel, flex: "1 1 380px", marginBottom: 0 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={S.panelHead}>
-              <CalendarClock size={15} color="var(--ink)" />
-              <span style={S.panelTitle}>การสอบเทียบเครื่องมือ</span>
+              <CalendarCheck size={15} color="var(--ink)" />
+              <span style={S.panelTitle}>งานที่ต้องติดตามวิเคราะห์</span>
             </div>
-            <button onClick={() => goto("equipment")} style={S.panelLink}>ดูทั้งหมด <ChevronRight size={13} /></button>
+            <button onClick={() => goto("bookings")} style={S.panelLink}>ดูทั้งหมด <ChevronRight size={13} /></button>
           </div>
-          <CalibrationDonut ok={calibOk} warn={calibWarn} danger={calibDanger} />
+          <BookingFollowupDonut
+            overdue={alerts.overdueBookings.length}
+            dueSoon={alerts.dueSoonBookings.length}
+            todo={alerts.pendingBookings.length}
+          />
         </div>
-      )}
+      </div>
 
       <div style={S.alertCols}>
         <AlertPanel
@@ -539,13 +566,29 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, goto }
   );
 }
 
+// Donut for booking/loan items needing follow-up: overdue returns, items due
+// back soon, and pending approval requests still to action.
+function BookingFollowupDonut({ overdue, dueSoon, todo }) {
+  const total = overdue + dueSoon + todo;
+  const segs = [
+    { value: overdue, color: "var(--red)", label: "ล่าช้า" },
+    { value: dueSoon, color: "var(--amber)", label: "ใกล้ครบกำหนด" },
+    { value: todo, color: "var(--teal)", label: "งานที่ต้องทำ" },
+  ];
+  return <DonutChart segs={segs} centerLabel="ทั้งหมด" />;
+}
+
 function CalibrationDonut({ ok, warn, danger }) {
-  const total = ok + warn + danger;
   const segs = [
     { value: ok, color: "var(--green)", label: "ปกติ" },
     { value: warn, color: "var(--amber)", label: "ใกล้ถึงกำหนด" },
     { value: danger, color: "var(--red)", label: "เลยกำหนด" },
   ];
+  return <DonutChart segs={segs} centerLabel="ทั้งหมด" />;
+}
+
+function DonutChart({ segs, centerLabel = "ทั้งหมด" }) {
+  const total = segs.reduce((sum, s) => sum + s.value, 0);
   const R = 42, C_ = 2 * Math.PI * R;
   let offset = 0;
   return (
@@ -570,7 +613,7 @@ function CalibrationDonut({ ok, warn, danger }) {
           return circle;
         })}
         <text x="55" y="51" textAnchor="middle" fontSize="22" fontWeight="700" fontFamily="var(--font-mono)" fill="var(--ink)">{total}</text>
-        <text x="55" y="67" textAnchor="middle" fontSize="9" fill="var(--muted)">ทั้งหมด</text>
+        <text x="55" y="67" textAnchor="middle" fontSize="9" fill="var(--muted)">{centerLabel}</text>
       </svg>
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         {segs.map((s, i) => (
@@ -3831,6 +3874,7 @@ const S = {
   navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "var(--muted)", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
   navBtnActive: { background: "rgba(25,118,198,0.10)", color: "var(--teal-dark)", fontWeight: 600 },
   navBadge: { background: "var(--red)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
+  navBadgeGreen: { background: "var(--green)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   sidebarFoot: { marginTop: "auto", fontSize: 10.5, color: "var(--muted)", padding: "10px 6px", lineHeight: 1.5 },
   main: { flex: 1, padding: "22px 26px", overflowY: "auto", maxHeight: 640 },
 
