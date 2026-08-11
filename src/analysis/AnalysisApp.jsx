@@ -1965,9 +1965,13 @@ function Dashboard({ jobs, onOpen }) {
 
 // Grouped bar chart: for each of the last few months, three bars —
 // jobs created that month, jobs completed on time, jobs completed late.
+// The bar/label rows sit in a horizontally-scrollable strip with a set
+// minimum width, so on a narrow phone screen the chart scrolls instead of
+// silently overflowing off the edge of the card.
 function MonthlySummaryChart({ months }) {
   const maxVal = Math.max(1, ...months.flatMap((m) => [m.newCount, m.onTime, m.late]));
   const chartH = 240;
+  const minGroupWidth = 78;
   return (
     <div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "14px 0 26px" }}>
@@ -1975,19 +1979,23 @@ function MonthlySummaryChart({ months }) {
         <ChartLegendDot color={C.green} label="เสร็จตรงเวลา" />
         <ChartLegendDot color={C.red} label="ล่าช้า" />
       </div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, borderBottom: `2px solid ${C.border}`, padding: "0 4px" }}>
-        {months.map((m) => (
-          <div key={m.key} style={{ flex: 1, display: "flex", justifyContent: "center", gap: 7 }}>
-            <ChartBar value={m.newCount} max={maxVal} color={C.cyan} chartH={chartH} />
-            <ChartBar value={m.onTime} max={maxVal} color={C.green} chartH={chartH} />
-            <ChartBar value={m.late} max={maxVal} color={C.red} chartH={chartH} />
+      <div className="chartScrollWrap" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, borderBottom: `2px solid ${C.border}`, padding: "0 4px" }}>
+            {months.map((m) => (
+              <div key={m.key} className="chartBarGroup" style={{ flex: 1, minWidth: minGroupWidth - 6, display: "flex", justifyContent: "center", gap: 7 }}>
+                <ChartBar value={m.newCount} max={maxVal} color={C.cyan} chartH={chartH} />
+                <ChartBar value={m.onTime} max={maxVal} color={C.green} chartH={chartH} />
+                <ChartBar value={m.late} max={maxVal} color={C.red} chartH={chartH} />
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 6, padding: "0 4px", marginTop: 12 }}>
-        {months.map((m) => (
-          <div key={m.key} style={{ flex: 1, textAlign: "center", fontSize: 13, color: C.textMuted, fontWeight: 600 }}>{m.label}</div>
-        ))}
+          <div style={{ display: "flex", gap: 6, padding: "0 4px", marginTop: 12 }}>
+            {months.map((m) => (
+              <div key={m.key} className="chartBarGroup" style={{ flex: 1, minWidth: minGroupWidth - 6, textAlign: "center", fontSize: 13, color: C.textMuted, fontWeight: 600 }}>{m.label}</div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1995,7 +2003,7 @@ function MonthlySummaryChart({ months }) {
 function ChartBar({ value, max, color, chartH }) {
   const h = value > 0 ? Math.max(6, Math.round((value / max) * (chartH - 26))) : 0;
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", width: 34, height: chartH }}>
+    <div className="chartBar" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", width: 34, height: chartH }}>
       {value > 0 && (
         <div style={{ fontSize: 12.5, fontWeight: 700, color, marginBottom: 6, fontFamily: "monospace" }}>{value}</div>
       )}
@@ -2343,6 +2351,12 @@ export default function App() {
           .metricCardIconTile { display: flex !important; }
           .metricCardLabelRow { margin-bottom: 4px !important; }
           .metricCardInlineIcon { display: none !important; }
+
+          /* Monthly summary chart: shrink bars/gaps so more months fit
+             without scrolling; the scroll wrapper is still the guaranteed
+             fallback if it doesn't all fit on a very narrow screen. */
+          .chartBar { width: 22px !important; }
+          .chartBarGroup { min-width: 58px !important; gap: 4px !important; }
 
           /* App-style bottom navigation replaces the top tab row on mobile */
           .topTabRow { display: none !important; }
