@@ -140,6 +140,18 @@ function pendingReturnQty(item) {
 
 /* ---------- booking (จอง/ยืมเครื่องมือ) helpers ---------- */
 const BOOKING_TYPE_LABEL = { checkout: "ขอใช้งาน", reservation: "จองล่วงหน้า" };
+const EQUIP_GROUP_LABEL = { analytical: "เครื่องมือวิเคราะห์", aircon: "เครื่องปรับอากาศ", support: "เครื่องมือสนับสนุน" };
+// Equipment records created before this grouping existed have no explicit
+// `group` field. Rather than silently defaulting everything to one bucket
+// (which would misfile every air conditioner), fall back to the type field
+// that already reliably marks air conditioners elsewhere in the app — any
+// other ungrouped equipment defaults to "analytical" since that's the
+// majority of what's tracked here; admins can reclassify individual items
+// to "support" from the equipment form.
+function resolveEquipGroup(e) {
+  if (e.group === "analytical" || e.group === "aircon" || e.group === "support") return e.group;
+  return e.type === "เครื่องปรับอากาศ" ? "aircon" : "analytical";
+}
 const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
 // A more honest label than the raw status: "approved" alone doesn't say
 // whether the item has actually been returned/finished yet. Used anywhere
@@ -784,6 +796,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [groupFilter, setGroupFilter] = useState("all"); // all | analytical | aircon | support
   const [calibFilter, setCalibFilter] = useState("all"); // "all" | "warn" | "danger"
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
@@ -797,11 +810,18 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       const matchQ = (e.code + e.name + (e.brand || "") + (e.model || "") + (e.serialNo || "") + e.location + e.type).toLowerCase().includes(q.toLowerCase());
       const matchS = statusFilter === "all" || e.status === statusFilter;
       const matchT = typeFilter === "all" || e.type === typeFilter;
+      const matchG = groupFilter === "all" || resolveEquipGroup(e) === groupFilter;
       const matchC = calibFilter === "all" || statusOf(daysUntil(e.nextDue)) === calibFilter;
-      return matchQ && matchS && matchT && matchC;
+      return matchQ && matchS && matchT && matchG && matchC;
     })
     .slice()
     .sort((a, b) => alphaCompare(a.code, b.code));
+
+  const groupCounts = useMemo(() => {
+    const c = { analytical: 0, aircon: 0, support: 0 };
+    equipment.forEach(e => { c[resolveEquipGroup(e)]++; });
+    return c;
+  }, [equipment]);
 
   function upsert(item) {
     if (equipment.find(e => e.id === item.id)) {
@@ -830,7 +850,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   function importItems(items) {
     const newItems = items.map(it => ({
       id: uid(), code: it.code, name: it.name, brand: it.brand || "", model: it.model || "", serialNo: it.serialNo || "",
-      type: it.type || "", location: it.location || "",
+      type: it.type || "", group: it.type === "เครื่องปรับอากาศ" ? "aircon" : "analytical", location: it.location || "",
       status: "active", lastCalibration: it.lastCalibration || "", nextDue: it.nextDue || "", intervalMonths: it.intervalMonths || "",
       notes: "", imageUrl: "",
     }));
@@ -856,6 +876,12 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   return (
     <div>
       <TabHeader title="เครื่องมือ" sub="รายการเครื่องมือทั้งหมดและกำหนดสอบเทียบ" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <ViewTab active={groupFilter === "all"} onClick={() => setGroupFilter("all")} label="ทั้งหมด" count={equipment.length} />
+        <ViewTab active={groupFilter === "analytical"} onClick={() => setGroupFilter("analytical")} label={EQUIP_GROUP_LABEL.analytical} count={groupCounts.analytical} />
+        <ViewTab active={groupFilter === "aircon"} onClick={() => setGroupFilter("aircon")} label={EQUIP_GROUP_LABEL.aircon} count={groupCounts.aircon} />
+        <ViewTab active={groupFilter === "support"} onClick={() => setGroupFilter("support")} label={EQUIP_GROUP_LABEL.support} count={groupCounts.support} />
+      </div>
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหารหัส, ชื่อ, ตำแหน่ง..." />
         <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={S.select}>
@@ -876,7 +902,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", location: "", status: "active", lastCalibration: "", nextDue: "", intervalMonths: "", notes: "", imageUrl: "" })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", group: "analytical", location: "", status: "active", lastCalibration: "", nextDue: "", intervalMonths: "", notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
@@ -1015,6 +1041,13 @@ function EquipmentForm({ item, onCancel, onSave }) {
         <Field label="รุ่น (Model)"><input style={S.input} value={f.model || ""} onChange={set("model")} placeholder="เช่น SRK24CYV-W1" /></Field>
         <Field label="หมายเลขเครื่อง (Serial No.)"><input style={S.input} value={f.serialNo || ""} onChange={set("serialNo")} /></Field>
         <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder="เช่น เครื่องชั่ง" /></Field>
+        <Field label="หมวดหมู่เครื่องมือ">
+          <select style={S.input} value={f.group || resolveEquipGroup(f)} onChange={set("group")}>
+            <option value="analytical">เครื่องมือวิเคราะห์</option>
+            <option value="aircon">เครื่องปรับอากาศ</option>
+            <option value="support">เครื่องมือสนับสนุน</option>
+          </select>
+        </Field>
         <Field label="ตำแหน่งที่ตั้ง"><input style={S.input} value={f.location} onChange={set("location")} placeholder="เช่น C1" /></Field>
         <Field label="สถานะ">
           <select style={S.input} value={f.status} onChange={set("status")}>
