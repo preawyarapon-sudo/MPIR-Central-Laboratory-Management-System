@@ -459,10 +459,10 @@ const NAV = [
 // sub-tabs. Admin accounts instead reach the same two pages as sub-tabs
 // inside the "จอง/ยืมเครื่องมือ" page itself (see BookingsTab).
 const RESTRICTED_NAV = [
+  { key: "analysisTracking", label: "ติดตามงานวิเคราะห์", icon: FlaskConical, featured: true },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "usageCalendar", label: "ปฏิทินการใช้งาน", icon: CalendarClock },
   { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
-  { key: "analysisTracking", label: "ติดตามงานวิเคราะห์", icon: FlaskConical },
 ];
 
 export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
@@ -564,6 +564,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   return (
     <div style={S.app} className="ltApp">
       <style>{CSS}</style>
+      <div style={S.heroBanner} className="ltHeroBanner" />
       <div style={S.shell} className="ltShell">
         {/* sidebar (becomes a compact top header on mobile; nav moves to the bottom bar below) */}
         <aside style={S.sidebar} className="ltSidebar">
@@ -592,8 +593,18 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
                       : bookings.filter(isBookingCurrent).length)
                   : 0;
                 return (
-                  <button key={n.key} onClick={() => setTab(n.key)} style={{ ...S.navBtn, ...(active ? S.navBtnActive : {}) }} className="ltNavBtn">
-                    <Icon size={16} strokeWidth={2} />
+                  <button
+                    key={n.key}
+                    onClick={() => setTab(n.key)}
+                    style={{
+                      ...S.navBtn,
+                      ...(active ? S.navBtnActive : {}),
+                      ...(n.featured ? S.navBtnFeatured : {}),
+                      ...(n.featured && active ? S.navBtnFeaturedActive : {}),
+                    }}
+                    className="ltNavBtn"
+                  >
+                    <Icon size={n.featured ? 18 : 16} strokeWidth={n.featured ? 2.3 : 2} />
                     <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
                     {activeBookingCount > 0 && <span style={S.navBadgeGreen}>{activeBookingCount}</span>}
                     {pendingCount > 0 && <span style={S.navBadge}>{pendingCount}</span>}
@@ -4709,9 +4720,9 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 * { box-sizing: border-box; }
 :root {
-  --ink:#101B2D; --paper:#EEF2F7; --panel:#FFFFFF; --line:#DCE6F0;
-  --teal:#146C94; --teal-dark:#0B4F6C; --amber:#B26B0A; --red:#B23327; --green:#1C7A44; --muted:#5C7086;
-  --sidebar-grad-start:#0A1830; --sidebar-grad-end:#173350;
+  --ink:#0B2A4A; --paper:#F3F8FD; --panel:#FFFFFF; --line:#D3E6F5;
+  --teal:#0E6FBA; --teal-dark:#0A4F9B; --amber:#C97F0E; --red:#C6493B; --green:#1E9E6B; --muted:#5B7A96;
+  --sidebar-grad-start:#0E6FBA; --sidebar-grad-end:#0A4F9B;
   --font-display:'Prompt', ui-sans-serif, system-ui, sans-serif;
   --font-body:'Prompt', ui-sans-serif, system-ui, sans-serif;
   --font-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
@@ -4724,6 +4735,7 @@ button { cursor: pointer; }
 
 @media (max-width: 760px) {
   .ltApp { border-radius: 0 !important; padding-bottom: 0 !important; }
+  .ltHeroBanner { height: 72px !important; }
   .ltShell { flex-direction: column !important; min-height: 0 !important; }
   .ltSidebar {
     width: 100% !important;
@@ -4798,6 +4810,11 @@ button { cursor: pointer; }
 
 const S = {
   app: { fontFamily: "var(--font-body)", background: "var(--paper)", color: "var(--ink)", minHeight: 500, borderRadius: 12, overflow: "hidden", border: "1px solid var(--line)" },
+  heroBanner: {
+    width: "100%", height: 130, backgroundImage: "url('/mpir-hero-bg.png')",
+    backgroundSize: "cover", backgroundPosition: "top center", backgroundRepeat: "no-repeat",
+    borderBottom: "1px solid var(--line)",
+  },
   shell: { display: "flex", minHeight: 500 },
   sidebar: {
     width: 216, background: "linear-gradient(180deg, var(--sidebar-grad-start) 0%, var(--sidebar-grad-end) 100%)",
@@ -4810,6 +4827,12 @@ const S = {
   brandSub: { fontSize: 10.5, color: "#93A6BE", marginTop: 1 },
   navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#AAB9CC", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
   navBtnActive: { background: "rgba(255,255,255,0.12)", color: "#5FC9E8", fontWeight: 600 },
+  navBtnFeatured: {
+    background: "linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.05) 100%)",
+    border: "1px solid rgba(255,255,255,0.28)", color: "#fff", fontWeight: 700, fontSize: 13.5,
+    padding: "11px 10px", marginBottom: 10, boxShadow: "0 2px 8px rgba(6,14,28,0.18)",
+  },
+  navBtnFeaturedActive: { background: "linear-gradient(135deg, #ffffff 0%, #EAF4FC 100%)", color: "var(--teal-dark)", border: "1px solid rgba(255,255,255,0.5)" },
   navBadge: { background: "var(--red)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   navBadgeGreen: { background: "var(--green)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   sidebarFoot: { marginTop: "auto", fontSize: 10.5, color: "#7C8FA6", padding: "10px 6px", lineHeight: 1.5 },
