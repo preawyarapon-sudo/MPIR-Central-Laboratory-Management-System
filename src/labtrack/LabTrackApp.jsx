@@ -564,13 +564,12 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   return (
     <div style={S.app} className="ltApp">
       <style>{CSS}</style>
-      <div style={S.heroBanner} className="ltHeroBanner" />
       <div style={S.shell} className="ltShell">
         {/* sidebar (becomes a compact top header on mobile; nav moves to the bottom bar below) */}
         <aside style={S.sidebar} className="ltSidebar">
           <div style={S.brand}>
             <div style={S.brandMark}>
-              <img src="/logo.png" alt="MPIR Central Lab" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+              <FlaskConical size={24} color="#fff" strokeWidth={2} />
             </div>
             <div>
               <div style={S.brandName}>LabTrack</div>
@@ -709,6 +708,7 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
     <div>
       <div style={S.hero} className="ltHero">
         <div style={S.heroGrid} />
+        <div style={S.heroPhoto} />
         <div style={{ position: "relative" }}>
           <div style={S.eyebrow}>ภาพรวมวันนี้ · {fmtDate(todayISO())}</div>
           <h1 style={S.h1} className="ltH1">สถานะห้องปฏิบัติการ</h1>
@@ -4735,7 +4735,6 @@ button { cursor: pointer; }
 
 @media (max-width: 760px) {
   .ltApp { border-radius: 0 !important; padding-bottom: 0 !important; }
-  .ltHeroBanner { height: 72px !important; }
   .ltShell { flex-direction: column !important; min-height: 0 !important; }
   .ltSidebar {
     width: 100% !important;
@@ -4810,11 +4809,6 @@ button { cursor: pointer; }
 
 const S = {
   app: { fontFamily: "var(--font-body)", background: "var(--paper)", color: "var(--ink)", minHeight: 500, borderRadius: 12, overflow: "hidden", border: "1px solid var(--line)" },
-  heroBanner: {
-    width: "100%", height: 130, backgroundImage: "url('/mpir-hero-bg.png')",
-    backgroundSize: "cover", backgroundPosition: "top center", backgroundRepeat: "no-repeat",
-    borderBottom: "1px solid var(--line)",
-  },
   shell: { display: "flex", minHeight: 500 },
   sidebar: {
     width: 216, background: "linear-gradient(180deg, var(--sidebar-grad-start) 0%, var(--sidebar-grad-end) 100%)",
@@ -4822,7 +4816,11 @@ const S = {
     borderRight: "1px solid rgba(255,255,255,0.08)", boxShadow: "2px 0 10px rgba(6,14,28,0.15)",
   },
   brand: { display: "flex", alignItems: "center", gap: 10, padding: "2px 4px 14px", borderBottom: "1px solid rgba(255,255,255,0.12)", marginBottom: 10 },
-  brandMark: { width: 52, height: 52, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  brandMark: {
+    width: 46, height: 46, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+    background: "linear-gradient(135deg, rgba(255,255,255,0.24) 0%, rgba(255,255,255,0.06) 100%)",
+    border: "1px solid rgba(255,255,255,0.22)",
+  },
   brandName: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, letterSpacing: -0.2, color: "#fff" },
   brandSub: { fontSize: 10.5, color: "#93A6BE", marginTop: 1 },
   navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#AAB9CC", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
@@ -4840,6 +4838,13 @@ const S = {
 
   hero: { position: "relative", background: "linear-gradient(135deg, var(--teal-dark), var(--teal))", color: "#fff", borderRadius: 14, padding: "26px 26px", overflow: "hidden", marginBottom: 18 },
   heroGrid: { position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)", backgroundSize: "22px 22px", maskImage: "radial-gradient(ellipse at top right, black, transparent 70%)" },
+  heroPhoto: {
+    position: "absolute", top: 0, right: 0, bottom: 0, width: "55%",
+    backgroundImage: "url('/mpir-hero-bg.png')", backgroundSize: "cover", backgroundPosition: "center",
+    WebkitMaskImage: "linear-gradient(to left, rgba(0,0,0,0.85) 50%, rgba(0,0,0,0) 100%)",
+    maskImage: "linear-gradient(to left, rgba(0,0,0,0.85) 50%, rgba(0,0,0,0) 100%)",
+    opacity: 0.85, pointerEvents: "none",
+  },
   eyebrow: { fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: 1, color: "#DCEEFF", textTransform: "uppercase" },
   h1: { fontFamily: "var(--font-display)", fontSize: 26, margin: "6px 0 4px", fontWeight: 700 },
   heroSub: { fontSize: 13, color: "#E4F0FC", margin: 0 },
