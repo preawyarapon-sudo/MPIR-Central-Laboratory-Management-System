@@ -2464,6 +2464,7 @@ export default function App({ restrictToCustomer = false } = {}) {
       <style>{`
         @media (max-width: 640px) {
           .latApp { border-radius: 0 !important; }
+          .latHeroBanner { height: 72px !important; }
           .grid3col { grid-template-columns: 1fr !important; }
 
           .latHeader { padding: 12px 14px !important; }
@@ -2583,6 +2584,14 @@ export default function App({ restrictToCustomer = false } = {}) {
           .rqTone { grid-area: tone !important; }
         }
       `}</style>
+      <div
+        style={{
+          width: "100%", height: 130, backgroundImage: "url('/mpir-hero-bg.png')",
+          backgroundSize: "cover", backgroundPosition: "top center", backgroundRepeat: "no-repeat",
+          borderBottom: `1px solid ${C.borderSoft}`,
+        }}
+        className="latHeroBanner"
+      />
       <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }} className="latHeader">
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <div style={{ width: 30, height: 30, borderRadius: 6, background: C.cyanDim, display: "flex", alignItems: "center", justifyContent: "center" }}>
