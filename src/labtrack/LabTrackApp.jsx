@@ -1254,7 +1254,14 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
             <div style={{ flex: 1 }}>
               <div style={S.activityType}>{typeLabel[a.type] || a.type}</div>
               <div style={S.activityDetail}>
-                {a.detail}{a.by ? ` · โดย ${a.by}` : ""}{a.poNo ? ` · PO: ${a.poNo}` : ""}
+                {a.detail}{a.by ? ` · โดย ${a.by}` : ""}
+                {a.poNo ? (
+                  a.poUrl ? (
+                    <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>PO: {a.poNo}</a></>
+                  ) : ` · PO: ${a.poNo}`
+                ) : (
+                  a.poUrl ? <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>ไฟล์ PO</a></> : ""
+                )}
               </div>
               {a.certUrl && (
                 <a href={a.certUrl} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal)", marginTop: 4 }}>
@@ -1296,7 +1303,7 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
 }
 
 function ActivityForm({ initial, onCancel, onSave }) {
-  const defaults = { date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", certUrl: "", external: false, externalLocation: "" };
+  const defaults = { date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", poUrl: "", certUrl: "", external: false, externalLocation: "" };
   const [f, setF] = useState({ ...defaults, ...initial });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
@@ -1313,6 +1320,7 @@ function ActivityForm({ initial, onCancel, onSave }) {
         </Field>
         <Field label="ผู้ดำเนินการ / บริษัท"><input style={S.input} value={f.by} onChange={set("by")} /></Field>
         <Field label="เลขที่ PO"><input style={S.input} value={f.poNo} onChange={set("poNo")} placeholder="เช่น PO-2569-0123" /></Field>
+        <Field label="ลิงก์ใบ PO"><input style={S.input} value={f.poUrl} onChange={set("poUrl")} placeholder="วางลิงก์ไฟล์ PO เช่น SharePoint, Google Drive" /></Field>
         {f.type === "calibration" && (
           <Field label="สถานที่สอบเทียบ" full plain>
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
@@ -3632,8 +3640,8 @@ function ReportsTab({ equipment, activities, chemicals, consumables, purchaseReq
     ["รหัส", "ชื่อ", "ยี่ห้อ", "รุ่น", "Serial No.", "ประเภท", "ตำแหน่ง", "สถานะ", "สอบเทียบล่าสุด", "กำหนดถัดไป", "หมายเหตุ"]
   ));
   const exportActivities = () => download("activities.csv", toCSV(
-    activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, a.type, a.detail, a.by, a.poNo || "", a.certUrl || ""]),
-    ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ Certificate"]
+    activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, a.type, a.detail, a.by, a.poNo || "", a.poUrl || "", a.certUrl || ""]),
+    ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ PO", "ลิงก์ Certificate"]
   ));
   const exportChemicals = () => download("chemicals.csv", toCSV(
     chemicals.map(c => [c.name, c.formula || "", c.brand || "", c.quantity, c.unit, earliestExpiry(c), c.location, c.minThreshold]),
