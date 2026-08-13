@@ -194,11 +194,12 @@ function rangesOverlap(aStart, aEnd, bStart, bEnd) {
 // claim on the equipment and should stop showing up as a conflict.
 //
 // `draft` (optional) describes the NEW booking being checked — passing its
-// type/assetType/startTime/endTime lets same-day equipment CHECKOUTS with
-// explicit clock times conflict only when those times actually overlap,
-// instead of the whole day looking "taken" the moment anyone else uses the
-// same instrument. Reservations, multi-day spans, and anything without an
-// explicit time on both sides keep the original whole-day-conflict logic.
+// assetType/startTime/endTime lets same-day equipment bookings (checkout OR
+// reservation) with explicit clock times conflict only when those times
+// actually overlap, instead of the whole day looking "taken" the moment
+// anyone else has a claim on the same instrument. Multi-day spans and
+// anything without an explicit time on both sides keep the original
+// whole-day-conflict logic (the safe default).
 function findBookingConflicts(bookings, equipmentId, range, excludeId, draft = {}) {
   return bookings.filter((b) => {
     if (b.equipmentId !== equipmentId || b.id === excludeId) return false;
@@ -207,12 +208,11 @@ function findBookingConflicts(bookings, equipmentId, range, excludeId, draft = {
     else return false; // rejected/cancelled
     const r = bookingRange(b);
     if (!rangesOverlap(range.start, range.end, r.start, r.end)) return false;
-    const sameDayTimedCheckouts =
-      draft.type === "checkout" && b.type === "checkout" &&
+    const sameDayTimed =
       draft.assetType !== "item" && b.assetType !== "item" &&
       range.start === range.end && r.start === r.end && range.start === r.start &&
       draft.startTime && draft.endTime && b.startTime && b.endTime;
-    if (sameDayTimedCheckouts) {
+    if (sameDayTimed) {
       return draft.startTime < b.endTime && b.startTime < draft.endTime;
     }
     return true;
@@ -1913,10 +1913,11 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const [startDate, setStartDate] = useState(todayISO());
   const [endDate, setEndDate] = useState(todayISO());
   const [dueBackDate, setDueBackDate] = useState(todayISO());
-  // Optional clock-time window — only meaningful for "ใช้งานทันที" (checkout)
-  // requests. Lets several people book the same equipment on the same day
-  // without conflicting, as long as their time windows don't overlap; left
-  // blank, conflict-checking falls back to the previous whole-day behavior.
+  // Optional clock-time window — for equipment bookings, either checkout or
+  // reservation. Lets several people/reservations share the same equipment
+  // on the same day without conflicting, as long as their time windows
+  // don't overlap; left blank, conflict-checking falls back to the
+  // previous whole-day behavior.
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
 
@@ -1980,13 +1981,25 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const equipRange = equipSubType === "checkout"
     ? { start: startDate || todayISO(), end: dueBackDate || "9999-12-31" }
     : { start: startDate || "", end: endDate || startDate || "" };
+  // Everything else with a live claim on this equipment that overlaps the
+  // selected date(s), ignoring time-of-day entirely — used to surface an
+  // informational "others booked this equipment today too" notice even
+  // when the person's own time window doesn't actually clash with anyone.
+  const equipSameDayAll = mode === "equipment" && equipmentId
+    ? findBookingConflicts(bookings, equipmentId, equipRange, null, {})
+    : [];
+  // The real, time-aware conflict list — narrows same-day equipment claims
+  // down to actual clock-time overlap when both sides have times set.
   const equipConflicts = mode === "equipment" && equipmentId
     ? findBookingConflicts(bookings, equipmentId, equipRange, null, {
-        type: equipSubType, assetType: "equipment",
-        startTime: equipSubType === "checkout" ? startTime : "",
-        endTime: equipSubType === "checkout" ? endTime : "",
+        assetType: "equipment", startTime, endTime,
       })
     : [];
+  const equipConflictIds = new Set(equipConflicts.map(c => c.id));
+  // The difference: same-day claims that were ruled out as a real conflict
+  // purely because the clock times don't overlap — still worth showing so
+  // the person can see what's already taken and pick around it.
+  const equipSameDayOthers = equipSameDayAll.filter(c => !equipConflictIds.has(c.id));
 
   const itemRange = { start: itemStartDate || todayISO(), end: itemDueBackDate || "9999-12-31" };
 
@@ -2094,8 +2107,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
         startDate,
         endDate: equipSubType === "reservation" ? endDate : null,
         dueBackDate: equipSubType === "checkout" ? dueBackDate : "",
-        startTime: equipSubType === "checkout" ? startTime : "",
-        endTime: equipSubType === "checkout" ? endTime : "",
+        startTime,
+        endTime,
         requestedBy: displayRequestedBy,
         requestedByUsername,
         purpose: purpose.trim(),
@@ -2186,19 +2199,37 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
               <>
                 <Field label="วันที่เริ่มใช้"><input type="date" style={S.input} value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
                 <Field label="กำหนดคืน (ถ้ามี)"><input type="date" style={S.input} value={dueBackDate} onChange={(e) => setDueBackDate(e.target.value)} /></Field>
-                <Field label="เวลาเริ่มใช้ (ถ้ามี)"><input type="time" style={S.input} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></Field>
-                <Field label="เวลาสิ้นสุด (ถ้ามี)"><input type="time" style={S.input} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></Field>
-                {(startTime || endTime) && (
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", gridColumn: "1 / -1" }}>
-                    ระบุช่วงเวลาไว้เผื่อมีคนอื่นขอใช้เครื่องเดียวกันวันเดียวกันแต่คนละช่วงเวลา ระบบจะเช็คชนกันเฉพาะช่วงเวลาที่ทับกันจริง
-                  </div>
-                )}
               </>
             ) : (
               <>
                 <Field label="วันที่เริ่มจอง"><input type="date" style={S.input} value={startDate} onChange={(e) => { setStartDate(e.target.value); if (endDate < e.target.value) setEndDate(e.target.value); }} /></Field>
                 <Field label="วันที่สิ้นสุด"><input type="date" style={S.input} value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} /></Field>
               </>
+            )}
+            <Field label="เวลาเริ่ม (ถ้ามี)"><input type="time" style={S.input} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></Field>
+            <Field label="เวลาสิ้นสุด (ถ้ามี)"><input type="time" style={S.input} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></Field>
+            {(startTime || endTime) && (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", gridColumn: "1 / -1" }}>
+                ระบุช่วงเวลาไว้เผื่อมีคนอื่นขอใช้/จองเครื่องเดียวกันวันเดียวกันแต่คนละช่วงเวลา ระบบจะเช็คชนกันเฉพาะช่วงเวลาที่ทับกันจริง
+              </div>
+            )}
+            {equipSameDayOthers.length > 0 && (
+              <div style={{ gridColumn: "1 / -1", ...S.notesBox, border: "1px solid var(--teal)", background: "#EAF4FB", marginTop: -4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, color: "var(--teal-dark)", fontSize: 12.5 }}>
+                  <Clock size={13} /> มีคนอื่นจอง/ใช้เครื่องนี้ในวันเดียวกันด้วย ({equipSameDayOthers.length} รายการ)
+                </div>
+                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                  {equipSameDayOthers.map(c => (
+                    <div key={c.id} style={{ fontSize: 12, color: "var(--ink)" }}>
+                      {BOOKING_TYPE_LABEL[c.type]} โดย {c.requestedBy || "-"}
+                      {c.startTime && c.endTime ? ` เวลา ${c.startTime}-${c.endTime} น.` : " (ไม่ได้ระบุช่วงเวลา)"}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+                  ไม่ชนกับช่วงเวลาที่คุณเลือกไว้ — แสดงไว้ให้ทราบเผื่ออยากเลี่ยงช่วงเวลาใกล้เคียงกัน
+                </div>
+              </div>
             )}
           </>
         ) : (
