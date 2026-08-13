@@ -1600,16 +1600,36 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   const bookingCols = ["รายการที่ยืม", "วันที่ขอใช้งาน", "วันที่คืน / เสร็จสิ้น", "ผู้จอง / วัตถุประสงค์", "สถานะ", ""];
   function bookingRow(b) {
     const isReservation = b.type === "reservation";
+    // Flag a real scheduling clash directly in the list — pending requests
+    // and anything still current — so an approver can see it at a glance
+    // without opening each request individually. Uses the same time-aware
+    // logic as the booking form itself: same-day equipment claims with
+    // explicit times only count as a clash when those times actually
+    // overlap.
+    const rowConflicts = (b.status === "pending" || isBookingCurrent(b))
+      ? findBookingConflicts(bookings, b.equipmentId, bookingRange(b), b.id, { assetType: b.assetType, startTime: b.startTime, endTime: b.endTime })
+      : [];
     return [
       <div style={{ minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
           <span style={{ fontWeight: 600, wordBreak: "break-word" }}>{b.equipmentCode || b.equipmentName}</span>
           <Tag color={b.assetType === "item" ? "#7A4FC2" : "var(--teal)"}>{b.assetType === "item" ? "อุปกรณ์" : "เครื่องมือ"}</Tag>
           {b.offSite && <Tag color="var(--amber)">นอกสถานที่</Tag>}
+          {rowConflicts.length > 0 && (
+            <Tag color="var(--red)">
+              <AlertTriangle size={11} style={{ marginRight: 3, verticalAlign: -1 }} />
+              ชนกับคำขออื่น{rowConflicts.length > 1 ? ` (${rowConflicts.length})` : ""}
+            </Tag>
+          )}
         </div>
         {b.equipmentCode && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{b.equipmentName}</div>}
         {b.assetType === "item" && b.qty > 1 && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>จำนวน {b.qty} ชิ้น</div>}
         {b.offSiteLocation && <div style={{ fontSize: 11, color: "var(--amber)" }}>ใช้ที่: {b.offSiteLocation}</div>}
+        {rowConflicts.length > 0 && (
+          <div style={{ fontSize: 11, color: "var(--red)", marginTop: 3 }}>
+            ชนกับ: {rowConflicts.map(c => `${c.requestedBy || "-"}${c.startTime && c.endTime ? ` (${c.startTime}-${c.endTime} น.)` : ""}`).join(", ")}
+          </div>
+        )}
       </div>,
       <div>
         <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{BOOKING_TYPE_LABEL[b.type]}</div>
@@ -2120,9 +2140,13 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
     );
   }
 
+  // Time is now a required part of every equipment booking (checkout or
+  // reservation) — it's what makes same-day conflict checking meaningful,
+  // and lets an approver actually see whether two requests really clash.
+  const equipTimeValid = !!(startTime && endTime && endTime > startTime);
   const canSave = requestedBy.trim() && (
     mode === "equipment"
-      ? (equipmentId && (equipSubType === "checkout" ? startDate : (startDate && endDate && endDate >= startDate)))
+      ? (equipmentId && (equipSubType === "checkout" ? startDate : (startDate && endDate && endDate >= startDate)) && equipTimeValid)
       : (selectedItemIds.length > 0 && itemStartDate)
   );
 
@@ -2218,7 +2242,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                   <button
                     key={t}
                     type="button"
-                    onClick={() => setEquipSubType(t)}
+                    onClick={() => { setEquipSubType(t); if (t === "checkout") setStartDate(todayISO()); }}
                     style={{
                       flex: 1, padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
                       fontSize: 12.5, fontWeight: 600,
@@ -2235,7 +2259,11 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
 
             {equipSubType === "checkout" ? (
               <>
-                <Field label="วันที่เริ่มใช้"><input type="date" style={S.input} value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
+                <Field label="วันที่ใช้งาน">
+                  <div style={{ ...S.input, background: "#F0F2F5", color: "var(--muted)", cursor: "not-allowed", display: "flex", alignItems: "center" }}>
+                    วันนี้ · {fmtDate(todayISO())}
+                  </div>
+                </Field>
                 <Field label="กำหนดคืน (ถ้ามี)"><input type="date" style={S.input} value={dueBackDate} onChange={(e) => setDueBackDate(e.target.value)} /></Field>
               </>
             ) : (
@@ -2244,11 +2272,21 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                 <Field label="วันที่สิ้นสุด"><input type="date" style={S.input} value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} /></Field>
               </>
             )}
-            <Field label="เวลาเริ่ม (ถ้ามี)"><TimeSelect value={startTime} onChange={setStartTime} /></Field>
-            <Field label="เวลาสิ้นสุด (ถ้ามี)"><TimeSelect value={endTime} onChange={setEndTime} /></Field>
-            {(startTime || endTime) && (
-              <div style={{ fontSize: 11.5, color: "var(--muted)", gridColumn: "1 / -1" }}>
-                ระบุช่วงเวลาไว้เผื่อมีคนอื่นขอใช้/จองเครื่องเดียวกันวันเดียวกันแต่คนละช่วงเวลา ระบบจะเช็คชนกันเฉพาะช่วงเวลาที่ทับกันจริง
+            {equipSubType === "checkout" && (
+              <div style={{ fontSize: 11, color: "var(--muted)", gridColumn: "1 / -1", marginTop: -6 }}>
+                คำขอ "ใช้งานทันที" ใช้ได้เฉพาะวันนี้เท่านั้น ถ้าต้องการใช้วันอื่นให้เลือก "จองล่วงหน้า" แทน
+              </div>
+            )}
+            <Field label="เวลาเริ่ม"><TimeSelect value={startTime} onChange={setStartTime} /></Field>
+            <Field label="เวลาสิ้นสุด"><TimeSelect value={endTime} onChange={setEndTime} /></Field>
+            {startTime && endTime && endTime <= startTime && (
+              <div style={{ fontSize: 11.5, color: "var(--red)", gridColumn: "1 / -1", marginTop: -6 }}>
+                เวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม
+              </div>
+            )}
+            {!(startTime && endTime) && (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", gridColumn: "1 / -1", marginTop: -6 }}>
+                กรุณาระบุเวลาเริ่มและเวลาสิ้นสุด — ใช้เช็คว่าชนกับคนอื่นที่ขอใช้/จองเครื่องเดียวกันวันเดียวกันไหม เฉพาะช่วงเวลาที่ทับกันจริงเท่านั้นที่จะถือว่าชนกัน
               </div>
             )}
             {equipSameDayOthers.length > 0 && (
