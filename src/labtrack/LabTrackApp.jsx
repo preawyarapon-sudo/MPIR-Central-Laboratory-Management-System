@@ -74,6 +74,112 @@ function analysisJobBuckets(jobs) {
   }
   return { late, warn, todo };
 }
+// Per-job progress — mirrors the analysis tracker's own computeJobStats, so
+// the % shown here always agrees with what that app itself would show.
+function computeAnalysisJobStats(job) {
+  const params = job.parameters || [];
+  const total = params.length;
+  const complete = params.filter(p => p.status === ANALYSIS_STATUS.DONE).length;
+  const running = params.filter(p => p.status === ANALYSIS_STATUS.RUN).length;
+  const progress = total === 0 ? 0 : Math.round((complete / total) * 100);
+  const status = total > 0 && complete === total ? ANALYSIS_STATUS.DONE : running > 0 ? ANALYSIS_STATUS.RUN : ANALYSIS_STATUS.WAIT;
+  return { total, complete, running, progress, status };
+}
+// Where a specific job's still-waiting parameter sits in that parameter's
+// FIFO queue across the whole lab (oldest job first — same assumption the
+// analysts work under). A count only — never exposes another job's number.
+function analysisParamQueuePosition(jobs, paramName, targetJobNo) {
+  const waiting = [];
+  for (const job of jobs) {
+    for (const p of job.parameters || []) {
+      if (p.name === paramName && p.status === ANALYSIS_STATUS.WAIT) {
+        waiting.push({ jobNo: job.jobNo, ts: job.createdAt || 0 });
+      }
+    }
+  }
+  waiting.sort((a, b) => a.ts - b.ts);
+  const idx = waiting.findIndex(w => w.jobNo === targetJobNo);
+  return { position: idx === -1 ? null : idx + 1, total: waiting.length };
+}
+const ANALYSIS_STATUS_LABEL = { Waiting: "รอดำเนินการ", Running: "กำลังวิเคราะห์", Complete: "เสร็จสิ้น" };
+const ANALYSIS_STATUS_TAG_COLOR = { Waiting: "var(--muted)", Running: "var(--amber)", Complete: "var(--green)" };
+
+// Customer-facing, read-only tracking page for restricted (booking-only)
+// accounts — search-first by design, same as the analysis tracker's own
+// customer view: knowing the job number is what proves it's your own job,
+// so there's no browsable list of every job here, and "queue position" is
+// always a count, never another job's number.
+function AnalysisTrackView({ jobs }) {
+  const [query, setQuery] = useState("");
+  const [searched, setSearched] = useState(false);
+
+  const job = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return null;
+    return jobs.find(j => (j.jobNo || "").toLowerCase() === q) || null;
+  }, [jobs, query]);
+
+  const stats = job ? computeAnalysisJobStats(job) : null;
+
+  return (
+    <div>
+      <TabHeader title="ติดตามงานวิเคราะห์" sub="กรอกเลขทะเบียน/รหัสงานที่ได้รับจากห้องปฏิบัติการ เพื่อดูความคืบหน้า" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, maxWidth: 480 }}>
+        <input
+          style={S.input}
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setSearched(false); }}
+          onKeyDown={(e) => { if (e.key === "Enter") setSearched(true); }}
+          placeholder="เช่น ICP24-05171"
+        />
+        <button style={S.primaryBtn} onClick={() => setSearched(true)}><Search size={14} /> ค้นหา</button>
+      </div>
+
+      {searched && !job && <EmptyState text="ไม่พบข้อมูลรหัสงานนี้ กรุณาตรวจสอบเลขทะเบียนอีกครั้ง" />}
+
+      {job && stats && (
+        <div style={{ maxWidth: 640 }}>
+          <div style={{ ...S.panel, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 16, color: "var(--teal)" }}>{job.jobNo}</span>
+              <Tag color={ANALYSIS_STATUS_TAG_COLOR[stats.status]}>{ANALYSIS_STATUS_LABEL[stats.status]}</Tag>
+            </div>
+            {job.sample && <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>{job.sample}</div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ flex: 1, height: 10, borderRadius: 6, background: "#EEF2F6", border: "1px solid var(--line)", overflow: "hidden" }}>
+                <div style={{ width: `${stats.progress}%`, height: "100%", background: "var(--green)" }} />
+              </div>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15, minWidth: 46, textAlign: "right" }}>{stats.progress}%</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
+              เสร็จแล้ว {stats.complete} จากทั้งหมด {stats.total} พารามิเตอร์
+            </div>
+          </div>
+
+          <div style={{ ...S.panelTitle, marginBottom: 10 }}>รายละเอียดแต่ละพารามิเตอร์</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {(job.parameters || []).map((p) => {
+              const q = p.status === ANALYSIS_STATUS.WAIT ? analysisParamQueuePosition(jobs, p.name, job.jobNo) : null;
+              return (
+                <div key={p.id} style={{ ...S.eqCard, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <span style={{ fontSize: 13.5 }}>{p.name}</span>
+                  <div style={{ textAlign: "right" }}>
+                    <Tag color={ANALYSIS_STATUS_TAG_COLOR[p.status]}>{ANALYSIS_STATUS_LABEL[p.status]}</Tag>
+                    {q && q.total > 0 && (
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3, fontFamily: "var(--font-mono)" }}>
+                        คิวที่ {q.position} จาก {q.total} งาน
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ---------- helpers ---------- */
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -356,6 +462,7 @@ const RESTRICTED_NAV = [
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "usageCalendar", label: "ปฏิทินการใช้งาน", icon: CalendarClock },
   { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
+  { key: "analysisTracking", label: "ติดตามงานวิเคราะห์", icon: FlaskConical },
 ];
 
 export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
@@ -496,7 +603,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
             </nav>
           )}
           <div style={S.sidebarFoot} className="ltSidebarFoot">
-            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน และรายการที่ยืมได้" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
+            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน, รายการที่ยืมได้ และติดตามงานวิเคราะห์" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
           </div>
         </aside>
 
@@ -525,6 +632,9 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           {restrictToBooking && tab === "catalog" && (
             <CatalogTab equipment={equipment} items={items} bookings={bookings} setBookings={persist.bookings} notify={notify}
               restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+          )}
+          {restrictToBooking && tab === "analysisTracking" && (
+            <AnalysisTrackView jobs={analysisJobs} />
           )}
           {!restrictToBooking && tab === "chemicals" && (
             <ChemicalsTab chemicals={chemicals} setChemicals={persist.chemicals} notify={notify} />
