@@ -405,6 +405,26 @@ function computeParamQueue(jobs) {
     .sort((x, y) => y.waiting + y.running - (x.waiting + x.running));
 }
 
+// Where a specific job's still-waiting parameter sits in that parameter's
+// FIFO queue across the whole lab (ordered by job.createdAt, oldest first —
+// same "first job in, first job worked" assumption the analysts already
+// work under). Used only for the customer-facing tracking view, so a
+// customer can see "how many jobs are ahead of mine" without seeing any
+// other customer's job number or details — just counts.
+function paramQueuePosition(jobs, paramName, targetJobNo) {
+  const waiting = [];
+  for (const job of jobs) {
+    for (const p of job.parameters) {
+      if (p.name === paramName && p.status === STATUS.WAIT) {
+        waiting.push({ jobNo: job.jobNo, ts: job.createdAt || 0 });
+      }
+    }
+  }
+  waiting.sort((a, b) => a.ts - b.ts);
+  const idx = waiting.findIndex((w) => w.jobNo === targetJobNo);
+  return { position: idx === -1 ? null : idx + 1, total: waiting.length };
+}
+
 function paramJobs(jobs, name) {
   const rows = [];
   for (const job of jobs) {
@@ -2021,7 +2041,112 @@ function ChartLegendDot({ color, label }) {
 }
 
 // ---------- Main App ----------
-export default function App() {
+// Customer-facing, read-only tracking page — the only thing a restricted
+// ("ลูกค้า") account can see. Deliberately search-first rather than
+// browsable: knowing the job number is what proves it's your own job, so
+// nobody can page through the whole jobs list and see other customers'
+// samples. Shows overall % complete, each parameter's status, and — for
+// whatever's still waiting — its position in that parameter's queue across
+// the whole lab (a count only, never another customer's job number).
+function CustomerTrackView({ jobs }) {
+  const [query, setQuery] = useState("");
+  const [searched, setSearched] = useState(false);
+
+  const job = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return null;
+    return jobs.find((j) => (j.jobNo || "").toLowerCase() === q) || null;
+  }, [jobs, query]);
+
+  function runSearch() {
+    setSearched(true);
+  }
+
+  const stats = job ? computeJobStats(job) : null;
+
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <div style={{ textAlign: "center", marginBottom: 22 }}>
+        <div style={{ fontSize: 19, fontWeight: 700, color: C.text }}>ติดตามสถานะงานวิเคราะห์</div>
+        <div style={{ fontSize: 13, color: C.textMuted, marginTop: 4 }}>
+          กรอกเลขทะเบียน/รหัสงานที่ได้รับจากห้องปฏิบัติการ เพื่อดูความคืบหน้า
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <input
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setSearched(false); }}
+          onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+          placeholder="เช่น ICP24-05171"
+          style={{
+            flex: 1, padding: "11px 14px", borderRadius: 8, border: `1px solid ${C.border}`,
+            fontSize: 14, fontFamily: "inherit", color: C.text, background: C.panel,
+          }}
+        />
+        <Btn kind="primary" onClick={runSearch}><Search size={14} /> ค้นหา</Btn>
+      </div>
+
+      {searched && !job && (
+        <div style={{ textAlign: "center", padding: "30px 16px", color: C.textMuted, background: C.panel2, borderRadius: 10, border: `1px solid ${C.borderSoft}` }}>
+          ไม่พบข้อมูลรหัสงานนี้ กรุณาตรวจสอบเลขทะเบียนอีกครั้ง
+        </div>
+      )}
+
+      {job && stats && (
+        <div>
+          <div style={{ background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18, marginBottom: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 17, color: C.cyan }}>{job.jobNo}</span>
+              <StatusBadge status={stats.status} />
+            </div>
+            {job.sample && <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 12 }}>{job.sample}</div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ flex: 1, height: 10, borderRadius: 6, background: "#fff", border: `1px solid ${C.borderSoft}`, overflow: "hidden" }}>
+                <div style={{ width: `${stats.progress}%`, height: "100%", background: C.green, transition: "width 0.3s" }} />
+              </div>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 15, color: C.text, minWidth: 46, textAlign: "right" }}>{stats.progress}%</span>
+            </div>
+            <div style={{ fontSize: 12, color: C.textFaint, marginTop: 6 }}>
+              เสร็จแล้ว {stats.complete} จากทั้งหมด {stats.total} พารามิเตอร์
+            </div>
+          </div>
+
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>รายละเอียดแต่ละพารามิเตอร์</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {job.parameters.map((p) => {
+              const q = p.status === STATUS.WAIT ? paramQueuePosition(jobs, p.name, job.jobNo) : null;
+              return (
+                <div
+                  key={p.id}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                    padding: "10px 14px", background: C.panel, border: `1px solid ${C.borderSoft}`, borderRadius: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <StatusGlyph status={p.status} />
+                    <span style={{ fontSize: 13.5, color: C.text, wordBreak: "break-word" }}>{p.name}</span>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <StatusBadge status={p.status} />
+                    {q && q.total > 0 && (
+                      <div style={{ fontSize: 11, color: C.textFaint, marginTop: 3, fontFamily: "monospace" }}>
+                        คิวที่ {q.position} จาก {q.total} งาน
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function App({ restrictToCustomer = false } = {}) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("dashboard");
@@ -2465,21 +2590,27 @@ export default function App() {
           </div>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700 }}>Lab Analysis Tracker</div>
-            <div style={{ fontSize: 11, color: C.textFaint }} className="latHeaderSub">ระบบติดตามความคืบหน้างานวิเคราะห์ · แชร์ร่วมกันทั้งทีม</div>
+            <div style={{ fontSize: 11, color: C.textFaint }} className="latHeaderSub">
+              {restrictToCustomer ? "ตรวจสอบสถานะงานวิเคราะห์ของท่าน" : "ระบบติดตามความคืบหน้างานวิเคราะห์ · แชร์ร่วมกันทั้งทีม"}
+            </div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Btn small onClick={refresh}><RefreshCw size={13} /> รีเฟรช</Btn>
-          <Btn kind="primary" small onClick={() => { setShowForm(true); setTab("jobs"); setSelected(null); }}><Plus size={13} /> สร้างรหัสงาน</Btn>
-        </div>
+        {!restrictToCustomer && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn small onClick={refresh}><RefreshCw size={13} /> รีเฟรช</Btn>
+            <Btn kind="primary" small onClick={() => { setShowForm(true); setTab("jobs"); setSelected(null); }}><Plus size={13} /> สร้างรหัสงาน</Btn>
+          </div>
+        )}
       </div>
 
-      <div style={{ display: "flex", borderBottom: `1px solid ${C.borderSoft}`, padding: "0 12px", overflowX: "auto", WebkitOverflowScrolling: "touch" }} className="topTabRow">
-        {tabBtn("dashboard", "Dashboard", LayoutGrid)}
-        {tabBtn("jobs", "Jobs", ListChecks)}
-        {tabBtn("analysts", "Analysts", Users)}
-        {tabBtn("parameters", "Parameters", Layers)}
-      </div>
+      {!restrictToCustomer && (
+        <div style={{ display: "flex", borderBottom: `1px solid ${C.borderSoft}`, padding: "0 12px", overflowX: "auto", WebkitOverflowScrolling: "touch" }} className="topTabRow">
+          {tabBtn("dashboard", "Dashboard", LayoutGrid)}
+          {tabBtn("jobs", "Jobs", ListChecks)}
+          {tabBtn("analysts", "Analysts", Users)}
+          {tabBtn("parameters", "Parameters", Layers)}
+        </div>
+      )}
 
       <div style={{ padding: 20 }} className="mainContentArea">
         {error && (
@@ -2489,6 +2620,8 @@ export default function App() {
         )}
         {loading ? (
           <div style={{ padding: 40, textAlign: "center", color: C.textFaint }}>กำลังโหลดข้อมูล...</div>
+        ) : restrictToCustomer ? (
+          <CustomerTrackView jobs={jobs} />
         ) : (
           <>
             {tab === "dashboard" && <Dashboard jobs={jobs} onOpen={openJob} />}
@@ -2532,10 +2665,14 @@ export default function App() {
       </div>
 
       <div className="bottomNavBar" style={{ display: "none" }}>
-        {bottomNavBtn("dashboard", "Dashboard", LayoutGrid)}
-        {bottomNavBtn("jobs", "Jobs", ListChecks)}
-        {bottomNavBtn("analysts", "Analysts", Users)}
-        {bottomNavBtn("parameters", "Parameters", Layers)}
+        {!restrictToCustomer && (
+          <>
+            {bottomNavBtn("dashboard", "Dashboard", LayoutGrid)}
+            {bottomNavBtn("jobs", "Jobs", ListChecks)}
+            {bottomNavBtn("analysts", "Analysts", Users)}
+            {bottomNavBtn("parameters", "Parameters", Layers)}
+          </>
+        )}
       </div>
     </div>
   );
