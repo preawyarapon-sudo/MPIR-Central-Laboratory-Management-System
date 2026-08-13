@@ -4239,12 +4239,12 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14.5 }}>{monthLabel}</div>
           <button style={S.iconBtnSm} onClick={() => setCursor(new Date(year, month + 1, 1))}><ChevronRight size={15} /></button>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, fontSize: 11, color: "var(--muted)", fontWeight: 600, textAlign: "center", marginBottom: 4 }}>
-          {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map(w => <div key={w}>{w}</div>)}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, fontSize: 11, color: "var(--muted)", fontWeight: 600, textAlign: "center", marginBottom: 4, minWidth: 0 }}>
+          {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map(w => <div key={w} style={{ minWidth: 0 }}>{w}</div>)}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, minWidth: 0 }}>
           {weeks.map((week, wi) => week.map((d, di) => {
-            if (d === null) return <div key={`${wi}-${di}`} />;
+            if (d === null) return <div key={`${wi}-${di}`} style={{ minWidth: 0 }} />;
             const dateStr = dateStrOf(d);
             const events = eventsOn(dateStr);
             const isToday = dateStr === today;
@@ -4253,7 +4253,7 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
                 key={dateStr}
                 onClick={() => events.length > 0 && setSelectedDate(dateStr)}
                 style={{
-                  minHeight: 64, textAlign: "left", background: isToday ? "#EAF4FB" : "#fff",
+                  minHeight: 64, minWidth: 0, width: "100%", boxSizing: "border-box", textAlign: "left", background: isToday ? "#EAF4FB" : "#fff",
                   border: `1px solid ${isToday ? "var(--teal)" : "var(--line)"}`, borderRadius: 8, padding: 5,
                   cursor: events.length > 0 ? "pointer" : "default", display: "flex", flexDirection: "column", gap: 2,
                   fontFamily: "inherit",
@@ -4262,11 +4262,11 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
                 <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: isToday ? "var(--teal-dark)" : "var(--muted)", fontWeight: isToday ? 700 : 500 }}>{d}</div>
                 {events.slice(0, 2).map(b => (
                   <div key={b.id} style={{
-                    display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, borderRadius: 4, padding: "1px 3px",
+                    display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, borderRadius: 4, padding: "1px 3px", minWidth: 0,
                     background: b.type === "checkout" ? "#FCEAEA" : "#FDF3E3",
                     color: b.type === "checkout" ? "var(--red)" : "var(--amber)", overflow: "hidden", whiteSpace: "nowrap",
                   }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{b.equipmentName}</span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{b.equipmentName}</span>
                   </div>
                 ))}
                 {events.length > 2 && <div style={{ fontSize: 9.5, color: "var(--muted)" }}>+{events.length - 2} รายการ</div>}
@@ -4351,7 +4351,7 @@ function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictT
       <div style={S.cardGrid}>
         {filtered.map(a => (
           <div key={`${a.assetType}-${a.id}`} style={{ ...S.eqCard, padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-            <div style={{ width: "100%", aspectRatio: "4 / 3", background: "#EEF2F6", position: "relative" }}>
+            <div style={{ width: "100%", height: 160, background: "#EEF2F6", position: "relative", overflow: "hidden", flexShrink: 0 }}>
               {a.imageUrl ? (
                 <img src={a.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
                   style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
@@ -4510,7 +4510,7 @@ const S = {
   navBadge: { background: "var(--red)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   navBadgeGreen: { background: "var(--green)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   sidebarFoot: { marginTop: "auto", fontSize: 10.5, color: "var(--muted)", padding: "10px 6px", lineHeight: 1.5 },
-  main: { flex: 1, padding: "22px 26px", overflowY: "auto", maxHeight: 640 },
+  main: { flex: 1, minWidth: 0, padding: "22px 26px", overflowY: "auto", maxHeight: 640 },
 
   hero: { position: "relative", background: "linear-gradient(135deg, var(--teal-dark), var(--teal))", color: "#fff", borderRadius: 14, padding: "26px 26px", overflow: "hidden", marginBottom: 18 },
   heroGrid: { position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)", backgroundSize: "22px 22px", maskImage: "radial-gradient(ellipse at top right, black, transparent 70%)" },
