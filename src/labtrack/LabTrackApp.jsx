@@ -4,7 +4,7 @@ import {
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
-  LayoutGrid
+  LayoutGrid, ZoomIn
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -4321,6 +4321,7 @@ function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictT
   const [q, setQ] = useState("");
   const [kindFilter, setKindFilter] = useState("all"); // all | equipment | item
   const [bookingFor, setBookingFor] = useState(null); // { id, assetType }
+  const [viewImage, setViewImage] = useState(null); // the asset currently shown full-size
 
   const catalog = useMemo(() => {
     const eq = equipment
@@ -4353,8 +4354,23 @@ function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictT
           <div key={`${a.assetType}-${a.id}`} style={{ ...S.eqCard, padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ width: "100%", height: 160, background: "#EEF2F6", position: "relative", overflow: "hidden", flexShrink: 0 }}>
               {a.imageUrl ? (
-                <img src={a.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                <>
+                  <img src={a.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", cursor: "pointer" }}
+                    onClick={() => setViewImage(a)}
+                  />
+                  <button
+                    onClick={() => setViewImage(a)}
+                    title="ดูรูปภาพขนาดใหญ่"
+                    style={{
+                      position: "absolute", bottom: 8, right: 8, width: 28, height: 28, borderRadius: 8,
+                      background: "rgba(0,0,0,0.55)", border: "none", color: "#fff", display: "flex",
+                      alignItems: "center", justifyContent: "center", cursor: "pointer",
+                    }}
+                  >
+                    <ZoomIn size={15} />
+                  </button>
+                </>
               ) : (
                 <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)" }}>
                   <ImageOff size={26} strokeWidth={1.5} />
@@ -4382,6 +4398,20 @@ function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictT
         ))}
         {filtered.length === 0 && <EmptyState text="ไม่พบเครื่องมือ/อุปกรณ์ที่ตรงกับเงื่อนไข" />}
       </div>
+
+      {viewImage && (
+        <Modal onClose={() => setViewImage(null)} title={viewImage.name}>
+          <img
+            src={viewImage.imageUrl}
+            alt=""
+            style={{ width: "100%", maxHeight: "70vh", objectFit: "contain", borderRadius: 10, background: "#EEF2F6" }}
+          />
+          <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--muted)" }}>
+            {viewImage.code && <span style={{ fontFamily: "var(--font-mono)" }}>{viewImage.code} · </span>}
+            {viewImage.location || "-"}
+          </div>
+        </Modal>
+      )}
 
       {bookingFor && (
         <BookingForm
