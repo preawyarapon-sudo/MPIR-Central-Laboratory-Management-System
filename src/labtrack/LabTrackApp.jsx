@@ -1388,6 +1388,7 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [editing, setEditing] = useState(null);
+  const [selected, setSelected] = useState(null); // detail view id
   const [bookingFor, setBookingFor] = useState(null);
   const [disabling, setDisabling] = useState(null);
 
@@ -1410,6 +1411,7 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
   function remove(id) {
     setItems(items.filter(i => i.id !== id));
     notify("ลบอุปกรณ์แล้ว");
+    if (selected === id) setSelected(null);
   }
   function setAvailability(id, disabled, reason) {
     setItems(items.map(i => i.id === id
@@ -1418,6 +1420,8 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
     ));
     notify(disabled ? "ปิดใช้งานชั่วคราวแล้ว" : "เปิดใช้งานอีกครั้งแล้ว");
   }
+
+  const selectedItem = items.find(i => i.id === selected);
 
   return (
     <div>
@@ -1437,6 +1441,7 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
 
       <Table
         cols={["ชื่ออุปกรณ์", "ประเภท / ตำแหน่ง", "จำนวน", "สถานะการยืม", ""]}
+        onRowClick={(i) => setSelected(filtered[i].id)}
         rows={filtered.map(i => {
           const bk = itemBookingSummary(i.id, bookings, i.totalQty);
           return [
@@ -1475,6 +1480,17 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
         empty="ยังไม่มีข้อมูลอุปกรณ์"
       />
 
+      {selectedItem && (
+        <ItemDetail
+          item={selectedItem}
+          bookings={bookings.filter(b => b.equipmentId === selectedItem.id && b.assetType === "item").sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""))}
+          onClose={() => setSelected(null)}
+          onEdit={() => { setEditing(selectedItem); setSelected(null); }}
+          onDelete={() => { remove(selectedItem.id); setSelected(null); }}
+          onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
+          onSetAvailability={(disabled, reason) => setAvailability(selectedItem.id, disabled, reason)}
+        />
+      )}
       {editing && <ItemForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
       {disabling && (
         <DisableAssetDialog
@@ -1502,6 +1518,107 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
         />
       )}
     </div>
+  );
+}
+
+// Detail view for a single item — mirrors EquipmentDetail's layout (photo,
+// header actions, status tags, notes, recent bookings) but without the
+// calibration/activity log, since items don't get calibrated.
+function ItemDetail({ item, bookings, onClose, onEdit, onDelete, onBook, onSetAvailability }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showDisable, setShowDisable] = useState(false);
+  const bk = itemBookingSummary(item.id, bookings, item.totalQty);
+
+  return (
+    <Modal onClose={onClose} title={item.code || item.name} wide>
+      {item.imageUrl && (
+        <div style={{ position: "relative", marginBottom: 14 }}>
+          <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+            style={{ width: "100%", maxHeight: 260, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
+          <a
+            href={item.imageUrl} target="_blank" rel="noopener noreferrer"
+            style={{
+              position: "absolute", top: 10, right: 10, display: "flex", alignItems: "center", gap: 5,
+              background: "rgba(18,37,59,0.75)", color: "#fff", fontSize: 12, fontWeight: 600,
+              padding: "6px 10px", borderRadius: 8, textDecoration: "none",
+            }}
+          >
+            <ExternalLink size={13} /> เปิดไฟล์รูปภาพ
+          </a>
+        </div>
+      )}
+      <div style={S.detailHead}>
+        <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+          <div style={S.detailName}>{item.name}</div>
+          <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"} · {item.category || "-"}</div>
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
+            จำนวนทั้งหมด {item.totalQty || 1} ชิ้น
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          {item.status === "active" && (
+            <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
+          )}
+          {item.status === "maintenance" ? (
+            <button style={{ ...S.smallBtn, color: "var(--green)", borderColor: "var(--green)" }} onClick={() => onSetAvailability(false, "")}>
+              <CheckCircle2 size={13} /> เปิดใช้งานอีกครั้ง
+            </button>
+          ) : (
+            <button style={{ ...S.smallBtn, color: "var(--amber)", borderColor: "var(--amber)" }} onClick={() => setShowDisable(true)}>
+              <AlertTriangle size={13} /> ปิดใช้งานชั่วคราว
+            </button>
+          )}
+          <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
+          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
+        </div>
+      </div>
+      {item.status === "maintenance" && item.unavailableReason && (
+        <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", marginTop: 4, fontSize: 12.5, color: "var(--ink)" }}>
+          <strong>ปิดใช้งานชั่วคราว:</strong> {item.unavailableReason}
+        </div>
+      )}
+      {showDisable && (
+        <DisableAssetDialog
+          asset={item}
+          onCancel={() => setShowDisable(false)}
+          onConfirm={(reason) => { setShowDisable(false); onSetAvailability(true, reason); }}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmDialog
+          message={`ต้องการลบอุปกรณ์ ${item.name} ใช่ไหม การลบไม่สามารถกู้คืนได้`}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => { setConfirmDelete(false); onDelete(); }}
+        />
+      )}
+      <div style={{ display: "flex", gap: 10, margin: "12px 0 6px", flexWrap: "wrap" }}>
+        <Tag color={item.status === "active" ? "var(--green)" : item.status === "maintenance" ? "var(--amber)" : "var(--muted)"}>
+          {item.status === "active" ? "ใช้งานอยู่" : item.status === "maintenance" ? "ซ่อมบำรุง" : "ปิดใช้งาน"}
+        </Tag>
+        <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
+      </div>
+      {item.notes && <div style={S.notesBox}>{item.notes}</div>}
+
+      {bookings.length > 0 && (
+        <>
+          <div style={{ ...S.panelTitle, marginTop: 18 }}>ประวัติการจอง/ยืม</div>
+          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+            {bookings.slice(0, 8).map(b => (
+              <div key={b.id} style={{ ...S.activityRow, alignItems: "center" }}>
+                <div style={S.activityDate}>{fmtDate(b.startDate)}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type]} · {b.requestedBy || "-"}{b.qty > 1 ? ` · ${b.qty} ชิ้น` : ""}</div>
+                  <div style={S.activityDetail}>{b.purpose || "-"}</div>
+                </div>
+                <Tag color={
+                  b.status === "approved" ? "var(--green)" : b.status === "pending" ? "var(--amber)" : "var(--muted)"
+                }>{BOOKING_STATUS_LABEL[b.status] || b.status}</Tag>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }
 
