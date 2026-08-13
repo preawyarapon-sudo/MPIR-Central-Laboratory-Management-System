@@ -1614,7 +1614,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
       <div>
         <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{BOOKING_TYPE_LABEL[b.type]}</div>
         <div>{fmtDate(b.startDate)}</div>
-        {b.startTime && b.endTime && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{b.startTime} - {b.endTime} น.</div>}
+        {b.startTime && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>เริ่ม {b.startTime} น.</div>}
       </div>,
       <div>
         {b.returnedAt ? (
@@ -1629,6 +1629,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
             {b.dueBackDate && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>กำหนดคืน {fmtDate(b.dueBackDate)}</div>}
           </>
         )}
+        {b.endTime && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>ถึง {b.endTime} น.</div>}
         {isBookingOverdue(b) && <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 2 }}>เลยกำหนดคืน {Math.abs(daysUntil(b.dueBackDate))} วัน</div>}
       </div>,
       <div>
@@ -1873,6 +1874,43 @@ function BookingActions({ booking: b, canApprove, currentUsername, defaultActorN
     );
   }
   return null;
+}
+
+// Simple tap-friendly hour/minute picker for optional booking time windows —
+// two plain <select> dropdowns instead of the native browser time-of-day
+// widget, which uses a fiddly scrolling AM/PM wheel that's slow to use on
+// both desktop and mobile. Minutes are in 15-minute steps, which is plenty
+// of precision for scheduling shared lab equipment.
+function TimeSelect({ value, onChange }) {
+  const [h, m] = (value || "").split(":");
+  const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+  const MINUTES = ["00", "15", "30", "45"];
+  function setHour(newH) {
+    if (!newH) { onChange(""); return; }
+    onChange(`${newH}:${m || "00"}`);
+  }
+  function setMinute(newM) {
+    if (!h) return; // picking a minute before an hour doesn't mean anything yet
+    onChange(`${h}:${newM}`);
+  }
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <select style={{ ...S.input, flex: 1 }} value={h || ""} onChange={(e) => setHour(e.target.value)}>
+        <option value="">--</option>
+        {HOURS.map(hh => <option key={hh} value={hh}>{hh}</option>)}
+      </select>
+      <span style={{ color: "var(--muted)", fontWeight: 700 }}>:</span>
+      <select style={{ ...S.input, flex: 1 }} value={h ? (m || "00") : ""} onChange={(e) => setMinute(e.target.value)} disabled={!h}>
+        <option value="">--</option>
+        {MINUTES.map(mm => <option key={mm} value={mm}>{mm}</option>)}
+      </select>
+      {value && (
+        <button type="button" onClick={() => onChange("")} title="ล้างเวลา" style={{ ...S.iconBtnSm, flexShrink: 0 }}>
+          <X size={13} />
+        </button>
+      )}
+    </div>
+  );
 }
 
 function BookingForm({ equipment, items = [], bookings, setBookings, initialEquipmentId, initialAssetType, fixedRequestedBy, fixedRequestedByName, onCancel, onSave }) {
@@ -2206,8 +2244,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
                 <Field label="วันที่สิ้นสุด"><input type="date" style={S.input} value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} /></Field>
               </>
             )}
-            <Field label="เวลาเริ่ม (ถ้ามี)"><input type="time" style={S.input} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></Field>
-            <Field label="เวลาสิ้นสุด (ถ้ามี)"><input type="time" style={S.input} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></Field>
+            <Field label="เวลาเริ่ม (ถ้ามี)"><TimeSelect value={startTime} onChange={setStartTime} /></Field>
+            <Field label="เวลาสิ้นสุด (ถ้ามี)"><TimeSelect value={endTime} onChange={setEndTime} /></Field>
             {(startTime || endTime) && (
               <div style={{ fontSize: 11.5, color: "var(--muted)", gridColumn: "1 / -1" }}>
                 ระบุช่วงเวลาไว้เผื่อมีคนอื่นขอใช้/จองเครื่องเดียวกันวันเดียวกันแต่คนละช่วงเวลา ระบบจะเช็คชนกันเฉพาะช่วงเวลาที่ทับกันจริง
