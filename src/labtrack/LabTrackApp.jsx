@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, Fragment } from "react";
 import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
@@ -604,7 +604,13 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
                     className="ltNavBtn"
                   >
                     <Icon size={n.featured ? 18 : 16} strokeWidth={n.featured ? 2.3 : 2} />
-                    <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
+                    <span style={{ flex: 1, textAlign: "left", wordBreak: "keep-all", overflowWrap: "normal" }} className="ltNavBtnLabel">
+                      {n.label.split("/").map((part, i, arr) => (
+                        <Fragment key={i}>
+                          {part}{i < arr.length - 1 ? <>/<wbr /></> : null}
+                        </Fragment>
+                      ))}
+                    </span>
                     {activeBookingCount > 0 && <span style={S.navBadgeGreen}>{activeBookingCount}</span>}
                     {pendingCount > 0 && <span style={S.navBadge}>{pendingCount}</span>}
                   </button>
@@ -4860,8 +4866,8 @@ const S = {
   },
   brandName: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, letterSpacing: -0.2, color: "#fff" },
   brandSub: { fontSize: 10.5, color: "#93A6BE", marginTop: 1 },
-  navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#AAB9CC", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
-  navBtnActive: { background: "rgba(255,255,255,0.12)", color: "#5FC9E8", fontWeight: 600 },
+  navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#AAB9CC", padding: "9px 10px", borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 2, textAlign: "left" },
+  navBtnActive: { background: "rgba(255,255,255,0.12)", color: "#5FC9E8", fontWeight: 700 },
   navBtnFeatured: {
     background: "linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.05) 100%)",
     border: "1px solid rgba(255,255,255,0.28)", color: "#fff", fontWeight: 700, fontSize: 13.5,
