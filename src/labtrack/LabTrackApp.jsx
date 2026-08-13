@@ -973,10 +973,39 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   );
 }
 
+// Shared photo field for equipment/item forms — paste an image URL (e.g.
+// from the Google Apps Script + Drive uploader) and preview it. Kept as its
+// own component (rather than inlining into each form) so both forms stay
+// in sync if the image-hosting approach changes later.
+function ImageUploadField({ label, value, onChange }) {
+  const [imgError, setImgError] = useState(false);
+  return (
+    <Field label={label} full>
+      <input
+        style={S.input}
+        value={value || ""}
+        onChange={(e) => { setImgError(false); onChange(e.target.value); }}
+        placeholder="วางลิงก์รูปภาพ เช่น https://..."
+      />
+      {value && (
+        imgError ? (
+          <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>โหลดรูปภาพจากลิงก์นี้ไม่ได้ กรุณาตรวจสอบลิงก์</div>
+        ) : (
+          <img
+            src={value}
+            alt=""
+            onError={() => setImgError(true)}
+            style={{ width: "100%", maxHeight: 160, objectFit: "contain", background: "#EEF2F6", borderRadius: 8, marginTop: 8, border: "1px solid var(--line)" }}
+          />
+        )
+      )}
+    </Field>
+  );
+}
+
 function EquipmentForm({ item, onCancel, onSave }) {
   const [f, setF] = useState(item);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const [imgError, setImgError] = useState(false);
   return (
     <Modal onClose={onCancel} title={item.code ? "แก้ไขเครื่องมือ" : "เพิ่มเครื่องมือใหม่"}>
       <div style={S.formGrid} className="ltFormGrid">
@@ -1021,26 +1050,11 @@ function EquipmentForm({ item, onCancel, onSave }) {
           <input type="date" style={S.input} value={f.nextDue} onChange={set("nextDue")} />
           {f.intervalMonths ? <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>คำนวณอัตโนมัติจากรอบ {f.intervalMonths} เดือน — แก้ไขเองได้ถ้าต้องการ</div> : null}
         </Field>
-        <Field label="ลิงก์รูปภาพเครื่องมือ" full>
-          <input
-            style={S.input}
-            value={f.imageUrl || ""}
-            onChange={(e) => { setImgError(false); setF({ ...f, imageUrl: e.target.value }); }}
-            placeholder="วางลิงก์รูปภาพ เช่น https://..."
-          />
-          {f.imageUrl && (
-            imgError ? (
-              <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>โหลดรูปภาพจากลิงก์นี้ไม่ได้ กรุณาตรวจสอบลิงก์</div>
-            ) : (
-              <img
-                src={f.imageUrl}
-                alt=""
-                onError={() => setImgError(true)}
-                style={{ width: "100%", maxHeight: 160, objectFit: "contain", background: "#EEF2F6", borderRadius: 8, marginTop: 8, border: "1px solid var(--line)" }}
-              />
-            )
-          )}
-        </Field>
+        <ImageUploadField
+          label="รูปภาพเครื่องมือ"
+          value={f.imageUrl}
+          onChange={(url) => setF({ ...f, imageUrl: url })}
+        />
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.notes} onChange={set("notes")} /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.code || !f.name} />
@@ -1452,7 +1466,6 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
 
 function ItemForm({ item, onCancel, onSave }) {
   const [f, setF] = useState(item);
-  const [imgError, setImgError] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
     <Modal onClose={onCancel} title={item.name ? "แก้ไขอุปกรณ์" : "เพิ่มอุปกรณ์ใหม่"}>
@@ -1485,26 +1498,11 @@ function ItemForm({ item, onCancel, onSave }) {
             <option value="inactive">ปิดใช้งาน</option>
           </select>
         </Field>
-        <Field label="ลิงก์รูปภาพอุปกรณ์" full>
-          <input
-            style={S.input}
-            value={f.imageUrl || ""}
-            onChange={(e) => { setImgError(false); setF({ ...f, imageUrl: e.target.value }); }}
-            placeholder="วางลิงก์รูปภาพ เช่น https://..."
-          />
-          {f.imageUrl && (
-            imgError ? (
-              <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>โหลดรูปภาพจากลิงก์นี้ไม่ได้ กรุณาตรวจสอบลิงก์</div>
-            ) : (
-              <img
-                src={f.imageUrl}
-                alt=""
-                onError={() => setImgError(true)}
-                style={{ width: "100%", maxHeight: 160, objectFit: "contain", background: "#EEF2F6", borderRadius: 8, marginTop: 8, border: "1px solid var(--line)" }}
-              />
-            )
-          )}
-        </Field>
+        <ImageUploadField
+          label="รูปภาพอุปกรณ์"
+          value={f.imageUrl}
+          onChange={(url) => setF({ ...f, imageUrl: url })}
+        />
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.notes || ""} onChange={set("notes")} /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.name} />
@@ -4177,9 +4175,12 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
 
   const monthLabel = cursor.toLocaleDateString("th-TH", { month: "long", year: "numeric" });
 
-  const inUseNow = liveBookings
-    .filter(b => b.type === "checkout" && !b.returnedAt && (b.startDate || "") <= today)
-    .sort((a, b) => (a.startDate || "").localeCompare(b.startDate || ""));
+  // Everything happening today — both equipment actually checked out right
+  // now AND reservations that fall on today — sorted by start time so the
+  // day reads top-to-bottom like a schedule.
+  const todayEvents = eventsOn(today)
+    .slice()
+    .sort((a, b) => (a.startTime || "").localeCompare(b.startTime || "") || (a.equipmentName || "").localeCompare(b.equipmentName || ""));
 
   const selectedEvents = selectedDate ? eventsOn(selectedDate) : [];
 
@@ -4187,17 +4188,21 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
     <div>
       <TabHeader title="ปฏิทินการใช้งาน" sub="ดูว่าเครื่องมือ/อุปกรณ์ชิ้นไหนกำลังใช้งานอยู่ หรือถูกจองล่วงหน้าไว้ในแต่ละวัน" />
 
-      {inUseNow.length > 0 && (
+      {todayEvents.length > 0 && (
         <div style={{ marginBottom: 20 }}>
-          <div style={{ ...S.panelTitle, marginBottom: 10 }}>กำลังใช้งานอยู่ตอนนี้ ({inUseNow.length})</div>
+          <div style={{ ...S.panelTitle, marginBottom: 10 }}>รายการวันนี้ ({todayEvents.length})</div>
           <div style={S.cardGrid}>
-            {inUseNow.map(b => {
+            {todayEvents.map(b => {
               const asset = assetMap[b.equipmentId];
+              const isReservation = b.type === "reservation";
               return (
                 <div key={b.id} style={{ ...S.eqCard, display: "flex", gap: 10 }}>
                   <Thumb src={asset?.imageUrl} size={52} radius={9} />
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={S.eqName}>{b.equipmentName}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <div style={S.eqName}>{b.equipmentName}</div>
+                      <Tag color={isReservation ? "var(--amber)" : "var(--red)"}>{BOOKING_TYPE_LABEL[b.type]}</Tag>
+                    </div>
                     {b.equipmentCode && <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{b.equipmentCode}</div>}
                     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>
                       <User size={12} /> {eventLabel(b)}
@@ -4207,10 +4212,18 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
                         {b.startTime} - {b.endTime} น.
                       </div>
                     )}
-                    {b.dueBackDate && (
-                      <div style={{ fontSize: 11, marginTop: 3, color: isBookingOverdue(b) ? "var(--red)" : "var(--muted)", fontFamily: "var(--font-mono)" }}>
-                        กำหนดคืน {fmtDate(b.dueBackDate)}
-                      </div>
+                    {isReservation ? (
+                      b.endDate && b.endDate !== b.startDate && (
+                        <div style={{ fontSize: 11, marginTop: 3, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                          จองถึง {fmtDate(b.endDate)}
+                        </div>
+                      )
+                    ) : (
+                      b.dueBackDate && (
+                        <div style={{ fontSize: 11, marginTop: 3, color: isBookingOverdue(b) ? "var(--red)" : "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                          กำหนดคืน {fmtDate(b.dueBackDate)}
+                        </div>
+                      )
                     )}
                   </div>
                 </div>
@@ -4269,14 +4282,25 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
             {selectedEvents.length === 0 && <EmptyState text="ไม่มีรายการในวันนี้" />}
             {selectedEvents.map(b => {
               const asset = assetMap[b.equipmentId];
+              const isReservation = b.type === "reservation";
               return (
                 <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "center", border: "1px solid var(--line)", borderRadius: 10, padding: 10 }}>
                   <Thumb src={asset?.imageUrl} size={48} radius={8} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontWeight: 600, fontSize: 13 }}>{b.equipmentName}</div>
                     <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{eventLabel(b)}</div>
+                    {b.startTime && b.endTime && (
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
+                        {b.startTime} - {b.endTime} น.
+                      </div>
+                    )}
+                    {isReservation && b.endDate && b.endDate !== b.startDate && (
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
+                        {fmtDate(b.startDate)} - {fmtDate(b.endDate)}
+                      </div>
+                    )}
                   </div>
-                  <Tag color={b.type === "checkout" ? "var(--red)" : "var(--amber)"}>{BOOKING_TYPE_LABEL[b.type]}</Tag>
+                  <Tag color={isReservation ? "var(--amber)" : "var(--red)"}>{BOOKING_TYPE_LABEL[b.type]}</Tag>
                 </div>
               );
             })}
