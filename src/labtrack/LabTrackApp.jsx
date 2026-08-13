@@ -167,13 +167,18 @@ function bookingHistoryStatusLabel(b) {
 
 // Normalizes a booking into a comparable {start, end} date range. A checkout
 // with no returnedAt yet is treated as open-ended (far-future end) so it
-// correctly conflicts with anything that would need the equipment later.
+// correctly conflicts with anything that would need the equipment later —
+// UNLESS it has an explicit start/end time, in which case the person has
+// already told us it's a same-day window, so the fallback end is that same
+// day (not "forever"). Without this, a same-day checkout that left
+// "กำหนดคืน" blank would look like it occupies the equipment indefinitely,
+// which breaks the same-day time-overlap check below and makes it flag a
+// conflict against every later booking that day regardless of whether the
+// clock times actually overlap.
 function bookingRange(b) {
   if (b.type === "checkout") {
-    // A checkout's real "occupied until" is: the actual return date if
-    // already returned, else the planned กำหนดคืน if one was given, else
-    // truly open-ended (only when nobody ever set a return date at all).
-    return { start: b.startDate || todayISO(), end: b.returnedAt || b.dueBackDate || "9999-12-31" };
+    const timedFallbackEnd = (b.startTime && b.endTime) ? (b.startDate || todayISO()) : "9999-12-31";
+    return { start: b.startDate || todayISO(), end: b.returnedAt || b.dueBackDate || timedFallbackEnd };
   }
   // Reservation: if it was finished early, its real occupied-until date is
   // whenever that happened — capped by the original endDate, since
