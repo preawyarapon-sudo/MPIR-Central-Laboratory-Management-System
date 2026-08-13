@@ -175,6 +175,14 @@ function bookingRange(b) {
     // truly open-ended (only when nobody ever set a return date at all).
     return { start: b.startDate || todayISO(), end: b.returnedAt || b.dueBackDate || "9999-12-31" };
   }
+  // Reservation: if it was finished early, its real occupied-until date is
+  // whenever that happened — capped by the original endDate, since
+  // finishing early should never extend a reservation past what was
+  // originally requested.
+  if (b.returnedAt) {
+    const cappedEnd = b.endDate && b.endDate < b.returnedAt ? b.endDate : b.returnedAt;
+    return { start: b.startDate || "", end: cappedEnd };
+  }
   return { start: b.startDate || "", end: b.endDate || b.startDate || "" };
 }
 function rangesOverlap(aStart, aEnd, bStart, bEnd) {
@@ -184,22 +192,40 @@ function rangesOverlap(aStart, aEnd, bStart, bEnd) {
 // one that hasn't been returned/finished yet. Once something is returned
 // (checkout) or its reservation period has passed, it's no longer a real
 // claim on the equipment and should stop showing up as a conflict.
-function findBookingConflicts(bookings, equipmentId, range, excludeId) {
+//
+// `draft` (optional) describes the NEW booking being checked — passing its
+// type/assetType/startTime/endTime lets same-day equipment CHECKOUTS with
+// explicit clock times conflict only when those times actually overlap,
+// instead of the whole day looking "taken" the moment anyone else uses the
+// same instrument. Reservations, multi-day spans, and anything without an
+// explicit time on both sides keep the original whole-day-conflict logic.
+function findBookingConflicts(bookings, equipmentId, range, excludeId, draft = {}) {
   return bookings.filter((b) => {
     if (b.equipmentId !== equipmentId || b.id === excludeId) return false;
     if (b.status === "pending") { /* still a live claim */ }
     else if (b.status === "approved") { if (!isBookingCurrent(b)) return false; }
     else return false; // rejected/cancelled
     const r = bookingRange(b);
-    return rangesOverlap(range.start, range.end, r.start, r.end);
+    if (!rangesOverlap(range.start, range.end, r.start, r.end)) return false;
+    const sameDayTimedCheckouts =
+      draft.type === "checkout" && b.type === "checkout" &&
+      draft.assetType !== "item" && b.assetType !== "item" &&
+      range.start === range.end && r.start === r.end && range.start === r.start &&
+      draft.startTime && draft.endTime && b.startTime && b.endTime;
+    if (sameDayTimedCheckouts) {
+      return draft.startTime < b.endTime && b.startTime < draft.endTime;
+    }
+    return true;
   });
 }
 // "Currently live" = approved and either an unreturned checkout, or a
-// reservation whose date range hasn't fully passed yet. Used to split the
-// "current" view from "history" without needing a separate status value.
+// reservation whose date range hasn't fully passed yet (and wasn't finished
+// early). Used to split the "current" view from "history" without needing
+// a separate status value.
 function isBookingCurrent(b) {
   if (b.status !== "approved") return false;
-  if (b.type === "checkout") return !b.returnedAt;
+  if (b.returnedAt) return false; // finished/returned — always history from here on
+  if (b.type === "checkout") return true;
   return (b.endDate || b.startDate || "") >= todayISO();
 }
 function isBookingOverdue(b) {
@@ -1588,14 +1614,15 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
       <div>
         <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{BOOKING_TYPE_LABEL[b.type]}</div>
         <div>{fmtDate(b.startDate)}</div>
+        {b.startTime && b.endTime && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{b.startTime} - {b.endTime} น.</div>}
       </div>,
       <div>
-        {isReservation ? (
+        {b.returnedAt ? (
+          <div style={{ color: "var(--green)" }}>{fmtDate(b.returnedAt)}</div>
+        ) : isReservation ? (
           b.endDate && b.endDate !== b.startDate
             ? <div>{fmtDate(b.endDate)}</div>
             : <div style={{ color: "var(--muted)" }}>วันเดียวกัน</div>
-        ) : b.returnedAt ? (
-          <div style={{ color: "var(--green)" }}>{fmtDate(b.returnedAt)}</div>
         ) : (
           <>
             <div style={{ color: "var(--muted)" }}>ยังไม่คืน</div>
@@ -1616,7 +1643,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
           </div>
         )}
         {b.returnedAt && b.returnedBy && (
-          <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2 }}>รับคืนโดย {b.returnedBy}</div>
+          <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2 }}>คืนโดย {b.returnedBy}</div>
         )}
         {b.approvalNote && (
           <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2, fontStyle: "italic", wordBreak: "break-word" }}>
@@ -1628,7 +1655,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         booking={b}
         canApprove={!restrictToBooking}
         currentUsername={currentUsername}
-        defaultActorName={actorName}
+        defaultActorName={actorName || currentDisplayName}
         onApprove={(note, name) => approve(b, note, name)}
         onReject={(note, name) => reject(b, note, name)}
         onCancel={() => cancel(b)}
@@ -1783,7 +1810,12 @@ function BookingActions({ booking: b, canApprove, currentUsername, defaultActorN
       </div>
     );
   }
-  if (b.status === "approved" && b.type === "checkout" && !b.returnedAt) {
+  // Marking something "finished" — for an equipment checkout that hasn't
+  // been returned yet, or a reservation that has already started (its
+  // startDate has arrived) and hasn't been marked finished early yet. A
+  // reservation that hasn't started is left to the cancel-only branch below.
+  const reservationStarted = b.type === "reservation" && b.startDate && b.startDate <= todayISO();
+  if (b.status === "approved" && !b.returnedAt && (b.type === "checkout" || reservationStarted)) {
     const isItem = b.assetType === "item";
     // Marking equipment as finished can be done by lab/admin OR by the
     // person who requested it themselves (self-service) — but returning an
@@ -1881,6 +1913,12 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const [startDate, setStartDate] = useState(todayISO());
   const [endDate, setEndDate] = useState(todayISO());
   const [dueBackDate, setDueBackDate] = useState(todayISO());
+  // Optional clock-time window — only meaningful for "ใช้งานทันที" (checkout)
+  // requests. Lets several people book the same equipment on the same day
+  // without conflicting, as long as their time windows don't overlap; left
+  // blank, conflict-checking falls back to the previous whole-day behavior.
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
 
   // ---- item-mode state: { [itemId]: qty } for every checked item ----
   // Deliberately starts empty even when opened from a specific item's
@@ -1942,7 +1980,13 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   const equipRange = equipSubType === "checkout"
     ? { start: startDate || todayISO(), end: dueBackDate || "9999-12-31" }
     : { start: startDate || "", end: endDate || startDate || "" };
-  const equipConflicts = mode === "equipment" && equipmentId ? findBookingConflicts(bookings, equipmentId, equipRange, null) : [];
+  const equipConflicts = mode === "equipment" && equipmentId
+    ? findBookingConflicts(bookings, equipmentId, equipRange, null, {
+        type: equipSubType, assetType: "equipment",
+        startTime: equipSubType === "checkout" ? startTime : "",
+        endTime: equipSubType === "checkout" ? endTime : "",
+      })
+    : [];
 
   const itemRange = { start: itemStartDate || todayISO(), end: itemDueBackDate || "9999-12-31" };
 
@@ -1995,7 +2039,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
             <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, color: "var(--ink)" }}>
               <span>
                 {bookingLiveStatusLabel(c)} · {BOOKING_TYPE_LABEL[c.type]} โดย {c.requestedBy || "-"}
-                {" "}({fmtDate(bookingRange(c).start)}{bookingRange(c).end !== "9999-12-31" ? ` - ${fmtDate(bookingRange(c).end)}` : " เป็นต้นไป"})
+                {" "}({fmtDate(bookingRange(c).start)}{bookingRange(c).end !== "9999-12-31" ? ` - ${fmtDate(bookingRange(c).end)}` : " เป็นต้นไป"}{c.startTime && c.endTime ? ` เวลา ${c.startTime}-${c.endTime}` : ""})
               </span>
               <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                 {c.status === "pending" && canCancelBooking(c) && (
@@ -2050,6 +2094,8 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
         startDate,
         endDate: equipSubType === "reservation" ? endDate : null,
         dueBackDate: equipSubType === "checkout" ? dueBackDate : "",
+        startTime: equipSubType === "checkout" ? startTime : "",
+        endTime: equipSubType === "checkout" ? endTime : "",
         requestedBy: displayRequestedBy,
         requestedByUsername,
         purpose: purpose.trim(),
@@ -2140,6 +2186,13 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
               <>
                 <Field label="วันที่เริ่มใช้"><input type="date" style={S.input} value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
                 <Field label="กำหนดคืน (ถ้ามี)"><input type="date" style={S.input} value={dueBackDate} onChange={(e) => setDueBackDate(e.target.value)} /></Field>
+                <Field label="เวลาเริ่มใช้ (ถ้ามี)"><input type="time" style={S.input} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></Field>
+                <Field label="เวลาสิ้นสุด (ถ้ามี)"><input type="time" style={S.input} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></Field>
+                {(startTime || endTime) && (
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", gridColumn: "1 / -1" }}>
+                    ระบุช่วงเวลาไว้เผื่อมีคนอื่นขอใช้เครื่องเดียวกันวันเดียวกันแต่คนละช่วงเวลา ระบบจะเช็คชนกันเฉพาะช่วงเวลาที่ทับกันจริง
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -3732,11 +3785,11 @@ function ReturnQtyDialog({ booking, defaultName = "", onCancel, onConfirm }) {
           </div>
         )}
         <div style={{ marginTop: 14 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>ชื่อผู้รับคืน</label>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>{isItem ? "ชื่อผู้รับคืน" : "ชื่อผู้คืน"}</label>
           <input
             value={returnedByName}
             onChange={(e) => setReturnedByName(e.target.value)}
-            placeholder="พิมพ์ชื่อผู้รับคืน..."
+            placeholder={isItem ? "พิมพ์ชื่อผู้รับคืน..." : "พิมพ์ชื่อผู้คืน..."}
             style={{ ...S.input, marginTop: 6 }}
           />
         </div>
@@ -4037,6 +4090,11 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
                     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>
                       <User size={12} /> {eventLabel(b)}
                     </div>
+                    {b.startTime && b.endTime && (
+                      <div style={{ fontSize: 11, marginTop: 2, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                        {b.startTime} - {b.endTime} น.
+                      </div>
+                    )}
                     {b.dueBackDate && (
                       <div style={{ fontSize: 11, marginTop: 3, color: isBookingOverdue(b) ? "var(--red)" : "var(--muted)", fontFamily: "var(--font-mono)" }}>
                         กำหนดคืน {fmtDate(b.dueBackDate)}
