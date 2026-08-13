@@ -4599,8 +4599,9 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 * { box-sizing: border-box; }
 :root {
-  --ink:#12253B; --paper:#F2F7FC; --panel:#FFFFFF; --line:#DCE6F0;
-  --teal:#1976C6; --teal-dark:#0F5FA6; --amber:#C2760C; --red:#C23B2E; --green:#1F8A4C; --muted:#5C7086;
+  --ink:#101B2D; --paper:#EEF2F7; --panel:#FFFFFF; --line:#DCE6F0;
+  --teal:#146C94; --teal-dark:#0B4F6C; --amber:#B26B0A; --red:#B23327; --green:#1C7A44; --muted:#5C7086;
+  --sidebar-grad-start:#0A1830; --sidebar-grad-end:#173350;
   --font-display:'Prompt', ui-sans-serif, system-ui, sans-serif;
   --font-body:'Prompt', ui-sans-serif, system-ui, sans-serif;
   --font-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
@@ -4618,7 +4619,7 @@ button { cursor: pointer; }
     width: 100% !important;
     padding: 10px 12px !important;
     border-right: none !important;
-    border-bottom: 1px solid var(--line) !important;
+    border-bottom: 1px solid rgba(255,255,255,0.12) !important;
   }
   /* Nav moves out of the sidebar into the fixed bottom bar on mobile */
   .ltNav { display: none !important; }
@@ -4688,16 +4689,20 @@ button { cursor: pointer; }
 const S = {
   app: { fontFamily: "var(--font-body)", background: "var(--paper)", color: "var(--ink)", minHeight: 500, borderRadius: 12, overflow: "hidden", border: "1px solid var(--line)" },
   shell: { display: "flex", minHeight: 500 },
-  sidebar: { width: 216, background: "#fff", color: "var(--ink)", padding: "20px 12px", display: "flex", flexDirection: "column", borderRight: "1px solid var(--line)" },
-  brand: { display: "flex", alignItems: "center", gap: 10, padding: "2px 4px 14px", borderBottom: "1px solid var(--line)", marginBottom: 10 },
+  sidebar: {
+    width: 216, background: "linear-gradient(180deg, var(--sidebar-grad-start) 0%, var(--sidebar-grad-end) 100%)",
+    color: "#fff", padding: "20px 12px", display: "flex", flexDirection: "column",
+    borderRight: "1px solid rgba(255,255,255,0.08)", boxShadow: "2px 0 10px rgba(6,14,28,0.15)",
+  },
+  brand: { display: "flex", alignItems: "center", gap: 10, padding: "2px 4px 14px", borderBottom: "1px solid rgba(255,255,255,0.12)", marginBottom: 10 },
   brandMark: { width: 52, height: 52, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
-  brandName: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, letterSpacing: -0.2, color: "var(--teal-dark)" },
-  brandSub: { fontSize: 10.5, color: "var(--muted)", marginTop: 1 },
-  navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "var(--muted)", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
-  navBtnActive: { background: "rgba(25,118,198,0.10)", color: "var(--teal-dark)", fontWeight: 600 },
+  brandName: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, letterSpacing: -0.2, color: "#fff" },
+  brandSub: { fontSize: 10.5, color: "#93A6BE", marginTop: 1 },
+  navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#AAB9CC", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
+  navBtnActive: { background: "rgba(255,255,255,0.12)", color: "#5FC9E8", fontWeight: 600 },
   navBadge: { background: "var(--red)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   navBadgeGreen: { background: "var(--green)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
-  sidebarFoot: { marginTop: "auto", fontSize: 10.5, color: "var(--muted)", padding: "10px 6px", lineHeight: 1.5 },
+  sidebarFoot: { marginTop: "auto", fontSize: 10.5, color: "#7C8FA6", padding: "10px 6px", lineHeight: 1.5 },
   main: { flex: 1, minWidth: 0, padding: "22px 26px", overflowY: "auto", maxHeight: 640 },
 
   hero: { position: "relative", background: "linear-gradient(135deg, var(--teal-dark), var(--teal))", color: "#fff", borderRadius: 14, padding: "26px 26px", overflow: "hidden", marginBottom: 18 },
@@ -4734,7 +4739,7 @@ const S = {
   searchWrap: { display: "flex", alignItems: "center", gap: 7, background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: "7px 10px", flex: 1, minWidth: 200 },
   searchInput: { border: "none", outline: "none", fontSize: 13, flex: 1, background: "transparent" },
   select: { border: "1px solid var(--line)", borderRadius: 8, padding: "7px 10px", fontSize: 13, background: "#fff" },
-  primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "var(--teal)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 500 },
+  primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 500, boxShadow: "0 2px 6px rgba(11,79,108,0.28)" },
   ghostBtn: { background: "transparent", border: "1px solid var(--line)", borderRadius: 8, padding: "8px 14px", fontSize: 13 },
   smallBtn: { display: "flex", alignItems: "center", gap: 5, background: "#E9F1FB", color: "var(--teal-dark)", border: "none", borderRadius: 7, padding: "6px 10px", fontSize: 12 },
   iconBtn: { background: "transparent", border: "1px solid var(--line)", borderRadius: 7, padding: 6, display: "flex" },
