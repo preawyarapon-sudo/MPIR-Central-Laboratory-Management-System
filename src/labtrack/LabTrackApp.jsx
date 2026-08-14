@@ -583,11 +583,14 @@ const SEED_ITEMS = [
 // External link, not an internal tab: clicking it opens the Central Lab
 // MPIR analysis-request site in a new tab instead of calling setTab, so it
 // never enters allowedTabKeys / the ?tab= URL tracking (see App below).
+// Admin accounts (full NAV) go straight to the admin login; booking-only
+// (RESTRICTED_NAV) accounts get the regular site.
+const REQUEST_ANALYSIS_LINK_ADMIN = { key: "requestAnalysis", label: "ขอรับบริการวิเคราะห์", icon: ExternalLink, external: "https://centrallab-mpir.mitrphol.com/login/admin", featured: true };
 const REQUEST_ANALYSIS_LINK = { key: "requestAnalysis", label: "ขอรับบริการวิเคราะห์", icon: ExternalLink, external: "https://centrallab-mpir.mitrphol.com/", featured: true };
 
 const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
-  REQUEST_ANALYSIS_LINK,
+  REQUEST_ANALYSIS_LINK_ADMIN,
   { key: "equipment", label: "เครื่องมือ", icon: Wrench },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
