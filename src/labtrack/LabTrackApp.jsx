@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, Fragment } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
@@ -604,13 +604,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
                     className="ltNavBtn"
                   >
                     <Icon size={n.featured ? 18 : 16} strokeWidth={n.featured ? 2.3 : 2} />
-                    <span style={{ flex: 1, textAlign: "left", wordBreak: "keep-all", overflowWrap: "normal" }} className="ltNavBtnLabel">
-                      {n.label.split("/").map((part, i, arr) => (
-                        <Fragment key={i}>
-                          {part}{i < arr.length - 1 ? <>/<wbr /></> : null}
-                        </Fragment>
-                      ))}
-                    </span>
+                    <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
                     {activeBookingCount > 0 && <span style={S.navBadgeGreen}>{activeBookingCount}</span>}
                     {pendingCount > 0 && <span style={S.navBadge}>{pendingCount}</span>}
                   </button>
@@ -621,42 +615,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           <div style={S.sidebarFoot} className="ltSidebarFoot">
             {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน, รายการที่ยืมได้ และติดตามงานวิเคราะห์" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
           </div>
-
-          {/* decorative wave + flask motif at the base of the sidebar */}
-          <div
-            aria-hidden="true"
-            className="ltSidebarWave"
-            style={{
-              marginTop: 14, marginLeft: -12, marginRight: -12, marginBottom: -20,
-              lineHeight: 0, overflow: "hidden", pointerEvents: "none", userSelect: "none",
-            }}
-          >
-            <svg viewBox="0 0 240 150" width="100%" height="128" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-              {/* rising bubbles */}
-              <circle cx="200" cy="18" r="2.4" fill="rgba(255,255,255,0.35)" />
-              <circle cx="212" cy="30" r="1.6" fill="rgba(255,255,255,0.28)" />
-              <circle cx="118" cy="14" r="1.8" fill="rgba(255,255,255,0.22)" />
-
-              {/* two beakers/flasks, echoing the FlaskConical brand mark */}
-              <g>
-                <path d="M95 34 L95 50 L82 78 Q80 84 86 84 L112 84 Q118 84 116 78 L103 50 L103 34 Z"
-                  fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.32)" strokeWidth="1.4" />
-                <path d="M86.5 66 L111.5 66 L116 78 Q118 84 112 84 L86 84 Q80 84 82 78 Z" fill="rgba(255,255,255,0.16)" />
-                <line x1="92" y1="32" x2="106" y2="32" stroke="rgba(255,255,255,0.32)" strokeWidth="1.4" strokeLinecap="round" />
-              </g>
-              <g>
-                <path d="M152 22 L152 42 L136 80 Q134 87 141 87 L173 87 Q180 87 178 80 L162 42 L162 22 Z"
-                  fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.36)" strokeWidth="1.6" />
-                <path d="M141 62 L173 62 L178 80 Q180 87 173 87 L141 87 Q134 87 136 80 Z" fill="rgba(255,255,255,0.20)" />
-                <line x1="149" y1="20" x2="165" y2="20" stroke="rgba(255,255,255,0.36)" strokeWidth="1.6" strokeLinecap="round" />
-              </g>
-
-              {/* layered waves */}
-              <path d="M0,72 C40,56 80,88 120,70 C160,52 200,82 240,64 L240,150 L0,150 Z" fill="rgba(255,255,255,0.07)" />
-              <path d="M0,96 C36,80 76,106 116,90 C156,74 196,100 240,86 L240,150 L0,150 Z" fill="rgba(255,255,255,0.13)" />
-              <path d="M0,118 C40,104 80,128 120,112 C160,96 200,122 240,108 L240,150 L0,150 Z" fill="rgba(255,255,255,0.22)" />
-            </svg>
-          </div>
+          <div style={S.sidebarDeco} className="ltSidebarDeco" />
         </aside>
 
         {/* main */}
@@ -4787,7 +4746,7 @@ button { cursor: pointer; }
   /* Nav moves out of the sidebar into the fixed bottom bar on mobile */
   .ltNav { display: none !important; }
   .ltSidebarFoot { display: none !important; }
-  .ltSidebarWave { display: none !important; }
+  .ltSidebarDeco { display: none !important; }
   .ltMain { padding: 14px 14px 76px !important; max-height: none !important; }
   .ltHero { padding: 18px 16px !important; border-radius: 12px !important; }
   .ltH1 { font-size: 20px !important; }
@@ -4866,8 +4825,8 @@ const S = {
   },
   brandName: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, letterSpacing: -0.2, color: "#fff" },
   brandSub: { fontSize: 10.5, color: "#93A6BE", marginTop: 1 },
-  navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#AAB9CC", padding: "9px 10px", borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 2, textAlign: "left" },
-  navBtnActive: { background: "rgba(255,255,255,0.12)", color: "#5FC9E8", fontWeight: 700 },
+  navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#AAB9CC", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
+  navBtnActive: { background: "rgba(255,255,255,0.12)", color: "#5FC9E8", fontWeight: 600 },
   navBtnFeatured: {
     background: "linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.05) 100%)",
     border: "1px solid rgba(255,255,255,0.28)", color: "#fff", fontWeight: 700, fontSize: 13.5,
@@ -4877,6 +4836,11 @@ const S = {
   navBadge: { background: "var(--red)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   navBadgeGreen: { background: "var(--green)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   sidebarFoot: { marginTop: "auto", fontSize: 10.5, color: "#7C8FA6", padding: "10px 6px", lineHeight: 1.5 },
+  sidebarDeco: {
+    marginTop: 14, marginLeft: -12, marginRight: -12, marginBottom: -20,
+    height: 150, backgroundImage: "url('/sidebar-deco.png')", backgroundSize: "cover", backgroundPosition: "bottom center",
+    backgroundRepeat: "no-repeat", borderTop: "1px solid rgba(255,255,255,0.08)", flexShrink: 0,
+  },
   main: { flex: 1, minWidth: 0, padding: "22px 26px", overflowY: "auto", maxHeight: 640 },
 
   hero: { position: "relative", background: "linear-gradient(135deg, var(--teal-dark), var(--teal))", color: "#fff", borderRadius: 14, padding: "26px 26px", overflow: "hidden", marginBottom: 18 },
