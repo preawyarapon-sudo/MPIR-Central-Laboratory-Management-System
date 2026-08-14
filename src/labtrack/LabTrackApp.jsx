@@ -842,7 +842,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
               ? bookingsNavBadgeCount
               : 0;
             return (
-              <button key={n.key} onClick={() => setTab(n.key)} className="ltBottomNavBtn" style={{ color: active ? "var(--teal-dark)" : "var(--muted)" }}>
+              <button key={n.key} onClick={() => n.external ? window.open(n.external, "_blank", "noopener,noreferrer") : setTab(n.key)} className="ltBottomNavBtn" style={{ color: active ? "var(--teal-dark)" : "var(--muted)" }}>
                 <span style={{ position: "relative" }}>
                   <Icon size={19} strokeWidth={active ? 2.4 : 2} />
                   {count > 0 && <span className="ltBottomNavBadge">{count}</span>}
