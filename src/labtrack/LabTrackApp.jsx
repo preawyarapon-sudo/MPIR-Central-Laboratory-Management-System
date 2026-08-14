@@ -121,9 +121,102 @@ function AnalysisTrackView({ jobs }) {
 
   const stats = job ? computeAnalysisJobStats(job) : null;
 
+  // Lab-wide overview shown at the top of this page — aggregate counts and
+  // percentages only, computed fresh from `jobs` every render. Deliberately
+  // never surfaces a job number, sample code, or any other per-job detail
+  // here — that's what the search box below is for, and only once someone
+  // proves it's their own job by typing its exact number. This keeps the
+  // "home" overview genuinely safe to show to every restricted account
+  // without one customer being able to see another's job info.
+  const overview = useMemo(() => {
+    let waiting = 0, running = 0, complete = 0;
+    for (const j of jobs) {
+      const st = computeAnalysisJobStats(j).status;
+      if (st === ANALYSIS_STATUS.WAIT) waiting++;
+      else if (st === ANALYSIS_STATUS.RUN) running++;
+      else complete++;
+    }
+    return { total: jobs.length, waiting, running, complete };
+  }, [jobs]);
+  const buckets = useMemo(() => analysisJobBuckets(jobs), [jobs]);
+  const topParams = useMemo(() => {
+    const tally = {};
+    for (const j of jobs) {
+      for (const p of (j.parameters || [])) {
+        if (!p.name) continue;
+        tally[p.name] = (tally[p.name] || 0) + 1;
+      }
+    }
+    return Object.entries(tally).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [jobs]);
+  const maxParamCount = topParams.length ? topParams[0][1] : 1;
+
   return (
     <div>
-      <TabHeader title="ติดตามงานวิเคราะห์" sub="กรอกเลขทะเบียน/รหัสงานที่ได้รับจากห้องปฏิบัติการ เพื่อดูความคืบหน้า" />
+      <TabHeader title="ติดตามงานวิเคราะห์" sub="ภาพรวมงานวิเคราะห์ของห้องปฏิบัติการ และค้นหาความคืบหน้างานของคุณ" />
+
+      {jobs.length > 0 && (
+        <>
+          <div style={S.statGrid}>
+            <div style={S.statCard}>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>งานทั้งหมด</div>
+              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{overview.total}</div>
+            </div>
+            <div style={S.statCard}>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>กำลังวิเคราะห์</div>
+              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--amber)" }}>{overview.running}</div>
+            </div>
+            <div style={S.statCard}>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>เสร็จสิ้นแล้ว</div>
+              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--green)" }}>{overview.complete}</div>
+            </div>
+            <div style={S.statCard}>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>ใกล้ครบกำหนด</div>
+              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--amber)" }}>{buckets.warn}</div>
+            </div>
+            <div style={S.statCard}>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>ล่าช้า</div>
+              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--red)" }}>{buckets.late}</div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px,1fr) minmax(260px,1.3fr)", gap: 14, marginBottom: 24 }} className="ltAnalysisOverviewGrid">
+            <div style={S.panel}>
+              <div style={S.panelTitle}>สถานะงานโดยรวม</div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>สัดส่วนงานทั้งหมดในระบบตามสถานะ</div>
+              <DonutChart
+                segs={[
+                  { value: overview.waiting, color: "var(--muted)", label: "รอดำเนินการ" },
+                  { value: overview.running, color: "var(--amber)", label: "กำลังวิเคราะห์" },
+                  { value: overview.complete, color: "var(--green)", label: "เสร็จสิ้น" },
+                ]}
+                centerLabel="ทั้งหมด"
+              />
+            </div>
+            <div style={S.panel}>
+              <div style={S.panelTitle}>พารามิเตอร์ที่มีงานมากที่สุด</div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, marginBottom: 12 }}>นับรวมทุกงานในระบบ ไม่ระบุเลขทะเบียนรายตัว</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {topParams.length === 0 && <div style={{ fontSize: 12, color: "var(--muted)" }}>ยังไม่มีข้อมูล</div>}
+                {topParams.map(([name, count]) => (
+                  <div key={name}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
+                      <span>{name}</span>
+                      <span style={{ fontFamily: "var(--font-mono)", color: "var(--muted)" }}>{count}</span>
+                    </div>
+                    <div style={{ height: 8, borderRadius: 4, background: "#EEF2F6", overflow: "hidden" }}>
+                      <div style={{ width: `${Math.round((count / maxParamCount) * 100)}%`, height: "100%", background: "var(--teal)" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...S.panelTitle, marginBottom: 10 }}>ค้นหางานของคุณ</div>
+        </>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginBottom: 20, maxWidth: 480 }}>
         <input
           style={S.input}
@@ -4751,6 +4844,7 @@ button { cursor: pointer; }
   .ltHero { padding: 18px 16px !important; border-radius: 12px !important; }
   .ltH1 { font-size: 20px !important; }
   .ltFormGrid { grid-template-columns: 1fr !important; }
+  .ltAnalysisOverviewGrid { grid-template-columns: 1fr !important; }
 
   /* Chemicals / Consumables tables: collapse into stacked cards.
      Cells flow inline (wrapping) instead of one row per cell, so short
