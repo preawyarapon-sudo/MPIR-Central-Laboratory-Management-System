@@ -4552,12 +4552,14 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
 
   const liveBookings = useMemo(() => bookings.filter(b => b.status === "approved"), [bookings]);
 
-  function isMine(b) {
-    return (b.requestedByUsername || b.requestedBy) === currentUsername;
-  }
+  // Always show who booked/used the equipment — including to booking-only
+  // accounts — so anyone running into a scheduling conflict can follow up
+  // directly with whoever had it before them, instead of just knowing a
+  // slot was "busy". (This calendar is shared internal staff coordination,
+  // not an external-facing view, so this is different from the stricter
+  // per-customer privacy rules used in the analysis tracking page.)
   function eventLabel(b) {
-    if (!restrictToBooking || isMine(b)) return b.requestedBy || "-";
-    return b.type === "checkout" ? "มีผู้ใช้งาน" : "มีผู้จองไว้";
+    return b.requestedBy || "-";
   }
 
   const year = cursor.getFullYear();
