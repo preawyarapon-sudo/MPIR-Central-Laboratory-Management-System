@@ -1957,7 +1957,13 @@ function Dashboard({ jobs, onOpen }) {
   const dueSoonCount = jobs.filter((j) => deadlineInfo(j).level === "warn").length;
   const lateCount = jobs.filter((j) => deadlineInfo(j).level === "late").length;
 
-  const monthlySummary = useMemo(() => monthlyJobSummary(jobs, 6), [jobs]);
+  const monthOptions = [
+    { value: 3, label: "3 เดือนล่าสุด" },
+    { value: 6, label: "6 เดือนล่าสุด" },
+    { value: 12, label: "12 เดือนล่าสุด" },
+  ];
+  const [monthRange, setMonthRange] = useState(6);
+  const monthlySummary = useMemo(() => monthlyJobSummary(jobs, monthRange), [jobs, monthRange]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1970,12 +1976,27 @@ function Dashboard({ jobs, onOpen }) {
       </div>
 
       <Panel style={{ padding: "22px 22px 28px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <BarChart3 size={17} color={C.text} />
-          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>สรุปรายเดือน</div>
-        </div>
-        <div style={{ fontSize: 12.5, color: C.textFaint, marginBottom: 6 }}>
-          จำนวนงานเข้าใหม่ เทียบกับงานที่เสร็จตรงเวลาและล่าช้า ในแต่ละเดือน
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 4 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <BarChart3 size={17} color={C.text} />
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>สรุปรายเดือน</div>
+            </div>
+            <div style={{ fontSize: 12.5, color: C.textFaint, marginTop: 6 }}>
+              จำนวนงานเข้าใหม่ เทียบกับงานที่เสร็จตรงเวลาและล่าช้า ในแต่ละเดือน
+            </div>
+          </div>
+          <select
+            value={monthRange}
+            onChange={(e) => setMonthRange(Number(e.target.value))}
+            style={{
+              fontSize: 12.5, fontWeight: 600, color: C.text, background: C.panel2,
+              border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 10px",
+              fontFamily: "inherit", cursor: "pointer",
+            }}
+          >
+            {monthOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
         </div>
         <MonthlySummaryChart months={monthlySummary} />
       </Panel>
@@ -1987,33 +2008,57 @@ function Dashboard({ jobs, onOpen }) {
 // jobs created that month, jobs completed on time, jobs completed late.
 // The bar/label rows sit in a horizontally-scrollable strip with a set
 // minimum width, so on a narrow phone screen the chart scrolls instead of
-// silently overflowing off the edge of the card.
+// silently overflowing off the edge of the card. A faint horizontal grid
+// (with axis tick values) sits behind the bars so it's easy to read
+// approximate values at a glance, not just from the value labels.
 function MonthlySummaryChart({ months }) {
   const maxVal = Math.max(1, ...months.flatMap((m) => [m.newCount, m.onTime, m.late]));
   const chartH = 240;
   const minGroupWidth = 78;
+  const gridLineCount = 4;
+  const niceMax = (() => {
+    // Round the top gridline up to a "nice" number (nearest 5/10/50/100…)
+    // so the axis labels read cleanly instead of an arbitrary max value.
+    const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(maxVal, 1))));
+    const step = magnitude / 2 || 1;
+    return Math.ceil(maxVal / step) * step;
+  })();
+  const gridLines = Array.from({ length: gridLineCount + 1 }, (_, i) => Math.round((niceMax / gridLineCount) * i));
+
   return (
     <div>
-      <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "14px 0 26px" }}>
+      <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "14px 0 20px" }}>
         <ChartLegendDot color={C.cyan} label="เข้าใหม่" />
         <ChartLegendDot color={C.green} label="เสร็จตรงเวลา" />
         <ChartLegendDot color={C.red} label="ล่าช้า" />
       </div>
       <div className="chartScrollWrap" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, borderBottom: `2px solid ${C.border}`, padding: "0 4px" }}>
-            {months.map((m) => (
-              <div key={m.key} className="chartBarGroup" style={{ flex: 1, minWidth: minGroupWidth - 6, display: "flex", justifyContent: "center", gap: 7 }}>
-                <ChartBar value={m.newCount} max={maxVal} color={C.cyan} chartH={chartH} />
-                <ChartBar value={m.onTime} max={maxVal} color={C.green} chartH={chartH} />
-                <ChartBar value={m.late} max={maxVal} color={C.red} chartH={chartH} />
-              </div>
+        <div style={{ display: "flex", minWidth: months.length * minGroupWidth + 40 }}>
+          <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: chartH, paddingRight: 10, flexShrink: 0 }}>
+            {gridLines.slice().reverse().map((v) => (
+              <div key={v} style={{ fontSize: 10.5, color: C.textFaint, fontFamily: "monospace", lineHeight: 1, transform: "translateY(-5px)" }}>{v}</div>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 6, padding: "0 4px", marginTop: 12 }}>
-            {months.map((m) => (
-              <div key={m.key} className="chartBarGroup" style={{ flex: 1, minWidth: minGroupWidth - 6, textAlign: "center", fontSize: 13, color: C.textMuted, fontWeight: 600 }}>{m.label}</div>
-            ))}
+          <div style={{ flex: 1, position: "relative" }}>
+            <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+              {gridLines.map((v) => (
+                <div key={v} style={{ borderTop: `1px dashed ${C.borderSoft}`, width: "100%" }} />
+              ))}
+            </div>
+            <div style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 6, height: chartH, borderBottom: `2px solid ${C.border}`, padding: "0 4px" }}>
+              {months.map((m) => (
+                <div key={m.key} className="chartBarGroup" style={{ flex: 1, minWidth: minGroupWidth - 6, display: "flex", justifyContent: "center", gap: 7 }}>
+                  <ChartBar value={m.newCount} max={niceMax} color={C.cyan} chartH={chartH} />
+                  <ChartBar value={m.onTime} max={niceMax} color={C.green} chartH={chartH} />
+                  <ChartBar value={m.late} max={niceMax} color={C.red} chartH={chartH} />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 6, padding: "0 4px", marginTop: 12 }}>
+              {months.map((m) => (
+                <div key={m.key} className="chartBarGroup" style={{ flex: 1, minWidth: minGroupWidth - 6, textAlign: "center", fontSize: 13, color: C.textMuted, fontWeight: 600 }}>{m.label}</div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -2420,26 +2465,29 @@ export default function App({ restrictToCustomer = false } = {}) {
   const openJob = (jobNo) => { setSelected(jobNo); setTab("jobs"); };
   const selectedJob = jobs.find((j) => j.jobNo === selected);
 
-  const tabBtn = (key, label, Icon) => (
-    <button
-      key={key}
-      onClick={() => { setTab(key); setSelected(null); }}
-      className="topTabBtn"
-      style={{
-        display: "flex", alignItems: "center", gap: 7,
-        background: tab === key ? C.panel2 : "transparent",
-        border: "none", borderBottom: tab === key ? `2px solid ${C.cyan}` : "2px solid transparent",
-        color: tab === key ? C.text : C.textMuted,
-        padding: "10px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-        whiteSpace: "nowrap", flexShrink: 0,
-      }}
-    >
-      <Icon size={15} /> {label}
-    </button>
-  );
+  const sideNavBtn = (key, label, Icon) => {
+    const active = tab === key;
+    return (
+      <button
+        key={key}
+        onClick={() => { setTab(key); setSelected(null); }}
+        className="sideNavBtn"
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 9, textAlign: "left",
+          background: active ? `linear-gradient(135deg, ${C.cyan} 0%, #0A4F9B 100%)` : "transparent",
+          border: "none", borderRadius: 8,
+          color: active ? "#fff" : C.textMuted,
+          padding: "9px 10px", fontSize: 13, fontWeight: active ? 600 : 500, cursor: "pointer", fontFamily: "inherit",
+          marginBottom: 2, boxShadow: active ? "0 2px 6px rgba(10,79,155,0.28)" : "none",
+        }}
+      >
+        <Icon size={16} /> {label}
+      </button>
+    );
+  };
 
   // Mobile-only bottom navigation bar (app-style icon-over-label tabs),
-  // shown instead of the top tab row below the 640px breakpoint.
+  // shown instead of the sidebar below the 640px breakpoint.
   const bottomNavBtn = (key, label, Icon) => {
     const active = tab === key;
     return (
@@ -2464,7 +2512,6 @@ export default function App({ restrictToCustomer = false } = {}) {
       <style>{`
         @media (max-width: 640px) {
           .latApp { border-radius: 0 !important; }
-          .latHeroBanner { height: 72px !important; }
           .grid3col { grid-template-columns: 1fr !important; }
 
           .latHeader { padding: 12px 14px !important; }
@@ -2484,8 +2531,8 @@ export default function App({ restrictToCustomer = false } = {}) {
           .chartBar { width: 22px !important; }
           .chartBarGroup { min-width: 58px !important; gap: 4px !important; }
 
-          /* App-style bottom navigation replaces the top tab row on mobile */
-          .topTabRow { display: none !important; }
+          /* App-style bottom navigation replaces the sidebar on mobile */
+          .latSidebar { display: none !important; }
           .bottomNavBar {
             display: flex !important;
             position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
@@ -2584,93 +2631,111 @@ export default function App({ restrictToCustomer = false } = {}) {
           .rqTone { grid-area: tone !important; }
         }
       `}</style>
-      <div
-        style={{
-          width: "100%", height: 130, backgroundImage: "url('/mpir-hero-bg.png')",
-          backgroundSize: "cover", backgroundPosition: "top center", backgroundRepeat: "no-repeat",
-          borderBottom: `1px solid ${C.borderSoft}`,
-        }}
-        className="latHeroBanner"
-      />
-      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }} className="latHeader">
-        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-          <div style={{ width: 30, height: 30, borderRadius: 6, background: C.cyanDim, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <FlaskConical size={17} color={C.cyan} />
-          </div>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>Lab Analysis Tracker</div>
-            <div style={{ fontSize: 11, color: C.textFaint }} className="latHeaderSub">
-              {restrictToCustomer ? "ตรวจสอบสถานะงานวิเคราะห์ของท่าน" : "ระบบติดตามความคืบหน้างานวิเคราะห์ · แชร์ร่วมกันทั้งทีม"}
+      <div style={{ display: "flex" }} className="latShell">
+        {!restrictToCustomer && (
+          <aside style={{ width: 196, background: "#fff", borderRight: `1px solid ${C.borderSoft}`, padding: "18px 10px", display: "flex", flexDirection: "column", flexShrink: 0 }} className="latSidebar">
+            <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "2px 6px 14px", borderBottom: `1px solid ${C.borderSoft}`, marginBottom: 10 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: `linear-gradient(135deg, ${C.cyan} 0%, #0A4F9B 100%)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 2px 6px rgba(10,79,155,0.28)" }}>
+                <FlaskConical size={19} color="#fff" />
+              </div>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>Lab Analysis Tracker</div>
+                <div style={{ fontSize: 10, color: C.textFaint, marginTop: 1 }}>MPIR Central Lab</div>
+              </div>
+            </div>
+            <nav style={{ display: "flex", flexDirection: "column" }}>
+              {sideNavBtn("dashboard", "Dashboard", LayoutGrid)}
+              {sideNavBtn("jobs", "Jobs", ListChecks)}
+              {sideNavBtn("analysts", "Analysts", Users)}
+              {sideNavBtn("parameters", "Parameters", Layers)}
+            </nav>
+          </aside>
+        )}
+
+        <div style={{ flex: 1, minWidth: 0 }} className="latMainCol">
+          <div
+            style={{
+              padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}`, position: "relative", overflow: "hidden",
+              backgroundImage: `linear-gradient(90deg, rgba(255,255,255,0.94) 35%, rgba(255,255,255,0.72) 100%), url('/mpir-hero-bg.png')`,
+              backgroundSize: "cover", backgroundPosition: "center",
+            }}
+            className="latHeader"
+          >
+            <div style={{ position: "relative", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                {restrictToCustomer && (
+                  <div style={{ width: 30, height: 30, borderRadius: 6, background: C.cyanDim, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <FlaskConical size={17} color={C.cyan} />
+                  </div>
+                )}
+                <div>
+                  {restrictToCustomer && <div style={{ fontSize: 15, fontWeight: 700 }}>Lab Analysis Tracker</div>}
+                  <div style={{ fontSize: 11, color: C.textFaint }} className="latHeaderSub">
+                    {restrictToCustomer ? "ตรวจสอบสถานะงานวิเคราะห์ของท่าน" : "ระบบติดตามความคืบหน้างานวิเคราะห์ · แชร์ร่วมกันทั้งทีม"}
+                  </div>
+                </div>
+              </div>
+              {!restrictToCustomer && (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Btn small onClick={refresh}><RefreshCw size={13} /> รีเฟรช</Btn>
+                  <Btn kind="primary" small onClick={() => { setShowForm(true); setTab("jobs"); setSelected(null); }}><Plus size={13} /> สร้างรหัสงาน</Btn>
+                </div>
+              )}
             </div>
           </div>
-        </div>
-        {!restrictToCustomer && (
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn small onClick={refresh}><RefreshCw size={13} /> รีเฟรช</Btn>
-            <Btn kind="primary" small onClick={() => { setShowForm(true); setTab("jobs"); setSelected(null); }}><Plus size={13} /> สร้างรหัสงาน</Btn>
-          </div>
-        )}
-      </div>
 
-      {!restrictToCustomer && (
-        <div style={{ display: "flex", borderBottom: `1px solid ${C.borderSoft}`, padding: "0 12px", overflowX: "auto", WebkitOverflowScrolling: "touch" }} className="topTabRow">
-          {tabBtn("dashboard", "Dashboard", LayoutGrid)}
-          {tabBtn("jobs", "Jobs", ListChecks)}
-          {tabBtn("analysts", "Analysts", Users)}
-          {tabBtn("parameters", "Parameters", Layers)}
-        </div>
-      )}
-
-      <div style={{ padding: 20 }} className="mainContentArea">
-        {error && (
-          <div style={{ marginBottom: 14, padding: "8px 12px", background: C.redDim, border: `1px solid ${C.red}`, borderRadius: 6, color: "#7A2D22", fontSize: 12, display: "flex", alignItems: "center", gap: 8 }}>
-            <AlertCircle size={14} /> {error}
-          </div>
-        )}
-        {loading ? (
-          <div style={{ padding: 40, textAlign: "center", color: C.textFaint }}>กำลังโหลดข้อมูล...</div>
-        ) : restrictToCustomer ? (
-          <CustomerTrackView jobs={jobs} />
-        ) : (
-          <>
-            {tab === "dashboard" && <Dashboard jobs={jobs} onOpen={openJob} />}
-            {tab === "jobs" && (
+          <div style={{ padding: 20 }} className="mainContentArea">
+            {error && (
+              <div style={{ marginBottom: 14, padding: "8px 12px", background: C.redDim, border: `1px solid ${C.red}`, borderRadius: 6, color: "#7A2D22", fontSize: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                <AlertCircle size={14} /> {error}
+              </div>
+            )}
+            {loading ? (
+              <div style={{ padding: 40, textAlign: "center", color: C.textFaint }}>กำลังโหลดข้อมูล...</div>
+            ) : restrictToCustomer ? (
+              <CustomerTrackView jobs={jobs} />
+            ) : (
               <>
-                {showForm && (
-                  <NewJobForm
-                    onCancel={() => setShowForm(false)}
-                    onCreate={handleCreate}
-                    suggestedNo={genJobNo(jobs)}
-                    suggestedRegStart={suggestedRegStart}
-                    knownAnalysts={knownAnalysts}
-                    knownParams={knownParams}
-                    knownSamples={knownSamples}
-                    existingJobNos={jobs.map((j) => j.jobNo)}
-                    lastAnalystByParam={lastAnalystByParam}
-                  />
+                {tab === "dashboard" && <Dashboard jobs={jobs} onOpen={openJob} />}
+                {tab === "jobs" && (
+                  <>
+                    {showForm && (
+                      <NewJobForm
+                        onCancel={() => setShowForm(false)}
+                        onCreate={handleCreate}
+                        suggestedNo={genJobNo(jobs)}
+                        suggestedRegStart={suggestedRegStart}
+                        knownAnalysts={knownAnalysts}
+                        knownParams={knownParams}
+                        knownSamples={knownSamples}
+                        existingJobNos={jobs.map((j) => j.jobNo)}
+                        lastAnalystByParam={lastAnalystByParam}
+                      />
+                    )}
+                    {editingJob && (
+                      <NewJobForm
+                        editingJob={editingJob}
+                        onCancel={() => setEditingJob(null)}
+                        onSaveEdit={handleSaveEdit}
+                        knownAnalysts={knownAnalysts}
+                        knownParams={knownParams}
+                        knownSamples={knownSamples}
+                        lastAnalystByParam={lastAnalystByParam}
+                      />
+                    )}
+                    {selectedJob && !editingJob ? (
+                      <JobDetail job={selectedJob} onBack={() => setSelected(null)} onUpdateParam={handleUpdateParam} onDeleteJob={handleDeleteJob} onEditJob={setEditingJob} onFlagRepair={handleFlagRepair} onResolveRepair={handleResolveRepair} />
+                    ) : (
+                      !editingJob && <JobsList jobs={jobs} onOpen={openJob} />
+                    )}
+                  </>
                 )}
-                {editingJob && (
-                  <NewJobForm
-                    editingJob={editingJob}
-                    onCancel={() => setEditingJob(null)}
-                    onSaveEdit={handleSaveEdit}
-                    knownAnalysts={knownAnalysts}
-                    knownParams={knownParams}
-                    knownSamples={knownSamples}
-                    lastAnalystByParam={lastAnalystByParam}
-                  />
-                )}
-                {selectedJob && !editingJob ? (
-                  <JobDetail job={selectedJob} onBack={() => setSelected(null)} onUpdateParam={handleUpdateParam} onDeleteJob={handleDeleteJob} onEditJob={setEditingJob} onFlagRepair={handleFlagRepair} onResolveRepair={handleResolveRepair} />
-                ) : (
-                  !editingJob && <JobsList jobs={jobs} onOpen={openJob} />
-                )}
+                {tab === "analysts" && <AnalystsTable jobs={jobs} onOpenJob={openJob} onBulkUpdate={handleBulkUpdateParams} />}
+                {tab === "parameters" && <ParametersTable jobs={jobs} onOpenJob={openJob} />}
               </>
             )}
-            {tab === "analysts" && <AnalystsTable jobs={jobs} onOpenJob={openJob} onBulkUpdate={handleBulkUpdateParams} />}
-            {tab === "parameters" && <ParametersTable jobs={jobs} onOpenJob={openJob} />}
-          </>
-        )}
+          </div>
+        </div>
       </div>
 
       <div className="bottomNavBar" style={{ display: "none" }}>
