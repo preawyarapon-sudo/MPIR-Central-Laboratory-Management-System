@@ -564,7 +564,30 @@ const RESTRICTED_NAV = [
 ];
 
 export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
-  const [tab, setTab] = useState(restrictToBooking ? "bookings" : "dashboard");
+  // Which tab loads first, and stays after a refresh:
+  // - Default (no ?tab= yet): restricted accounts land on "ติดตามงานวิเคราะห์"
+  //   (now the featured/first item), everyone else on the dashboard.
+  // - If the URL already has a valid ?tab=, that wins instead — this is what
+  //   makes reloading the page (or sharing a link to a specific page) land
+  //   back on the same tab instead of always bouncing to the default.
+  const defaultTab = restrictToBooking ? "analysisTracking" : "dashboard";
+  const allowedTabKeys = (restrictToBooking ? RESTRICTED_NAV : NAV).map(n => n.key);
+  const [tab, setTabState] = useState(() => {
+    if (typeof window === "undefined") return defaultTab;
+    const fromUrl = new URLSearchParams(window.location.search).get("tab");
+    return fromUrl && allowedTabKeys.includes(fromUrl) ? fromUrl : defaultTab;
+  });
+  // Wraps the raw state setter so every tab change also updates the URL
+  // (via replaceState — doesn't add browser-history entries or reload the
+  // page), keeping `tab` and the address bar in sync at all times.
+  function setTab(key) {
+    setTabState(key);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", key);
+      window.history.replaceState(null, "", url);
+    }
+  }
   const [loading, setLoading] = useState(true);
   const [equipment, setEquipment] = useState([]);
   const [activities, setActivities] = useState([]);
