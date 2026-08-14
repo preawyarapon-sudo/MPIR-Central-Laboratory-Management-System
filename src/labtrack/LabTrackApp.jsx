@@ -144,7 +144,12 @@ function AnalysisTrackView({ jobs }) {
     for (const j of jobs) {
       for (const p of (j.parameters || [])) {
         if (!p.name) continue;
-        tally[p.name] = (tally[p.name] || 0) + 1;
+        // ICP-OES gets run across a few sub-channels (ICP-A / ICP-B / ICP-P
+        // etc.) that show up as separately-named parameters — group them
+        // back into one "ICP-OES" bucket here so this chart reflects its
+        // real combined workload instead of splitting it three ways.
+        const key = /ICP-?A|ICP-?B|ICP-?P/i.test(p.name) ? "ICP-OES" : p.name;
+        tally[key] = (tally[key] || 0) + 1;
       }
     }
     return Object.entries(tally).sort((a, b) => b[1] - a[1]).slice(0, 5);
