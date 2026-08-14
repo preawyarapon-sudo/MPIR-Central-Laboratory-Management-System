@@ -102,6 +102,13 @@ function analysisParamQueuePosition(jobs, paramName, targetJobNo) {
   return { position: idx === -1 ? null : idx + 1, total: waiting.length };
 }
 const ANALYSIS_STATUS_LABEL = { Waiting: "รอดำเนินการ", Running: "กำลังวิเคราะห์", Complete: "เสร็จสิ้น" };
+// Prefix pre-filled into the job-tracking search box so people only need to
+// type the digits after it — kept in sync with the same constant in
+// AnalysisApp.jsx. Update this once a year when the numbering rolls over
+// (e.g. "RD26-" -> "RD27-"); it's still a normal, fully-editable text
+// input, so it can be cleared/changed if a job number uses a different
+// prefix.
+const DEFAULT_JOB_PREFIX = "RD26-";
 const ANALYSIS_STATUS_TAG_COLOR = { Waiting: "var(--muted)", Running: "var(--amber)", Complete: "var(--green)" };
 
 // Customer-facing, read-only tracking page for restricted (booking-only)
@@ -110,7 +117,7 @@ const ANALYSIS_STATUS_TAG_COLOR = { Waiting: "var(--muted)", Running: "var(--amb
 // so there's no browsable list of every job here, and "queue position" is
 // always a count, never another job's number.
 function AnalysisTrackView({ jobs }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(DEFAULT_JOB_PREFIX);
   const [searched, setSearched] = useState(false);
 
   const job = useMemo(() => {
@@ -228,7 +235,7 @@ function AnalysisTrackView({ jobs }) {
           value={query}
           onChange={(e) => { setQuery(e.target.value); setSearched(false); }}
           onKeyDown={(e) => { if (e.key === "Enter") setSearched(true); }}
-          placeholder="เช่น ICP24-05171"
+          placeholder={`เช่น ${DEFAULT_JOB_PREFIX}05171`}
         />
         <button style={S.primaryBtn} onClick={() => setSearched(true)}><Search size={14} /> ค้นหา</button>
       </div>
