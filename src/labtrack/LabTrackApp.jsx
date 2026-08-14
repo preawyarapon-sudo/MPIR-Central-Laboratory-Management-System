@@ -4741,7 +4741,7 @@ button { cursor: pointer; }
     width: 100% !important;
     padding: 10px 12px !important;
     border-right: none !important;
-    border-bottom: 1px solid rgba(255,255,255,0.12) !important;
+    border-bottom: 1px solid var(--line) !important;
   }
   /* Nav moves out of the sidebar into the fixed bottom bar on mobile */
   .ltNav { display: none !important; }
@@ -4813,33 +4813,33 @@ const S = {
   app: { fontFamily: "var(--font-body)", background: "var(--paper)", color: "var(--ink)", minHeight: 500, borderRadius: 12, overflow: "hidden", border: "1px solid var(--line)" },
   shell: { display: "flex", minHeight: 500 },
   sidebar: {
-    width: 216, background: "linear-gradient(180deg, var(--sidebar-grad-start) 0%, var(--sidebar-grad-end) 100%)",
-    color: "#fff", padding: "20px 12px", display: "flex", flexDirection: "column",
-    borderRight: "1px solid rgba(255,255,255,0.08)", boxShadow: "2px 0 10px rgba(6,14,28,0.15)",
+    width: 216, background: "#FFFFFF",
+    color: "var(--ink)", padding: "20px 12px", display: "flex", flexDirection: "column",
+    borderRight: "1px solid var(--line)", boxShadow: "2px 0 8px rgba(16,27,45,0.04)",
   },
-  brand: { display: "flex", alignItems: "center", gap: 10, padding: "2px 4px 14px", borderBottom: "1px solid rgba(255,255,255,0.12)", marginBottom: 10 },
+  brand: { display: "flex", alignItems: "center", gap: 10, padding: "2px 4px 14px", borderBottom: "1px solid var(--line)", marginBottom: 10 },
   brandMark: {
     width: 46, height: 46, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-    background: "linear-gradient(135deg, rgba(255,255,255,0.24) 0%, rgba(255,255,255,0.06) 100%)",
-    border: "1px solid rgba(255,255,255,0.22)",
+    background: "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)",
+    boxShadow: "0 2px 6px rgba(11,79,108,0.28)",
   },
-  brandName: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, letterSpacing: -0.2, color: "#fff" },
-  brandSub: { fontSize: 10.5, color: "#93A6BE", marginTop: 1 },
-  navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#AAB9CC", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
-  navBtnActive: { background: "rgba(255,255,255,0.12)", color: "#5FC9E8", fontWeight: 600 },
+  brandName: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, letterSpacing: -0.2, color: "var(--ink)" },
+  brandSub: { fontSize: 10.5, color: "var(--muted)", marginTop: 1 },
+  navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#4B5C72", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
+  navBtnActive: { background: "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)", color: "#fff", fontWeight: 600, boxShadow: "0 2px 6px rgba(11,79,108,0.25)" },
   navBtnFeatured: {
-    background: "linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.05) 100%)",
-    border: "1px solid rgba(255,255,255,0.28)", color: "#fff", fontWeight: 700, fontSize: 13.5,
-    padding: "11px 10px", marginBottom: 10, boxShadow: "0 2px 8px rgba(6,14,28,0.18)",
+    background: "linear-gradient(135deg, #EAF4FC 0%, #F3F9FD 100%)",
+    border: "1px solid #CFE6F5", color: "var(--teal-dark)", fontWeight: 700, fontSize: 13.5,
+    padding: "11px 10px", marginBottom: 10,
   },
-  navBtnFeaturedActive: { background: "linear-gradient(135deg, #ffffff 0%, #EAF4FC 100%)", color: "var(--teal-dark)", border: "1px solid rgba(255,255,255,0.5)" },
+  navBtnFeaturedActive: { background: "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)", color: "#fff", border: "1px solid transparent", boxShadow: "0 2px 6px rgba(11,79,108,0.28)" },
   navBadge: { background: "var(--red)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
   navBadgeGreen: { background: "var(--green)", color: "#fff", fontSize: 10.5, fontWeight: 600, borderRadius: 20, padding: "1px 6px", fontFamily: "var(--font-mono)" },
-  sidebarFoot: { marginTop: "auto", fontSize: 10.5, color: "#7C8FA6", padding: "10px 6px", lineHeight: 1.5 },
+  sidebarFoot: { marginTop: "auto", fontSize: 10.5, color: "var(--muted)", padding: "10px 6px", lineHeight: 1.5 },
   sidebarDeco: {
     marginTop: 14, marginLeft: -12, marginRight: -12, marginBottom: -20,
-    height: 150, backgroundImage: "url('/sidebar-deco.png')", backgroundSize: "cover", backgroundPosition: "bottom center",
-    backgroundRepeat: "no-repeat", borderTop: "1px solid rgba(255,255,255,0.08)", flexShrink: 0,
+    height: 240, backgroundImage: "url('/sidebar-deco.png')", backgroundSize: "cover", backgroundPosition: "bottom center",
+    backgroundRepeat: "no-repeat", flexShrink: 0,
   },
   main: { flex: 1, minWidth: 0, padding: "22px 26px", overflowY: "auto", maxHeight: 640 },
 
