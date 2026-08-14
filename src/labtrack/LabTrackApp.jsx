@@ -74,6 +74,16 @@ function analysisJobBuckets(jobs) {
   }
   return { late, warn, todo };
 }
+// Per-job deadline status — mirrors the analysis tracker's own deadlineInfo,
+// used to show a single job's own "ปกติ / ใกล้ครบกำหนด / ล่าช้า" state (and
+// how many days it's been since it was received) on the tracking page.
+function analysisJobDeadlineInfo(job) {
+  const days = job.createdAt ? Math.floor((Date.now() - job.createdAt) / 86400000) : 0;
+  if (analysisJobOverallStatus(job) === ANALYSIS_STATUS.DONE) return { level: "done", days };
+  if (days >= ANALYSIS_LATE_DAYS) return { level: "late", days };
+  if (days >= ANALYSIS_WARN_DAYS) return { level: "warn", days };
+  return { level: "ok", days };
+}
 // Per-job progress — mirrors the analysis tracker's own computeJobStats, so
 // the % shown here always agrees with what that app itself would show.
 function computeAnalysisJobStats(job) {
@@ -110,6 +120,8 @@ const ANALYSIS_STATUS_LABEL = { Waiting: "รอดำเนินการ", Ru
 // prefix.
 const DEFAULT_JOB_PREFIX = "RD26-";
 const ANALYSIS_STATUS_TAG_COLOR = { Waiting: "var(--muted)", Running: "var(--amber)", Complete: "var(--green)" };
+const ANALYSIS_DEADLINE_LABEL = { done: "เสร็จสิ้นแล้ว", late: "ล่าช้า", warn: "ใกล้ครบกำหนด", ok: "งานปกติ" };
+const ANALYSIS_DEADLINE_COLOR = { done: "var(--green)", late: "var(--red)", warn: "var(--amber)", ok: "var(--teal)" };
 
 // Customer-facing, read-only tracking page for restricted (booking-only)
 // accounts — search-first by design, same as the analysis tracker's own
@@ -245,14 +257,24 @@ function AnalysisTrackView({ jobs }) {
 
       {searched && !job && <EmptyState text="ไม่พบข้อมูลรหัสงานนี้ กรุณาตรวจสอบเลขทะเบียนอีกครั้ง" />}
 
-      {job && stats && (
+      {job && stats && (() => {
+        const dl = analysisJobDeadlineInfo(job);
+        return (
         <div style={{ maxWidth: 640 }}>
           <div style={{ ...S.panel, marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
               <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 16, color: "var(--teal)" }}>{job.jobNo}</span>
               <Tag color={ANALYSIS_STATUS_TAG_COLOR[stats.status]}>{ANALYSIS_STATUS_LABEL[stats.status]}</Tag>
             </div>
-            {job.sample && <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>{job.sample}</div>}
+            {job.sample && <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>{job.sample}</div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+              {job.createdAt && (
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>วันที่รับงาน {fmtTimestamp(job.createdAt)}</span>
+              )}
+              <Tag color={ANALYSIS_DEADLINE_COLOR[dl.level]}>
+                {ANALYSIS_DEADLINE_LABEL[dl.level]}{dl.level !== "done" ? ` · รับมาแล้ว ${dl.days} วัน` : ""}
+              </Tag>
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ flex: 1, height: 10, borderRadius: 6, background: "#EEF2F6", border: "1px solid var(--line)", overflow: "hidden" }}>
                 <div style={{ width: `${stats.progress}%`, height: "100%", background: "var(--green)" }} />
@@ -284,7 +306,8 @@ function AnalysisTrackView({ jobs }) {
             })}
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -303,6 +326,13 @@ const fmtDate = (dateStr) => {
   const d = new Date(dateStr + "T00:00:00");
   return d.toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
 };
+// Same as fmtDate but for raw millisecond timestamps (job.createdAt etc.,
+// which come from the analysis tracker's Date.now()-based fields, not the
+// "YYYY-MM-DD" strings LabTrackApp's own records use).
+function fmtTimestamp(ts) {
+  if (!ts) return "-";
+  return new Date(ts).toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
+}
 // Adds N months to a YYYY-MM-DD date string, used to auto-calculate the next
 // calibration/maintenance due date from an equipment's recurrence interval.
 function addMonths(dateStr, months) {
