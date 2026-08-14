@@ -169,27 +169,30 @@ function AnalysisTrackView({ jobs }) {
 
       {jobs.length > 0 && (
         <>
-          <div style={S.statGrid}>
-            <div style={S.statCard}>
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>งานทั้งหมด</div>
-              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{overview.total}</div>
-            </div>
-            <div style={S.statCard}>
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>กำลังวิเคราะห์</div>
-              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--amber)" }}>{overview.running}</div>
-            </div>
-            <div style={S.statCard}>
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>เสร็จสิ้นแล้ว</div>
-              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--green)" }}>{overview.complete}</div>
-            </div>
-            <div style={S.statCard}>
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>ใกล้ครบกำหนด</div>
-              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--amber)" }}>{buckets.warn}</div>
-            </div>
-            <div style={S.statCard}>
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>ล่าช้า</div>
-              <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--red)" }}>{buckets.late}</div>
-            </div>
+          <div style={S.statGrid} className="statGrid">
+            {[
+              { label: "งานทั้งหมด", value: overview.total, icon: ClipboardList, color: "var(--teal)", tint: "#E9F1FB" },
+              { label: "กำลังวิเคราะห์", value: overview.running, icon: FlaskConical, color: "var(--amber)", tint: "#FDF3E3" },
+              { label: "เสร็จสิ้นแล้ว", value: overview.complete, icon: CheckCircle2, color: "var(--green)", tint: "#E7F5EC" },
+              { label: "ใกล้ครบกำหนด", value: buckets.warn, icon: Clock, color: "var(--amber)", tint: "#FDF3E3" },
+              { label: "ล่าช้า", value: buckets.late, icon: AlertTriangle, color: "var(--red)", tint: "#FBEAE8" },
+            ].map((s, i) => {
+              const Icon = s.icon;
+              return (
+                <div key={i} style={S.statCard} className="statCard">
+                  <div className="statIconTile" style={{ width: 38, height: 38, borderRadius: 10, background: s.tint, display: "none", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Icon size={18} color={s.color} />
+                  </div>
+                  <div>
+                    <div style={S.statTop} className="statTop">
+                      <Icon size={16} color="var(--teal)" className="statTopIcon" />
+                      <span style={S.statLabel}>{s.label}</span>
+                    </div>
+                    <div style={{ ...S.statValue, color: s.color }}>{s.value}</div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "minmax(260px,1fr) minmax(260px,1.3fr)", gap: 14, marginBottom: 24 }} className="ltAnalysisOverviewGrid">
@@ -4915,6 +4918,7 @@ button { cursor: pointer; }
 
   /* Colorful icon tiles on the dashboard stat cards, like a native app */
   .statCard { display: flex !important; align-items: center !important; gap: 12px !important; }
+  .statGrid { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
   .statIconTile { display: flex !important; }
   .statTop { gap: 0 !important; }
   .statTopIcon { display: none !important; }
