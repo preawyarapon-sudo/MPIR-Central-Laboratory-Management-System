@@ -3,6 +3,8 @@ import { FlaskConical, Plus, X, RefreshCw, LayoutGrid, ListChecks, Users, Layers
 import { db } from "./firebase";
 import { ref, onValue, set, remove, runTransaction } from "firebase/database";
 
+const ANALYSIS_TAB_KEYS = ["dashboard", "jobs", "analysts", "parameters"];
+
 const C = {
   bg: "#FFFFFF",
   bg2: "#F3F8FD",
@@ -1951,9 +1953,15 @@ function ParametersTable({ jobs, onOpenJob }) {
 
 // ---------- Dashboard ----------
 function Dashboard({ jobs, onOpen }) {
-  const allParams = jobs.flatMap((j) => j.parameters);
-  const running = allParams.filter((p) => p.status === STATUS.RUN).length;
-  const complete = allParams.filter((p) => p.status === STATUS.DONE).length;
+  // All five cards count jobs, not raw parameters — a job only counts as
+  // "เสร็จสิ้นแล้ว" once every one of its parameters is done, and as
+  // "กำลังดำเนินการ" if at least one parameter is running. Counting
+  // parameters directly here used to make "เสร็จสิ้นแล้ว" read higher than
+  // "งานทั้งหมด" itself (each job can have several parameters), which read
+  // as a bug even though the number was technically counting something
+  // real — keeping every card in the same unit avoids that confusion.
+  const running = jobs.filter((j) => computeJobStats(j).status === STATUS.RUN).length;
+  const complete = jobs.filter((j) => computeJobStats(j).status === STATUS.DONE).length;
   const dueSoonCount = jobs.filter((j) => deadlineInfo(j).level === "warn").length;
   const lateCount = jobs.filter((j) => deadlineInfo(j).level === "late").length;
 
@@ -2194,7 +2202,23 @@ function CustomerTrackView({ jobs }) {
 export default function App({ restrictToCustomer = false } = {}) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("dashboard");
+  // Same URL-based tab persistence as LabTrackApp: defaults to "dashboard",
+  // but a valid ?tab= in the address bar wins instead — so reloading the
+  // page (or sharing a link to a specific tab) lands back on the same
+  // page instead of always bouncing to the dashboard.
+  const [tab, setTabState] = useState(() => {
+    if (typeof window === "undefined") return "dashboard";
+    const fromUrl = new URLSearchParams(window.location.search).get("tab");
+    return fromUrl && ANALYSIS_TAB_KEYS.includes(fromUrl) ? fromUrl : "dashboard";
+  });
+  function setTab(key) {
+    setTabState(key);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", key);
+      window.history.replaceState(null, "", url);
+    }
+  }
   const [selected, setSelected] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [editingJob, setEditingJob] = useState(null);
