@@ -580,8 +580,14 @@ const SEED_ITEMS = [
   { id: "i3", code: "", name: "Brix refractometer (มือถือ)", category: "วัดค่า", location: "C2", status: "active", totalQty: 2, notes: "" },
 ];
 
+// External link, not an internal tab: clicking it opens the Central Lab
+// MPIR analysis-request site in a new tab instead of calling setTab, so it
+// never enters allowedTabKeys / the ?tab= URL tracking (see App below).
+const REQUEST_ANALYSIS_LINK = { key: "requestAnalysis", label: "ขอรับบริการวิเคราะห์", icon: ExternalLink, external: "https://centrallab-mpir.mitrphol.com/", featured: true };
+
 const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
+  REQUEST_ANALYSIS_LINK,
   { key: "equipment", label: "เครื่องมือ", icon: Wrench },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
@@ -598,6 +604,7 @@ const NAV = [
 // inside the "จอง/ยืมเครื่องมือ" page itself (see BookingsTab).
 const RESTRICTED_NAV = [
   { key: "analysisTracking", label: "ติดตามงานวิเคราะห์", icon: FlaskConical, featured: true },
+  REQUEST_ANALYSIS_LINK,
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "usageCalendar", label: "ปฏิทินการใช้งาน", icon: CalendarClock },
   { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
@@ -611,7 +618,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   //   makes reloading the page (or sharing a link to a specific page) land
   //   back on the same tab instead of always bouncing to the default.
   const defaultTab = restrictToBooking ? "analysisTracking" : "dashboard";
-  const allowedTabKeys = (restrictToBooking ? RESTRICTED_NAV : NAV).map(n => n.key);
+  const allowedTabKeys = (restrictToBooking ? RESTRICTED_NAV : NAV).filter(n => !n.external).map(n => n.key);
   const [tab, setTabState] = useState(() => {
     if (typeof window === "undefined") return defaultTab;
     const fromUrl = new URLSearchParams(window.location.search).get("tab");
@@ -755,7 +762,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
                 return (
                   <button
                     key={n.key}
-                    onClick={() => setTab(n.key)}
+                    onClick={() => n.external ? window.open(n.external, "_blank", "noopener,noreferrer") : setTab(n.key)}
                     style={{
                       ...S.navBtn,
                       ...(active ? S.navBtnActive : {}),
