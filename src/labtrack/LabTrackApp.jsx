@@ -848,7 +848,7 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
         </div>
       </div>
 
-      <div style={S.statGrid}>
+      <div style={S.statGrid} className="statGrid">
         {stats.map((s, i) => {
           const Icon = s.icon;
           return (
