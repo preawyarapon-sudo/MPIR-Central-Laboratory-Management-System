@@ -325,6 +325,18 @@ function computeJobStats(job) {
   return { total, complete, running, progress, status };
 }
 
+// Best-known completion timestamp for a fully-done job: prefers
+// doneNotifiedAt (set once, right when the job first becomes fully
+// complete — see the App-level effect that claims it), falling back to the
+// latest parameter finishTs for older jobs saved before that flag existed.
+// Returns null for jobs that aren't fully complete yet.
+function jobDoneDate(job) {
+  if (computeJobStats(job).status !== STATUS.DONE) return null;
+  if (job.doneNotifiedAt) return job.doneNotifiedAt;
+  const finishes = job.parameters.map((p) => p.finishTs).filter(Boolean);
+  return finishes.length ? Math.max(...finishes) : null;
+}
+
 // True if a parameter has any unresolved "needs repair" flag (independent
 // of its WAIT/RUN/DONE status — a completed result can still be flagged for
 // re-analysis).
@@ -2014,6 +2026,75 @@ function ExportSheetCard({ icon: Icon, iconBg, title, subtitle, included, onTogg
   );
 }
 
+// Average calendar days between a parameter's startTs and finishTs,
+// grouped by analyst + parameter. Used only by the Reports tab to compare
+// analysts fairly: some parameters are inherently slower than others (an
+// ICP run vs. a quick pH reading), so raw days aren't comparable across
+// parameters — each row is instead classified against the lab-wide average
+// for that specific parameter.
+function computeTurnaroundStats(jobs) {
+  const map = {};
+  for (const job of jobs) {
+    for (const p of job.parameters) {
+      if (p.status !== STATUS.DONE || !p.analyst || !p.name || !p.startTs || !p.finishTs) continue;
+      const days = (p.finishTs - p.startTs) / DAY_MS;
+      if (days < 0) continue;
+      const key = `${p.analyst}|||${p.name}`;
+      if (!map[key]) map[key] = { analyst: p.analyst, param: p.name, days: [] };
+      map[key].days.push(days);
+    }
+  }
+  const rows = Object.values(map).map((g) => ({
+    analyst: g.analyst,
+    param: g.param,
+    count: g.days.length,
+    avgDays: g.days.reduce((a, b) => a + b, 0) / g.days.length,
+    minDays: Math.min(...g.days),
+    maxDays: Math.max(...g.days),
+  }));
+
+  // Lab-wide average per parameter (weighted by sample count), used only
+  // as the fast/normal/late baseline for that parameter.
+  const byParam = {};
+  rows.forEach((r) => { (byParam[r.param] ||= []).push(r); });
+  const paramBaseline = {};
+  Object.entries(byParam).forEach(([param, list]) => {
+    const totalDays = list.reduce((s, r) => s + r.avgDays * r.count, 0);
+    const totalCount = list.reduce((s, r) => s + r.count, 0);
+    paramBaseline[param] = totalCount ? totalDays / totalCount : 0;
+  });
+
+  return rows
+    .map((r) => {
+      const baseline = paramBaseline[r.param] || r.avgDays;
+      const ratio = baseline ? r.avgDays / baseline : 1;
+      const level = ratio <= 0.85 ? "fast" : ratio >= 1.3 ? "slow" : "normal";
+      return { ...r, baseline, level };
+    })
+    .sort((a, b) => a.analyst.localeCompare(b.analyst, "th") || a.param.localeCompare(b.param, "th"));
+}
+function turnaroundLevelLabel(level) {
+  if (level === "fast") return "เร็ว";
+  if (level === "slow") return "ล่าช้า";
+  return "ปกติ";
+}
+function TurnaroundBadge({ level }) {
+  if (level === "fast") return <Badge color={C.green} bg={C.greenDim}>เร็ว</Badge>;
+  if (level === "slow") return <Badge color={C.red} bg={C.redDim}>ล่าช้า</Badge>;
+  return <Badge color={C.textMuted} bg={C.panel2}>ปกติ</Badge>;
+}
+
+// Small "select all / clear all" link row shown above a filter group.
+function SelectAllLine({ onAll, onNone }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <button onClick={onAll} style={{ background: "none", border: "none", padding: 0, color: C.cyan, cursor: "pointer", fontFamily: "inherit", fontSize: 10.5, fontWeight: 600 }}>เลือกทั้งหมด</button>
+      <span style={{ color: C.borderSoft, fontSize: 10.5 }}>·</span>
+      <button onClick={onNone} style={{ background: "none", border: "none", padding: 0, color: C.textFaint, cursor: "pointer", fontFamily: "inherit", fontSize: 10.5, fontWeight: 600 }}>ล้างทั้งหมด</button>
+    </div>
+  );
+}
+
 function ReportsTab({ jobs }) {
   const allParamNames = useMemo(() => {
     const s = new Set();
@@ -2038,6 +2119,7 @@ function ReportsTab({ jobs }) {
   const [includeJobs, setIncludeJobs] = useState(true);
   const [includeParams, setIncludeParams] = useState(true);
   const [includeAnalysts, setIncludeAnalysts] = useState(true);
+  const [includeTurnaround, setIncludeTurnaround] = useState(true);
   const [justExported, setJustExported] = useState(false);
 
   const activeStatuses = statusFilter ?? [STATUS.WAIT, STATUS.RUN, STATUS.DONE];
@@ -2077,8 +2159,21 @@ function ReportsTab({ jobs }) {
     [jobsInRange, activeAnalysts]
   );
 
-  const sheetsIncluded = [includeJobs, includeParams, includeAnalysts].filter(Boolean).length;
-  const totalRows = (includeJobs ? filteredJobs.length : 0) + (includeParams ? paramSummary.length : 0) + (includeAnalysts ? analystSummary.length : 0);
+  // Turnaround stats intentionally ignore the status checkbox filter (which
+  // is about each job's *overall* status) — a parameter can be DONE with
+  // valid start/finish times even while its job is still RUN overall
+  // because another parameter in the same job isn't finished yet.
+  const turnaroundStats = useMemo(
+    () => computeTurnaroundStats(jobsInRange).filter((r) => activeAnalysts.includes(r.analyst) && activeParams.includes(r.param)),
+    [jobsInRange, activeAnalysts, activeParams]
+  );
+
+  const sheetsIncluded = [includeJobs, includeParams, includeAnalysts, includeTurnaround].filter(Boolean).length;
+  const totalRows =
+    (includeJobs ? filteredJobs.length : 0) +
+    (includeParams ? paramSummary.length : 0) +
+    (includeAnalysts ? analystSummary.length : 0) +
+    (includeTurnaround ? turnaroundStats.length : 0);
 
   function statusLabel(status) {
     if (status === STATUS.DONE) return "เสร็จสมบูรณ์";
@@ -2100,10 +2195,11 @@ function ReportsTab({ jobs }) {
           "พารามิเตอร์ทั้งหมด": stats.total,
           "เสร็จแล้ว": stats.complete,
           "วันที่สร้างงาน": fmtDate(j.createdAt),
+          "วันที่เสร็จสิ้น": (() => { const d = jobDoneDate(j); return d ? fmtDate(d) : "-"; })(),
         };
       });
       const ws = XLSX.utils.json_to_sheet(rows);
-      ws["!cols"] = [{ wch: 13 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 10 }, { wch: 14 }];
+      ws["!cols"] = [{ wch: 13 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 10 }, { wch: 14 }, { wch: 14 }];
       XLSX.utils.book_append_sheet(wb, ws, "รายการงาน");
     }
 
@@ -2132,6 +2228,21 @@ function ReportsTab({ jobs }) {
       const ws = XLSX.utils.json_to_sheet(rows);
       ws["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
       XLSX.utils.book_append_sheet(wb, ws, "สรุปนักวิเคราะห์");
+    }
+
+    if (includeTurnaround) {
+      const rows = turnaroundStats.map((r) => ({
+        "นักวิเคราะห์": r.analyst,
+        "พารามิเตอร์": r.param,
+        "จำนวนงานที่เสร็จ": r.count,
+        "เฉลี่ย (วัน)": Math.round(r.avgDays * 10) / 10,
+        "เร็วสุด (วัน)": Math.round(r.minDays * 10) / 10,
+        "ช้าสุด (วัน)": Math.round(r.maxDays * 10) / 10,
+        "ระดับเทียบค่าเฉลี่ยรวม": turnaroundLevelLabel(r.level),
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [{ wch: 14 }, { wch: 26 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 20 }];
+      XLSX.utils.book_append_sheet(wb, ws, "เวลาเฉลี่ยการทำงาน");
     }
 
     const stamp = tsToDateInputValue(nowTS()).replaceAll("-", "");
@@ -2172,13 +2283,19 @@ function ReportsTab({ jobs }) {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18, borderTop: `1px solid ${C.borderSoft}`, paddingTop: 14 }} className="grid3col">
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>สถานะ</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4 }}>สถานะ</div>
+              <SelectAllLine onAll={() => setStatusFilter([STATUS.WAIT, STATUS.RUN, STATUS.DONE])} onNone={() => setStatusFilter([])} />
+            </div>
             {[STATUS.WAIT, STATUS.RUN, STATUS.DONE].map((s) => (
               <FilterCheck key={s} checked={activeStatuses.includes(s)} onChange={() => toggle(statusFilter, [STATUS.WAIT, STATUS.RUN, STATUS.DONE], setStatusFilter, s)} label={statusLabel(s)} />
             ))}
           </div>
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>พารามิเตอร์</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4 }}>พารามิเตอร์</div>
+              <SelectAllLine onAll={() => setParamFilter(allParamNames)} onNone={() => setParamFilter([])} />
+            </div>
             <div style={{ maxHeight: 150, overflowY: "auto" }}>
               {allParamNames.map((p) => (
                 <FilterCheck key={p} checked={activeParams.includes(p)} onChange={() => toggle(paramFilter, allParamNames, setParamFilter, p)} label={p} />
@@ -2187,7 +2304,10 @@ function ReportsTab({ jobs }) {
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>นักวิเคราะห์</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4 }}>นักวิเคราะห์</div>
+              <SelectAllLine onAll={() => setAnalystFilter(allAnalysts)} onNone={() => setAnalystFilter([])} />
+            </div>
             <div style={{ maxHeight: 150, overflowY: "auto" }}>
               {allAnalysts.map((a) => (
                 <FilterCheck key={a} checked={activeAnalysts.includes(a)} onChange={() => toggle(analystFilter, allAnalysts, setAnalystFilter, a)} label={a} />
@@ -2200,12 +2320,12 @@ function ReportsTab({ jobs }) {
 
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>เนื้อหาในไฟล์ส่งออก</div>
 
-      <ExportSheetCard icon={ListChecks} iconBg={C.cyan} title="รายการงาน" subtitle="งานวิเคราะห์รายตัว พร้อมสถานะและความคืบหน้า" included={includeJobs} onToggle={() => setIncludeJobs((v) => !v)} rowCount={filteredJobs.length} defaultOpen>
+      <ExportSheetCard icon={ListChecks} iconBg={C.cyan} title="รายการงาน" subtitle="งานวิเคราะห์รายตัว พร้อมสถานะ ความคืบหน้า และวันที่เสร็จสิ้น" included={includeJobs} onToggle={() => setIncludeJobs((v) => !v)} rowCount={filteredJobs.length} defaultOpen>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["รหัสงาน", "ตัวอย่าง", "สถานะ", "ความคืบหน้า"].map((h) => (
+                {["รหัสงาน", "ตัวอย่าง", "สถานะ", "ความคืบหน้า", "วันที่เสร็จสิ้น"].map((h) => (
                   <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.textMuted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
@@ -2213,12 +2333,14 @@ function ReportsTab({ jobs }) {
             <tbody>
               {filteredJobs.slice(0, 5).map((j) => {
                 const stats = computeJobStats(j);
+                const doneDate = jobDoneDate(j);
                 return (
                   <tr key={j.jobNo} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
                     <td style={{ padding: "6px 10px", fontFamily: "monospace", fontWeight: 700, color: C.cyan }}>{j.jobNo}</td>
                     <td style={{ padding: "6px 10px", color: C.textMuted }}>{j.sample || "-"}</td>
                     <td style={{ padding: "6px 10px" }}><StatusBadge status={stats.status} /></td>
                     <td style={{ padding: "6px 10px", fontFamily: "monospace", color: C.text }}>{stats.progress}%</td>
+                    <td style={{ padding: "6px 10px", fontFamily: "monospace", color: doneDate ? C.text : C.textFaint }}>{doneDate ? fmtDate(doneDate) : "-"}</td>
                   </tr>
                 );
               })}
@@ -2281,10 +2403,37 @@ function ReportsTab({ jobs }) {
         </div>
       </ExportSheetCard>
 
+      <ExportSheetCard icon={Clock} iconBg="#0D9488" title="เวลาเฉลี่ยการทำงาน" subtitle="จำนวนวันเฉลี่ยจากเริ่มถึงเสร็จ ต่อคนต่อพารามิเตอร์ เทียบค่าเฉลี่ยรวม" included={includeTurnaround} onToggle={() => setIncludeTurnaround((v) => !v)} rowCount={turnaroundStats.length}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {["นักวิเคราะห์", "พารามิเตอร์", "จำนวนงาน", "เฉลี่ย (วัน)", "ระดับ"].map((h) => (
+                  <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.textMuted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {turnaroundStats.slice(0, 8).map((r) => (
+                <tr key={`${r.analyst}|||${r.param}`} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 600, color: C.text }}>{r.analyst}</td>
+                  <td style={{ padding: "6px 10px", color: C.textMuted }}>{r.param}</td>
+                  <td style={{ padding: "6px 10px", color: C.textMuted }}>{r.count}</td>
+                  <td style={{ padding: "6px 10px", fontFamily: "monospace", color: C.text }}>{r.avgDays.toFixed(1)}</td>
+                  <td style={{ padding: "6px 10px" }}><TurnaroundBadge level={r.level} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {turnaroundStats.length > 8 && <div style={{ padding: "8px 10px", fontSize: 11, color: C.textFaint, background: C.bg2 }}>และอีก {(turnaroundStats.length - 8).toLocaleString()} รายการในไฟล์ที่ส่งออก</div>}
+          {turnaroundStats.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 12, color: C.textFaint }}>ยังไม่มีงานที่เสร็จสมบูรณ์พร้อมเวลาเริ่ม-จบ ในช่วงและตัวกรองนี้</div>}
+        </div>
+      </ExportSheetCard>
+
       {/* Export bar */}
       <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, background: "rgba(255,255,255,0.97)", borderTop: `1px solid ${C.borderSoft}`, padding: "12px 20px", display: "flex", alignItems: "center", gap: 16, zIndex: 40, backdropFilter: "blur(4px)" }} className="reportsExportBar">
         <div style={{ display: "flex", gap: 6 }}>
-          {[{ on: includeJobs, icon: ListChecks, bg: C.cyan }, { on: includeParams, icon: Layers, bg: "#7C3AED" }, { on: includeAnalysts, icon: Users, bg: "#EA580C" }].map((c, i) => (
+          {[{ on: includeJobs, icon: ListChecks, bg: C.cyan }, { on: includeParams, icon: Layers, bg: "#7C3AED" }, { on: includeAnalysts, icon: Users, bg: "#EA580C" }, { on: includeTurnaround, icon: Clock, bg: "#0D9488" }].map((c, i) => (
             <span key={i} style={{ width: 28, height: 28, borderRadius: 7, background: c.on ? c.bg : "#E2E8F0", opacity: c.on ? 1 : 0.5, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <c.icon size={14} color="#fff" />
             </span>
