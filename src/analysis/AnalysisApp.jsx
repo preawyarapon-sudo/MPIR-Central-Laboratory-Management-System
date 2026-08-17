@@ -45,6 +45,42 @@ const LATE_DAYS = 15; // ถือว่าล่าช้าเมื่อค�
 const LATE_REPEAT_DAYS = 10; // แจ้งเตือนซ้ำทุกกี่วันหลังจากล่าช้าแล้ว
 const LATE_REPEAT_MS = LATE_REPEAT_DAYS * DAY_MS;
 
+// The "เริ่ม" (start) button is only pressable inside this local-time window
+// each day — the idea is to turn "start of shift" into a deliberate ritual
+// (walk the WAIT queue, press start on what you're picking up today)
+// instead of analysts batching start+complete together whenever they
+// remember, which makes turnaround-time stats meaningless. "เสร็จ" and
+// "ยกเลิก" are never time-restricted — only the WAIT → RUN transition.
+// Adjust these two numbers if the team's actual start-of-shift time changes.
+const START_WINDOW_FROM_HOUR = 7;
+const START_WINDOW_TO_HOUR = 10;
+function isWithinStartWindow(d = new Date()) {
+  const h = d.getHours() + d.getMinutes() / 60;
+  return h >= START_WINDOW_FROM_HOUR && h < START_WINDOW_TO_HOUR;
+}
+// New-job exception: a job created within the last hour can be started any
+// time, regardless of the morning window — so a sample that lands on the
+// bench at 2pm doesn't have to sit untouched until tomorrow morning. After
+// that first hour, it falls back under the normal window rule like
+// everything else.
+const NEW_JOB_START_GRACE_MS = 60 * 60 * 1000;
+function jobIsNew(createdAt) {
+  return !!createdAt && nowTS() - createdAt < NEW_JOB_START_GRACE_MS;
+}
+function canStartJob(createdAt) {
+  return isWithinStartWindow() || jobIsNew(createdAt);
+}
+// Re-renders whatever calls it once a minute, so the "เริ่ม" button flips
+// enabled/disabled live at the window boundary without needing a page
+// refresh (someone might genuinely be sitting there at 06:59).
+function useNowTick(intervalMs = 30000) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+}
+
 // Convert a timestamp to a yyyy-mm-dd string for <input type="date">, in
 // local time (so it lines up with what the user sees in fmtDate).
 function tsToDateInputValue(ts) {
@@ -364,7 +400,7 @@ function computeAnalysts(jobs) {
     for (const p of job.parameters) {
       if (!p.analyst) continue;
       if (!map[p.analyst]) map[p.analyst] = { name: p.analyst, running: [], waiting: [], done: [], repair: [] };
-      const row = { ...p, jobNo: job.jobNo, sample: job.sample };
+      const row = { ...p, jobNo: job.jobNo, sample: job.sample, jobCreatedAt: job.createdAt };
       // Repair-flagged items get pulled into their own bucket regardless of
       // WAIT/RUN/DONE status, so they show up as a distinct "ต้องซ่อม" queue
       // instead of being buried inside running/waiting/done.
@@ -1203,8 +1239,9 @@ function NewJobForm({ onCancel, onCreate, onSaveEdit, suggestedNo, suggestedRegS
 // neighboring rows, so a single misclick while scanning down the list
 // should never silently undo a finished result. The confirm auto-cancels
 // after a few seconds if left untouched.
-function ParamActions({ jobNo, p, onUpdateParam }) {
+function ParamActions({ jobNo, jobCreatedAt, p, onUpdateParam }) {
   const [confirming, setConfirming] = useState(false);
+  useNowTick(); // keeps the WAIT button's enabled/disabled state live
 
   useEffect(() => {
     if (!confirming) return;
@@ -1213,6 +1250,16 @@ function ParamActions({ jobNo, p, onUpdateParam }) {
   }, [confirming]);
 
   if (p.status === STATUS.WAIT) {
+    if (!canStartJob(jobCreatedAt)) {
+      return (
+        <span
+          title={`ปุ่มเริ่มงานจะกดได้เฉพาะช่วงเช้า ${String(START_WINDOW_FROM_HOUR).padStart(2, "0")}:00–${String(START_WINDOW_TO_HOUR).padStart(2, "0")}:00 น. ของทุกวัน (ยกเว้นงานที่เพิ่งสร้างใหม่ภายใน 1 ชม.)`}
+          style={{ fontSize: 11, color: C.textFaint, fontStyle: "italic", whiteSpace: "nowrap" }}
+        >
+          เริ่มได้ช่วงเช้า {START_WINDOW_FROM_HOUR}:00–{START_WINDOW_TO_HOUR}:00 น.
+        </span>
+      );
+    }
     return <Btn small kind="amber" onClick={() => onUpdateParam(jobNo, p.id, "start")}><Play size={12} /> เริ่ม</Btn>;
   }
   if (p.status === STATUS.RUN) {
@@ -1393,7 +1440,7 @@ function JobDetail({ job, onBack, onUpdateParam, onDeleteJob, onEditJob, onFlagR
                   <td style={{ padding: "8px", color: C.textMuted, fontFamily: "monospace" }}>{tsLabel(p.finishTs, p.finish)}</td>
                   <td style={{ padding: "8px" }}>
                     <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      <ParamActions jobNo={job.jobNo} p={p} onUpdateParam={onUpdateParam} />
+                      <ParamActions jobNo={job.jobNo} jobCreatedAt={job.createdAt} p={p} onUpdateParam={onUpdateParam} />
                     </div>
                   </td>
                 </tr>
@@ -1649,6 +1696,7 @@ function AnalystRow({ a, onOpenJob, onBulkUpdate }) {
   const [showDone, setShowDone] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState(new Set());
   const current = a.running[0];
+  useNowTick(); // keeps "เริ่มพร้อมกัน" enabled/disabled state live
 
   const toggleOpen = () => {
     setOpen((v) => !v);
@@ -1665,8 +1713,14 @@ function AnalystRow({ a, onOpenJob, onBulkUpdate }) {
   };
   const runningKeys = a.running.map((p) => `${p.jobNo}__${p.id}`);
   const waitingKeys = a.waiting.map((p) => `${p.jobNo}__${p.id}`);
+  const waitingByKey = Object.fromEntries(a.waiting.map((p) => [`${p.jobNo}__${p.id}`, p]));
   const selectedRunningKeys = runningKeys.filter((k) => selectedKeys.has(k));
   const selectedWaitingKeys = waitingKeys.filter((k) => selectedKeys.has(k));
+  // Within the selected WAIT items, only the ones actually eligible to
+  // start right now (window open, or that specific job is <1hr old) get
+  // bulk-started — same rule as the single-row button, just applied per
+  // item instead of blocking the whole batch over one ineligible row.
+  const eligibleWaitingKeys = selectedWaitingKeys.filter((k) => canStartJob(waitingByKey[k]?.jobCreatedAt));
   const runningAllSelected = runningKeys.length > 0 && runningKeys.every((k) => selectedKeys.has(k));
   const waitingAllSelected = waitingKeys.length > 0 && waitingKeys.every((k) => selectedKeys.has(k));
 
@@ -1723,7 +1777,15 @@ function AnalystRow({ a, onOpenJob, onBulkUpdate }) {
               <div style={{ fontSize: 12, color: C.cyan, fontWeight: 600 }}>เลือกแล้ว {selectedKeys.size} รายการ</div>
               <div style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
                 {selectedWaitingKeys.length > 0 && (
-                  <Btn small kind="amber" onClick={() => runBulk("start", selectedWaitingKeys)}><Play size={12} /> เริ่มพร้อมกัน ({selectedWaitingKeys.length})</Btn>
+                  eligibleWaitingKeys.length > 0 ? (
+                    <Btn small kind="amber" onClick={() => runBulk("start", eligibleWaitingKeys)}>
+                      <Play size={12} /> เริ่มพร้อมกัน ({eligibleWaitingKeys.length}{eligibleWaitingKeys.length < selectedWaitingKeys.length ? `/${selectedWaitingKeys.length}` : ""})
+                    </Btn>
+                  ) : (
+                    <span style={{ fontSize: 11, color: C.textFaint, fontStyle: "italic", alignSelf: "center" }}>
+                      เริ่มได้ช่วงเช้า {START_WINDOW_FROM_HOUR}:00–{START_WINDOW_TO_HOUR}:00 น.
+                    </span>
+                  )
                 )}
                 {selectedRunningKeys.length > 0 && (
                   <>
