@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { FlaskConical, Plus, X, RefreshCw, LayoutGrid, ListChecks, Users, Layers, Trash2, Play, CheckCircle2, CircleDot, Circle, ChevronRight, ChevronDown, AlertCircle, AlertTriangle, Clock, ClipboardPaste, Sparkles, Search, Wrench, BarChart3 } from "lucide-react";
+import { FlaskConical, Plus, X, RefreshCw, LayoutGrid, ListChecks, Users, Layers, Trash2, Play, CheckCircle2, CircleDot, Circle, ChevronRight, ChevronDown, AlertCircle, AlertTriangle, Clock, ClipboardPaste, Sparkles, Search, Wrench, BarChart3, FileSpreadsheet, Calendar, RotateCcw, Check } from "lucide-react";
 import { db } from "./firebase";
 import { ref, onValue, set, remove, runTransaction } from "firebase/database";
+import * as XLSX from "xlsx";
 
-const ANALYSIS_TAB_KEYS = ["dashboard", "jobs", "analysts", "parameters"];
+const ANALYSIS_TAB_KEYS = ["dashboard", "jobs", "analysts", "parameters", "reports"];
 
 const C = {
   bg: "#FFFFFF",
@@ -1951,6 +1952,358 @@ function ParametersTable({ jobs, onOpenJob }) {
   );
 }
 
+// ---------- Reports (Excel export) ----------
+// Small checkbox row used only inside the Reports filter panel — styled to
+// match Badge/Btn (C.cyan when checked) rather than the browser default.
+function FilterCheck({ checked, onChange, label, count }) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "5px 6px", borderRadius: 6, cursor: "pointer", fontSize: 12.5 }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span
+          style={{
+            width: 15, height: 15, borderRadius: 4, flexShrink: 0,
+            background: checked ? C.cyan : "#fff", border: `1px solid ${checked ? C.cyan : C.border}`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          {checked && <Check size={11} color="#fff" strokeWidth={3} />}
+        </span>
+        <span style={{ color: C.text }}>{label}</span>
+      </span>
+      {count !== undefined && <span style={{ color: C.textFaint, fontSize: 11 }}>{count}</span>}
+      <input type="checkbox" checked={checked} onChange={onChange} style={{ display: "none" }} />
+    </label>
+  );
+}
+
+// Toggleable card for one export sheet (Jobs / Parameters / Analysts) —
+// the checkbox on the left controls whether that sheet is included in the
+// downloaded workbook; clicking the row body expands a small preview.
+function ExportSheetCard({ icon: Icon, iconBg, title, subtitle, included, onToggle, rowCount, children, defaultOpen }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <Panel style={{ borderColor: included ? C.cyan : C.border, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px" }}>
+        <button
+          onClick={onToggle}
+          title="รวมชีทนี้ในไฟล์ส่งออก"
+          style={{
+            width: 20, height: 20, borderRadius: 6, flexShrink: 0, cursor: "pointer",
+            background: included ? C.cyan : "#fff", border: `1px solid ${included ? C.cyan : C.border}`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          {included && <Check size={13} color="#fff" strokeWidth={3} />}
+        </button>
+        <span style={{ width: 36, height: 36, borderRadius: 9, background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Icon size={17} color="#fff" />
+        </span>
+        <button onClick={() => setOpen((o) => !o)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", cursor: "pointer", textAlign: "left", padding: 0, fontFamily: "inherit" }}>
+          <span>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{title}</div>
+            <div style={{ fontSize: 11.5, color: C.textFaint }}>{subtitle}</div>
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Badge color={C.cyan} bg={C.cyanDim}>{rowCount.toLocaleString()} แถว</Badge>
+            {open ? <ChevronDown size={15} color={C.textFaint} /> : <ChevronRight size={15} color={C.textFaint} />}
+          </span>
+        </button>
+      </div>
+      {open && <div style={{ borderTop: `1px solid ${C.borderSoft}`, padding: "12px 14px 14px" }}>{children}</div>}
+    </Panel>
+  );
+}
+
+function ReportsTab({ jobs }) {
+  const allParamNames = useMemo(() => {
+    const s = new Set();
+    jobs.forEach((j) => j.parameters.forEach((p) => p.name && s.add(p.name)));
+    return [...s].sort((a, b) => a.localeCompare(b, "th"));
+  }, [jobs]);
+  const allAnalysts = useMemo(() => {
+    const s = new Set();
+    jobs.forEach((j) => j.parameters.forEach((p) => p.analyst && s.add(p.analyst)));
+    return [...s].sort((a, b) => a.localeCompare(b, "th"));
+  }, [jobs]);
+
+  const earliest = jobs.length ? Math.min(...jobs.map((j) => j.createdAt || nowTS())) : nowTS() - 30 * DAY_MS;
+  const [from, setFrom] = useState(tsToDateInputValue(earliest));
+  const [to, setTo] = useState(tsToDateInputValue(nowTS()));
+  // null = "no restriction" (all included) — avoids having to wait for
+  // jobs/params/analysts to load before picking a sensible default.
+  const [statusFilter, setStatusFilter] = useState(null);
+  const [paramFilter, setParamFilter] = useState(null);
+  const [analystFilter, setAnalystFilter] = useState(null);
+
+  const [includeJobs, setIncludeJobs] = useState(true);
+  const [includeParams, setIncludeParams] = useState(true);
+  const [includeAnalysts, setIncludeAnalysts] = useState(true);
+  const [justExported, setJustExported] = useState(false);
+
+  const activeStatuses = statusFilter ?? [STATUS.WAIT, STATUS.RUN, STATUS.DONE];
+  const activeParams = paramFilter ?? allParamNames;
+  const activeAnalysts = analystFilter ?? allAnalysts;
+
+  const toggle = (current, fallback, setter, val) => {
+    const base = current ?? fallback;
+    setter(base.includes(val) ? base.filter((x) => x !== val) : [...base, val]);
+  };
+
+  const jobsInRange = useMemo(() => {
+    const fromTs = new Date(`${from}T00:00:00`).getTime();
+    const toTs = new Date(`${to}T23:59:59`).getTime();
+    return jobs.filter((j) => (j.createdAt || 0) >= fromTs && (j.createdAt || 0) <= toTs);
+  }, [jobs, from, to]);
+
+  const filteredJobs = useMemo(
+    () => jobsInRange.filter((j) => activeStatuses.includes(computeJobStats(j).status)),
+    [jobsInRange, activeStatuses]
+  );
+
+  const paramSummary = useMemo(
+    () => computeParamQueue(jobsInRange).filter((g) => activeParams.includes(g.name)),
+    [jobsInRange, activeParams]
+  );
+
+  const analystSummary = useMemo(
+    () =>
+      computeAnalysts(jobsInRange)
+        .filter((a) => activeAnalysts.includes(a.name))
+        .map((a) => {
+          const total = a.running.length + a.waiting.length + a.done.length + a.repair.length;
+          const complete = a.done.length;
+          return { name: a.name, total, complete, pending: total - complete, rate: total ? Math.round((complete / total) * 100) : 0 };
+        }),
+    [jobsInRange, activeAnalysts]
+  );
+
+  const sheetsIncluded = [includeJobs, includeParams, includeAnalysts].filter(Boolean).length;
+  const totalRows = (includeJobs ? filteredJobs.length : 0) + (includeParams ? paramSummary.length : 0) + (includeAnalysts ? analystSummary.length : 0);
+
+  function statusLabel(status) {
+    if (status === STATUS.DONE) return "เสร็จสมบูรณ์";
+    if (status === STATUS.RUN) return "กำลังวิเคราะห์";
+    return "รอดำเนินการ";
+  }
+
+  function handleExport() {
+    const wb = XLSX.utils.book_new();
+
+    if (includeJobs) {
+      const rows = filteredJobs.map((j) => {
+        const stats = computeJobStats(j);
+        return {
+          "รหัสงาน": j.jobNo,
+          "ตัวอย่าง": j.sample || "-",
+          "สถานะ": statusLabel(stats.status),
+          "ความคืบหน้า (%)": stats.progress,
+          "พารามิเตอร์ทั้งหมด": stats.total,
+          "เสร็จแล้ว": stats.complete,
+          "วันที่สร้างงาน": fmtDate(j.createdAt),
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [{ wch: 13 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 10 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, ws, "รายการงาน");
+    }
+
+    if (includeParams) {
+      const rows = paramSummary.map((g) => ({
+        "พารามิเตอร์": g.name,
+        "รอดำเนินการ": g.waiting,
+        "กำลังวิเคราะห์": g.running,
+        "เสร็จสมบูรณ์": g.complete,
+        "รวม": g.total,
+        "นักวิเคราะห์": g.analysts.join(", ") || "-",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [{ wch: 26 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 26 }];
+      XLSX.utils.book_append_sheet(wb, ws, "สรุปพารามิเตอร์");
+    }
+
+    if (includeAnalysts) {
+      const rows = analystSummary.map((a) => ({
+        "นักวิเคราะห์": a.name,
+        "งานทั้งหมด": a.total,
+        "เสร็จสมบูรณ์": a.complete,
+        "ค้างดำเนินการ": a.pending,
+        "% ความสำเร็จ": a.rate,
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
+      XLSX.utils.book_append_sheet(wb, ws, "สรุปนักวิเคราะห์");
+    }
+
+    const stamp = tsToDateInputValue(nowTS()).replaceAll("-", "");
+    XLSX.writeFile(wb, `AnalysisTracker_Report_${stamp}.xlsx`);
+    setJustExported(true);
+    setTimeout(() => setJustExported(false), 2500);
+  }
+
+  const resetFilters = () => {
+    setFrom(tsToDateInputValue(earliest));
+    setTo(tsToDateInputValue(nowTS()));
+    setStatusFilter(null);
+    setParamFilter(null);
+    setAnalystFilter(null);
+  };
+
+  return (
+    <div style={{ paddingBottom: 90 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>ออกรายงาน</div>
+          <div style={{ fontSize: 12.5, color: C.textFaint, marginTop: 2 }}>เลือกช่วงข้อมูลและหัวข้อที่ต้องการ แล้วส่งออกเป็นไฟล์ Excel ไฟล์เดียว</div>
+        </div>
+        <Btn small onClick={resetFilters}><RotateCcw size={13} /> รีเซ็ตตัวกรอง</Btn>
+      </div>
+
+      {/* Filters */}
+      <Panel style={{ padding: 16, marginBottom: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 12 }}>
+          <Calendar size={15} color={C.cyan} /> ช่วงวันที่สร้างงาน
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 12.5, fontFamily: "inherit", color: C.text }} />
+          <span style={{ fontSize: 12.5, color: C.textFaint }}>ถึง</span>
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 12.5, fontFamily: "inherit", color: C.text }} />
+          <span style={{ marginLeft: "auto", fontSize: 11.5, color: C.textFaint }}>พบ {jobsInRange.length.toLocaleString()} งานในช่วงนี้</span>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18, borderTop: `1px solid ${C.borderSoft}`, paddingTop: 14 }} className="grid3col">
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>สถานะ</div>
+            {[STATUS.WAIT, STATUS.RUN, STATUS.DONE].map((s) => (
+              <FilterCheck key={s} checked={activeStatuses.includes(s)} onChange={() => toggle(statusFilter, [STATUS.WAIT, STATUS.RUN, STATUS.DONE], setStatusFilter, s)} label={statusLabel(s)} />
+            ))}
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>พารามิเตอร์</div>
+            <div style={{ maxHeight: 150, overflowY: "auto" }}>
+              {allParamNames.map((p) => (
+                <FilterCheck key={p} checked={activeParams.includes(p)} onChange={() => toggle(paramFilter, allParamNames, setParamFilter, p)} label={p} />
+              ))}
+              {allParamNames.length === 0 && <div style={{ fontSize: 11.5, color: C.textFaint }}>ยังไม่มีพารามิเตอร์</div>}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>นักวิเคราะห์</div>
+            <div style={{ maxHeight: 150, overflowY: "auto" }}>
+              {allAnalysts.map((a) => (
+                <FilterCheck key={a} checked={activeAnalysts.includes(a)} onChange={() => toggle(analystFilter, allAnalysts, setAnalystFilter, a)} label={a} />
+              ))}
+              {allAnalysts.length === 0 && <div style={{ fontSize: 11.5, color: C.textFaint }}>ยังไม่มีนักวิเคราะห์</div>}
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>เนื้อหาในไฟล์ส่งออก</div>
+
+      <ExportSheetCard icon={ListChecks} iconBg={C.cyan} title="รายการงาน" subtitle="งานวิเคราะห์รายตัว พร้อมสถานะและความคืบหน้า" included={includeJobs} onToggle={() => setIncludeJobs((v) => !v)} rowCount={filteredJobs.length} defaultOpen>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {["รหัสงาน", "ตัวอย่าง", "สถานะ", "ความคืบหน้า"].map((h) => (
+                  <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.textMuted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredJobs.slice(0, 5).map((j) => {
+                const stats = computeJobStats(j);
+                return (
+                  <tr key={j.jobNo} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                    <td style={{ padding: "6px 10px", fontFamily: "monospace", fontWeight: 700, color: C.cyan }}>{j.jobNo}</td>
+                    <td style={{ padding: "6px 10px", color: C.textMuted }}>{j.sample || "-"}</td>
+                    <td style={{ padding: "6px 10px" }}><StatusBadge status={stats.status} /></td>
+                    <td style={{ padding: "6px 10px", fontFamily: "monospace", color: C.text }}>{stats.progress}%</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {filteredJobs.length > 5 && <div style={{ padding: "8px 10px", fontSize: 11, color: C.textFaint, background: C.bg2 }}>และอีก {(filteredJobs.length - 5).toLocaleString()} รายการในไฟล์ที่ส่งออก</div>}
+          {filteredJobs.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 12, color: C.textFaint }}>ไม่มีข้อมูลตรงกับตัวกรองที่เลือก</div>}
+        </div>
+      </ExportSheetCard>
+
+      <ExportSheetCard icon={Layers} iconBg="#7C3AED" title="สรุปตามพารามิเตอร์" subtitle="จำนวนงานแยกตามพารามิเตอร์และสถานะ" included={includeParams} onToggle={() => setIncludeParams((v) => !v)} rowCount={paramSummary.length}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {["พารามิเตอร์", "รอ", "กำลังทำ", "เสร็จ", "รวม"].map((h) => (
+                  <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.textMuted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {paramSummary.map((g) => (
+                <tr key={g.name} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 600, color: C.text }}>{g.name}</td>
+                  <td style={{ padding: "6px 10px", color: C.textMuted }}>{g.waiting}</td>
+                  <td style={{ padding: "6px 10px", color: C.amber }}>{g.running}</td>
+                  <td style={{ padding: "6px 10px", color: C.green }}>{g.complete}</td>
+                  <td style={{ padding: "6px 10px", fontFamily: "monospace", fontWeight: 700, color: C.text }}>{g.total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {paramSummary.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 12, color: C.textFaint }}>ไม่มีข้อมูลตรงกับตัวกรองที่เลือก</div>}
+        </div>
+      </ExportSheetCard>
+
+      <ExportSheetCard icon={Users} iconBg="#EA580C" title="สรุปนักวิเคราะห์" subtitle="ปริมาณงานและอัตราความสำเร็จรายบุคคล" included={includeAnalysts} onToggle={() => setIncludeAnalysts((v) => !v)} rowCount={analystSummary.length}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {["นักวิเคราะห์", "งานทั้งหมด", "เสร็จ", "ค้าง", "% สำเร็จ"].map((h) => (
+                  <th key={h} style={{ textAlign: "left", padding: "6px 10px", color: C.textMuted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {analystSummary.map((a) => (
+                <tr key={a.name} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 600, color: C.text }}>{a.name}</td>
+                  <td style={{ padding: "6px 10px", color: C.textMuted }}>{a.total}</td>
+                  <td style={{ padding: "6px 10px", color: C.green }}>{a.complete}</td>
+                  <td style={{ padding: "6px 10px", color: C.amber }}>{a.pending}</td>
+                  <td style={{ padding: "6px 10px", fontFamily: "monospace", color: C.text }}>{a.rate}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {analystSummary.length === 0 && <div style={{ padding: 20, textAlign: "center", fontSize: 12, color: C.textFaint }}>ไม่มีข้อมูลตรงกับตัวกรองที่เลือก</div>}
+        </div>
+      </ExportSheetCard>
+
+      {/* Export bar */}
+      <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, background: "rgba(255,255,255,0.97)", borderTop: `1px solid ${C.borderSoft}`, padding: "12px 20px", display: "flex", alignItems: "center", gap: 16, zIndex: 40, backdropFilter: "blur(4px)" }} className="reportsExportBar">
+        <div style={{ display: "flex", gap: 6 }}>
+          {[{ on: includeJobs, icon: ListChecks, bg: C.cyan }, { on: includeParams, icon: Layers, bg: "#7C3AED" }, { on: includeAnalysts, icon: Users, bg: "#EA580C" }].map((c, i) => (
+            <span key={i} style={{ width: 28, height: 28, borderRadius: 7, background: c.on ? c.bg : "#E2E8F0", opacity: c.on ? 1 : 0.5, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <c.icon size={14} color="#fff" />
+            </span>
+          ))}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.textMuted }}>
+          <b style={{ color: C.text }}>{sheetsIncluded}</b> ชีท · <b style={{ color: C.text }}>{totalRows.toLocaleString()}</b> แถวทั้งหมด
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+          {justExported && <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 600, color: C.green }}><Check size={14} /> ส่งออกไฟล์แล้ว</span>}
+          <Btn kind="green" onClick={handleExport} disabled={sheetsIncluded === 0}>
+            <FileSpreadsheet size={14} /> ส่งออกเป็น Excel (.xlsx)
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Dashboard ----------
 function Dashboard({ jobs, onOpen }) {
   // All five cards count jobs, not raw parameters — a job only counts as
@@ -2672,6 +3025,7 @@ export default function App({ restrictToCustomer = false } = {}) {
               {sideNavBtn("jobs", "Jobs", ListChecks)}
               {sideNavBtn("analysts", "Analysts", Users)}
               {sideNavBtn("parameters", "Parameters", Layers)}
+              {sideNavBtn("reports", "Reports", FileSpreadsheet)}
             </nav>
           </aside>
         )}
@@ -2756,6 +3110,7 @@ export default function App({ restrictToCustomer = false } = {}) {
                 )}
                 {tab === "analysts" && <AnalystsTable jobs={jobs} onOpenJob={openJob} onBulkUpdate={handleBulkUpdateParams} />}
                 {tab === "parameters" && <ParametersTable jobs={jobs} onOpenJob={openJob} />}
+                {tab === "reports" && <ReportsTab jobs={jobs} />}
               </>
             )}
           </div>
@@ -2769,6 +3124,7 @@ export default function App({ restrictToCustomer = false } = {}) {
             {bottomNavBtn("jobs", "Jobs", ListChecks)}
             {bottomNavBtn("analysts", "Analysts", Users)}
             {bottomNavBtn("parameters", "Parameters", Layers)}
+            {bottomNavBtn("reports", "Reports", FileSpreadsheet)}
           </>
         )}
       </div>
