@@ -5252,7 +5252,8 @@ button { cursor: pointer; }
   .analysisOverviewGrid .statTopIcon { display: inline-block !important; width: 13px !important; height: 13px !important; flex-shrink: 0 !important; }
   .analysisOverviewGrid .statLabel {
     font-size: 9px !important; line-height: 1.15 !important;
-    height: 21px !important; display: flex !important;
+    height: 21px !important; min-height: 0 !important; max-height: 21px !important;
+    flex-shrink: 0 !important; display: flex !important;
     align-items: center !important; justify-content: center !important;
     overflow: hidden !important;
   }
