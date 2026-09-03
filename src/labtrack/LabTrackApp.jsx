@@ -24,6 +24,24 @@ const ANALYSIS_FIREBASE_CONFIG = {
   messagingSenderId: "137382280837",
   appId: "1:137382280837:web:01d67c8821bc736983b3ec",
 };
+// Tracks whether the viewport is at/below a mobile breakpoint, so a handful
+// of layouts (like the booking sub-tabs) can switch to a compact single-row
+// icon style instead of wrapping onto multiple lines.
+function useIsMobile(breakpoint = 640) {
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.innerWidth <= breakpoint
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = (e) => setIsMobile(e.matches);
+    setIsMobile(mq.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 function getAnalysisDb() {
   const existing = getApps().find(a => a.name === "analysis");
   const app = existing || initializeApp(ANALYSIS_FIREBASE_CONFIG, "analysis");
@@ -2012,6 +2030,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   const [view, setView] = useState("pending"); // "pending" | "current" | "history-equipment" | "history-item" | "calendar" | "catalog"
   const [showForm, setShowForm] = useState(false);
   const [actorName, setActorName] = useState("");
+  const isMobile = useIsMobile();
 
   // One-shot external request (from the global reminder banner) to jump
   // straight to a specific sub-view — e.g. landing directly on "current"
@@ -2270,11 +2289,11 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        <ViewTab active={view === "pending"} onClick={() => setView("pending")} label="รออนุมัติ" count={pending.length} />
-        <ViewTab active={view === "current"} onClick={() => setView("current")} label="ต้องคืน / กำลังใช้งาน" count={current.length} warnCount={current.filter(isBookingOverdue).length} />
-        <ViewTab active={view === "history-equipment"} onClick={() => setView("history-equipment")} label="ประวัติเครื่องมือ" count={historyEquipment.length} />
-        <ViewTab active={view === "history-item"} onClick={() => setView("history-item")} label="ประวัติอุปกรณ์" count={historyItem.length} />
+      <div style={{ display: "flex", gap: isMobile ? 5 : 8, marginBottom: 14, flexWrap: isMobile ? "nowrap" : "wrap" }}>
+        <ViewTab active={view === "pending"} onClick={() => setView("pending")} label="รออนุมัติ" icon={Clock} count={pending.length} compact={isMobile} />
+        <ViewTab active={view === "current"} onClick={() => setView("current")} label="ต้องคืน / กำลังใช้งาน" icon={ClipboardList} count={current.length} warnCount={current.filter(isBookingOverdue).length} compact={isMobile} />
+        <ViewTab active={view === "history-equipment"} onClick={() => setView("history-equipment")} label="ประวัติเครื่องมือ" icon={Wrench} count={historyEquipment.length} compact={isMobile} />
+        <ViewTab active={view === "history-item"} onClick={() => setView("history-item")} label="ประวัติอุปกรณ์" icon={Package} count={historyItem.length} compact={isMobile} />
       </div>
 
       {embedExtras && view === "calendar" && (
@@ -3970,21 +3989,44 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
   );
 }
 
-function ViewTab({ active, onClick, label, count, warnCount = 0 }) {
+function ViewTab({ active, onClick, label, count, warnCount = 0, icon: Icon, compact = false }) {
   return (
     <button
       onClick={onClick}
+      title={compact ? label : undefined}
       style={{
-        display: "flex", alignItems: "center", gap: 6,
+        position: "relative",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        gap: compact ? 3 : 6,
         background: active ? "#E9F1FB" : "transparent",
         border: `1px solid ${active ? "var(--teal)" : "var(--line)"}`,
         color: active ? "var(--teal-dark)" : "var(--muted)",
-        borderRadius: 999, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+        borderRadius: compact ? 10 : 999,
+        padding: compact ? "8px 4px" : "6px 14px",
+        fontSize: compact ? 10.5 : 13, fontWeight: 600,
         cursor: "pointer", fontFamily: "inherit",
+        flex: compact ? "1 1 0" : "0 0 auto",
+        minWidth: 0, whiteSpace: "nowrap", overflow: "hidden",
       }}
     >
-      {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({count})</span>
-      {warnCount > 0 && <span style={S.navBadge}>เลยกำหนด {warnCount}</span>}
+      {Icon && <Icon size={compact ? 16 : 14} style={{ flexShrink: 0 }} />}
+      {compact ? (
+        <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>{count}</span>
+      ) : (
+        <>
+          {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({count})</span>
+        </>
+      )}
+      {warnCount > 0 && (
+        compact ? (
+          <span style={{
+            position: "absolute", top: -3, right: -3, width: 9, height: 9,
+            borderRadius: "50%", background: "var(--red)", border: "1.5px solid #fff",
+          }} />
+        ) : (
+          <span style={S.navBadge}>เลยกำหนด {warnCount}</span>
+        )
+      )}
     </button>
   );
 }
