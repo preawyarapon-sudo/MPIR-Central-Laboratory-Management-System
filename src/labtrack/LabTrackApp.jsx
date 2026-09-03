@@ -674,9 +674,9 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
 
   const analysisStats = useMemo(() => analysisJobBuckets(analysisJobs), [analysisJobs]);
 
-  function notify(msg) {
+  function notify(msg, duration = 2200) {
     setToast(msg);
-    setTimeout(() => setToast(null), 2200);
+    setTimeout(() => setToast(null), duration);
   }
 
   const persist = {
@@ -2015,7 +2015,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   }
   function approve(b, note, name) {
     update(b.id, { status: "approved", approvedBy: name || actorName || "-", approvedAt: new Date().toISOString(), approvalNote: note || "" });
-    notify("อนุมัติคำขอแล้ว");
+    notify(`อนุมัติแล้ว ✅ อย่าลืมกดคืนที่แท็บ "ต้องคืน / กำลังใช้งาน" หลังใช้เสร็จ`, 3800);
   }
   function reject(b, note, name) {
     update(b.id, { status: "rejected", approvedBy: name || actorName || "-", approvedAt: new Date().toISOString(), approvalNote: note || "" });
@@ -2149,6 +2149,28 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
           : "ขอใช้เครื่องมือแบบขอใช้งานทันทีหรือจองล่วงหน้า — ทุกคำขอต้องผ่านการอนุมัติก่อน"}
       />
 
+      {restrictToBooking && current.length > 0 && view !== "current" && (() => {
+        const overdueCount = current.filter(isBookingOverdue).length;
+        return (
+          <div
+            style={{
+              ...S.notesBox, marginBottom: 14, display: "flex", alignItems: "center",
+              justifyContent: "space-between", gap: 10, flexWrap: "wrap",
+              background: overdueCount > 0 ? "#FBE9E4" : S.notesBox.background,
+            }}
+          >
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: overdueCount > 0 ? "var(--red)" : "var(--ink)" }}>
+              {overdueCount > 0
+                ? `คุณมี ${current.length} รายการที่ต้องคืน (เลยกำหนดแล้ว ${overdueCount} รายการ)`
+                : `คุณมี ${current.length} รายการที่ต้องคืนหลังใช้เสร็จ`}
+            </span>
+            <button style={S.smallBtn} onClick={() => setView("current")}>
+              ไปที่รายการที่ต้องคืน <ChevronRight size={13} />
+            </button>
+          </div>
+        );
+      })()}
+
       {embedExtras && (
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <button
@@ -2188,7 +2210,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <ViewTab active={view === "pending"} onClick={() => setView("pending")} label="รออนุมัติ" count={pending.length} />
-        <ViewTab active={view === "current"} onClick={() => setView("current")} label="กำลังใช้งาน/จองอยู่" count={current.length} />
+        <ViewTab active={view === "current"} onClick={() => setView("current")} label="ต้องคืน / กำลังใช้งาน" count={current.length} warnCount={current.filter(isBookingOverdue).length} />
         <ViewTab active={view === "history-equipment"} onClick={() => setView("history-equipment")} label="ประวัติเครื่องมือ" count={historyEquipment.length} />
         <ViewTab active={view === "history-item"} onClick={() => setView("history-item")} label="ประวัติอุปกรณ์" count={historyItem.length} />
       </div>
@@ -2222,7 +2244,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
             rows={shown.map(bookingRow)}
             empty={
               view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
-              : view === "current" ? "ไม่มีรายการที่กำลังใช้งานหรือจองอยู่"
+              : view === "current" ? "ไม่มีรายการที่ต้องคืนหรือกำลังใช้งานอยู่"
               : view === "history-equipment" ? "ยังไม่มีประวัติเครื่องมือ"
               : "ยังไม่มีประวัติอุปกรณ์"
             }
@@ -3876,7 +3898,7 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
   );
 }
 
-function ViewTab({ active, onClick, label, count }) {
+function ViewTab({ active, onClick, label, count, warnCount = 0 }) {
   return (
     <button
       onClick={onClick}
@@ -3890,6 +3912,7 @@ function ViewTab({ active, onClick, label, count }) {
       }}
     >
       {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({count})</span>
+      {warnCount > 0 && <span style={S.navBadge}>เลยกำหนด {warnCount}</span>}
     </button>
   );
 }
