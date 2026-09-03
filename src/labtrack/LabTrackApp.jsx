@@ -5233,12 +5233,23 @@ button { cursor: pointer; }
      ใกล้ครบกำหนด / ล่าช้า): 5 cards, so keep them in one row on mobile too,
      shrunk the same compact/centered way as the booking summary cards. */
   .analysisOverviewGrid { grid-template-columns: repeat(5, 1fr) !important; gap: 6px !important; }
-  .analysisOverviewGrid .statCard { display: block !important; padding: 8px 4px !important; text-align: center !important; }
+  .analysisOverviewGrid .statCard {
+    display: flex !important; flex-direction: column !important;
+    align-items: center !important; justify-content: flex-start !important;
+    padding: 8px 4px !important; text-align: center !important;
+  }
   .analysisOverviewGrid .statIconTile { display: none !important; }
-  .analysisOverviewGrid .statTop { justify-content: center !important; gap: 3px !important; flex-wrap: wrap !important; }
+  /* Fixed min-height so a 1-line label (ล่าช้า) and 2-line labels
+     (ใกล้ครบกำหนด, กำลังวิเคราะห์) reserve the same vertical space —
+     otherwise the number below sits at a different height per card. */
+  .analysisOverviewGrid .statTop {
+    justify-content: center !important; align-items: flex-start !important;
+    gap: 2px !important; flex-wrap: wrap !important; min-height: 21px !important;
+    width: 100% !important;
+  }
   .analysisOverviewGrid .statTopIcon { display: inline-block !important; width: 13px !important; height: 13px !important; }
   .analysisOverviewGrid .statLabel { font-size: 9px !important; line-height: 1.15 !important; }
-  .analysisOverviewGrid .statValue { font-size: 16px !important; margin-top: 3px !important; }
+  .analysisOverviewGrid .statValue { font-size: 13px !important; margin-top: 2px !important; }
 
   /* Bookings page: let the alerts panel take the full width instead of
      staying pinned to its desktop sidebar width, and turn each grouped-
