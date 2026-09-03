@@ -4326,7 +4326,7 @@ function GroupedBookingTable({ cols, groups, empty }) {
         <tbody>
           {totalRows === 0 && <tr><td colSpan={cols.length}><EmptyState text={empty} /></td></tr>}
           {groups.flatMap((g, gi) => g.rows.length === 0 ? [] : [
-            <tr key={`h-${gi}`}>
+            <tr key={`h-${gi}`} className="ltGroupHeaderRow">
               <td colSpan={cols.length} style={{ padding: "9px 14px", fontSize: 12, fontWeight: 700, color: g.color, background: "#FAFBFC", borderBottom: "1px solid var(--line)" }}>
                 {g.label} ({g.rows.length})
               </td>
@@ -4354,24 +4354,27 @@ function BookingSummaryCards({ pendingCount, currentCount, overdueCount, nearest
     { label: "เกินกำหนดคืน", value: overdueCount, icon: AlertTriangle, tint: "#FBE9E4", color: "var(--red)", sub: worstOverdueDays ? `เกินกำหนด ${worstOverdueDays} วัน` : null },
   ];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px,1fr))", gap: 12 }}>
+    <div style={S.statGrid} className="statGrid">
       {cards.map((c, i) => {
         const Icon = c.icon;
         return (
-          <div key={i} style={S.statCard}>
-            <div style={S.statTop}>
-              <div style={{ width: 30, height: 30, borderRadius: 8, background: c.tint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <Icon size={15} color={c.color} />
-              </div>
-              <span style={S.statLabel}>{c.label}</span>
+          <div key={i} style={S.statCard} className="statCard">
+            <div className="statIconTile" style={{ width: 38, height: 38, borderRadius: 10, background: c.tint, display: "none", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Icon size={18} color={c.color} />
             </div>
-            <div style={S.statValue}>{c.value}</div>
-            <div style={S.statSub}>รายการ</div>
-            {c.sub && (
-              <div style={{ marginTop: 8, display: "inline-block", fontSize: 11, fontWeight: 600, color: c.color, background: c.tint, borderRadius: 8, padding: "3px 8px" }}>
-                {c.sub}
+            <div style={{ minWidth: 0 }}>
+              <div style={S.statTop} className="statTop">
+                <Icon size={16} color={c.color} className="statTopIcon" />
+                <span style={S.statLabel}>{c.label}</span>
               </div>
-            )}
+              <div style={S.statValue}>{c.value}</div>
+              <div style={S.statSub}>รายการ</div>
+              {c.sub && (
+                <div style={{ marginTop: 8, display: "inline-block", fontSize: 11, fontWeight: 600, color: c.color, background: c.tint, borderRadius: 8, padding: "3px 8px" }}>
+                  {c.sub}
+                </div>
+              )}
+            </div>
           </div>
         );
       })}
@@ -4384,7 +4387,7 @@ function BookingSummaryCards({ pendingCount, currentCount, overdueCount, nearest
 // require first finding it in the table below.
 function BookingAlertsPanel({ overdueItems, nearDueItems, onSeeAll, onItemAction }) {
   return (
-    <div style={{ width: "100%", maxWidth: 300, flexShrink: 0 }}>
+    <div style={{ width: "100%", maxWidth: 300, flexShrink: 0 }} className="bookingAlertsPanel">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, fontSize: 13.5 }}>
           <AlertTriangle size={15} color="var(--red)" /> แจ้งเตือน
@@ -5169,6 +5172,15 @@ button { cursor: pointer; }
   .statIconTile { display: flex !important; }
   .statTop { gap: 0 !important; }
   .statTopIcon { display: none !important; }
+
+  /* Bookings page: let the alerts panel take the full width instead of
+     staying pinned to its desktop sidebar width, and turn each grouped-
+     table section header into a plain block label instead of a table
+     cell — the rows below it are already collapsed into stacked cards
+     by the .ltTableRow rules above, so the header needs the same. */
+  .bookingAlertsPanel { max-width: 100% !important; }
+  .ltGroupHeaderRow, .ltGroupHeaderRow td { display: block !important; width: 100% !important; }
+  .ltGroupHeaderRow td { background: transparent !important; border: none !important; padding: 4px 2px 6px !important; }
 
   .ltBottomNav {
     display: flex !important;
