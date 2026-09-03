@@ -5239,15 +5239,16 @@ button { cursor: pointer; }
     padding: 8px 4px !important; text-align: center !important;
   }
   .analysisOverviewGrid .statIconTile { display: none !important; }
-  /* Fixed min-height so a 1-line label (ล่าช้า) and 2-line labels
-     (ใกล้ครบกำหนด, กำลังวิเคราะห์) reserve the same vertical space —
-     otherwise the number below sits at a different height per card. */
+  /* Icon stacked above the label (instead of side-by-side) with a
+     min-height sized for the tallest case (icon + 2-line label). Every
+     card — whether its label wraps to 1 or 2 lines — reserves the same
+     block height, so the number below always starts at the same y. */
   .analysisOverviewGrid .statTop {
-    justify-content: center !important; align-items: flex-start !important;
-    gap: 2px !important; flex-wrap: wrap !important; min-height: 21px !important;
-    width: 100% !important;
+    flex-direction: column !important; justify-content: flex-start !important;
+    align-items: center !important; gap: 2px !important; flex-wrap: nowrap !important;
+    min-height: 34px !important; width: 100% !important;
   }
-  .analysisOverviewGrid .statTopIcon { display: inline-block !important; width: 13px !important; height: 13px !important; }
+  .analysisOverviewGrid .statTopIcon { display: inline-block !important; width: 13px !important; height: 13px !important; flex-shrink: 0 !important; }
   .analysisOverviewGrid .statLabel { font-size: 9px !important; line-height: 1.15 !important; }
   .analysisOverviewGrid .statValue { font-size: 13px !important; margin-top: 2px !important; }
 
