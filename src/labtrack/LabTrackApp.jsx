@@ -5239,17 +5239,23 @@ button { cursor: pointer; }
     padding: 8px 4px !important; text-align: center !important;
   }
   .analysisOverviewGrid .statIconTile { display: none !important; }
-  /* Icon stacked above the label (instead of side-by-side) with a
-     min-height sized for the tallest case (icon + 2-line label). Every
-     card — whether its label wraps to 1 or 2 lines — reserves the same
-     block height, so the number below always starts at the same y. */
+  /* Icon stacked above the label. The label itself gets a FIXED height
+     (exactly 2 lines' worth, not just a minimum) and is vertically
+     centered inside it — so whether the text takes 1 or 2 lines, the
+     label block is always identically tall, and the number below it
+     always starts at the exact same y across all 5 cards. */
   .analysisOverviewGrid .statTop {
     flex-direction: column !important; justify-content: flex-start !important;
     align-items: center !important; gap: 2px !important; flex-wrap: nowrap !important;
-    min-height: 34px !important; width: 100% !important;
+    width: 100% !important;
   }
   .analysisOverviewGrid .statTopIcon { display: inline-block !important; width: 13px !important; height: 13px !important; flex-shrink: 0 !important; }
-  .analysisOverviewGrid .statLabel { font-size: 9px !important; line-height: 1.15 !important; }
+  .analysisOverviewGrid .statLabel {
+    font-size: 9px !important; line-height: 1.15 !important;
+    height: 21px !important; display: flex !important;
+    align-items: center !important; justify-content: center !important;
+    overflow: hidden !important;
+  }
   .analysisOverviewGrid .statValue { font-size: 13px !important; margin-top: 2px !important; }
 
   /* Bookings page: let the alerts panel take the full width instead of
