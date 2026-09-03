@@ -199,7 +199,7 @@ function AnalysisTrackView({ jobs }) {
 
       {jobs.length > 0 && (
         <>
-          <div style={S.statGrid} className="statGrid">
+          <div style={S.statGrid} className="statGrid analysisOverviewGrid">
             {[
               { label: "งานทั้งหมด", value: overview.total, icon: ClipboardList, color: "var(--teal)", tint: "#E9F1FB" },
               { label: "กำลังวิเคราะห์", value: overview.running, icon: FlaskConical, color: "var(--amber)", tint: "#FDF3E3" },
@@ -4396,7 +4396,7 @@ function BookingSummaryCards({ pendingCount, currentCount, overdueCount, nearest
     { label: "เกินกำหนดคืน", value: overdueCount, icon: AlertTriangle, tint: "#FBE9E4", color: "var(--red)", sub: worstOverdueDays ? `เกินกำหนด ${worstOverdueDays} วัน` : null },
   ];
   return (
-    <div style={S.statGrid} className="statGrid">
+    <div style={S.statGrid} className="statGrid bookingSummaryGrid">
       {cards.map((c, i) => {
         const Icon = c.icon;
         return (
@@ -4412,7 +4412,7 @@ function BookingSummaryCards({ pendingCount, currentCount, overdueCount, nearest
               <div style={S.statValue}>{c.value}</div>
               <div style={S.statSub}>รายการ</div>
               {c.sub && (
-                <div style={{ marginTop: 8, display: "inline-block", fontSize: 11, fontWeight: 600, color: c.color, background: c.tint, borderRadius: 8, padding: "3px 8px" }}>
+                <div className="bookingSummarySub" style={{ marginTop: 8, display: "inline-block", fontSize: 11, fontWeight: 600, color: c.color, background: c.tint, borderRadius: 8, padding: "3px 8px" }}>
                   {c.sub}
                 </div>
               )}
@@ -5214,6 +5214,31 @@ button { cursor: pointer; }
   .statIconTile { display: flex !important; }
   .statTop { gap: 0 !important; }
   .statTopIcon { display: none !important; }
+
+  /* Booking summary cards (รออนุมัติ / กำลังใช้งาน / เกินกำหนดคืน): only
+     ever 3 cards, so keep them in one row on mobile instead of wrapping —
+     shrink to a compact, centered mini-card rather than reusing the wider
+     icon-tile row style above. */
+  .bookingSummaryGrid { grid-template-columns: repeat(3, 1fr) !important; gap: 8px !important; }
+  .bookingSummaryGrid .statCard { display: block !important; padding: 10px 6px !important; text-align: center !important; }
+  .bookingSummaryGrid .statIconTile { display: none !important; }
+  .bookingSummaryGrid .statTop { justify-content: center !important; gap: 4px !important; flex-wrap: wrap !important; }
+  .bookingSummaryGrid .statTopIcon { display: inline-block !important; }
+  .bookingSummaryGrid .statLabel { font-size: 10.5px !important; line-height: 1.25 !important; }
+  .bookingSummaryGrid .statValue { font-size: 20px !important; margin-top: 4px !important; }
+  .bookingSummaryGrid .statSub { font-size: 10px !important; }
+  .bookingSummaryGrid .bookingSummarySub { font-size: 9.5px !important; padding: 2px 5px !important; margin-top: 5px !important; }
+
+  /* Analysis-overview cards (งานทั้งหมด / กำลังวิเคราะห์ / เสร็จสิ้นแล้ว /
+     ใกล้ครบกำหนด / ล่าช้า): 5 cards, so keep them in one row on mobile too,
+     shrunk the same compact/centered way as the booking summary cards. */
+  .analysisOverviewGrid { grid-template-columns: repeat(5, 1fr) !important; gap: 6px !important; }
+  .analysisOverviewGrid .statCard { display: block !important; padding: 8px 4px !important; text-align: center !important; }
+  .analysisOverviewGrid .statIconTile { display: none !important; }
+  .analysisOverviewGrid .statTop { justify-content: center !important; gap: 3px !important; flex-wrap: wrap !important; }
+  .analysisOverviewGrid .statTopIcon { display: inline-block !important; width: 13px !important; height: 13px !important; }
+  .analysisOverviewGrid .statLabel { font-size: 9px !important; line-height: 1.15 !important; }
+  .analysisOverviewGrid .statValue { font-size: 16px !important; margin-top: 3px !important; }
 
   /* Bookings page: let the alerts panel take the full width instead of
      staying pinned to its desktop sidebar width, and turn each grouped-
