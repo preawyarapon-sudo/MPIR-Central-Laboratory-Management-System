@@ -492,6 +492,13 @@ function isBookingCurrent(b) {
 function isBookingOverdue(b) {
   return b.type === "checkout" && b.status === "approved" && !b.returnedAt && b.dueBackDate && daysUntil(b.dueBackDate) < 0;
 }
+// Not yet overdue, but due back within `withinDays` — used to populate the
+// "ใกล้ถึงกำหนดคืน" (approaching due date) section of the alerts panel.
+function isBookingNearDue(b, withinDays = 2) {
+  if (!(b.type === "checkout" && b.status === "approved" && !b.returnedAt && b.dueBackDate)) return false;
+  const d = daysUntil(b.dueBackDate);
+  return d >= 0 && d <= withinDays;
+}
 // Human-readable one-line status of a piece of equipment right now, shown on
 // the equipment card/detail — e.g. "ว่าง", "ถูกยืมโดย สมชาย", "มีการจองล่วงหน้า".
 function equipmentBookingSummary(equipmentId, bookings) {
@@ -715,6 +722,19 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
     + alerts.lowChem.length + alerts.pendingBookings.length + alerts.overdueBookings.length;
 
   const visibleNav = restrictToBooking ? RESTRICTED_NAV : NAV;
+  // One-shot: when set, the Bookings tab (once mounted) jumps straight to
+  // this sub-view instead of its default "pending" — used by the global
+  // "ต้องคืน" reminder banner below so restricted accounts land exactly on
+  // their return list instead of just the tab's default sub-view.
+  const [bookingsFocusView, setBookingsFocusView] = useState(null);
+  // Restricted accounts' own currently-out items — computed here (not just
+  // inside BookingsTab) so the reminder can show on EVERY page they land on
+  // (their default tab is "ติดตามงานวิเคราะห์", not bookings), not only when
+  // they happen to have clicked into the booking page itself.
+  const myCurrentBookings = restrictToBooking
+    ? bookings.filter(b => isBookingCurrent(b) && (b.requestedByUsername || b.requestedBy) === currentUsername)
+    : [];
+  const myOverdueCount = myCurrentBookings.filter(isBookingOverdue).length;
   // Restricted accounts' sidebar badge must only ever count THIS account's
   // own pending requests — never the company-wide pending count — both to
   // match what the bookings page itself shows them, and so the badge never
@@ -791,6 +811,24 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
 
         {/* main */}
         <main style={S.main} className="ltMain">
+          {restrictToBooking && tab !== "bookings" && myCurrentBookings.length > 0 && (
+            <div
+              style={{
+                ...S.notesBox, marginBottom: 14, display: "flex", alignItems: "center",
+                justifyContent: "space-between", gap: 10, flexWrap: "wrap",
+                background: myOverdueCount > 0 ? "#FBE9E4" : S.notesBox.background,
+              }}
+            >
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: myOverdueCount > 0 ? "var(--red)" : "var(--ink)" }}>
+                {myOverdueCount > 0
+                  ? `คุณมี ${myCurrentBookings.length} รายการที่ต้องคืน (เลยกำหนดแล้ว ${myOverdueCount} รายการ)`
+                  : `คุณมี ${myCurrentBookings.length} รายการที่ต้องคืนหลังใช้เสร็จ`}
+              </span>
+              <button style={S.smallBtn} onClick={() => { setTab("bookings"); setBookingsFocusView("current"); }}>
+                ไปที่รายการที่ต้องคืน <ChevronRight size={13} />
+              </button>
+            </div>
+          )}
           {!restrictToBooking && tab === "dashboard" && (
             <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} />
           )}
@@ -805,7 +843,8 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           {tab === "bookings" && (
             <BookingsTab bookings={bookings} setBookings={persist.bookings} equipment={equipment} items={items} notify={notify}
               restrictToBooking={restrictToBooking} currentUsername={currentUsername} currentDisplayName={currentDisplayName}
-              embedExtras={!restrictToBooking} />
+              embedExtras={!restrictToBooking}
+              focusView={bookingsFocusView} onFocusHandled={() => setBookingsFocusView(null)} />
           )}
           {restrictToBooking && tab === "usageCalendar" && (
             <UsageCalendarTab bookings={bookings} equipment={equipment} items={items}
@@ -1967,12 +2006,23 @@ function ItemForm({ item, onCancel, onSave }) {
 // logged-in role gets to see (see restrictToBooking below). The name typed
 // into "ชื่อผู้ดำเนินการ" is recorded on the booking for an audit trail of
 // who approved/rejected/returned what.
-function BookingsTab({ bookings, setBookings, equipment, items = [], notify, restrictToBooking = false, currentUsername = "", currentDisplayName = "", embedExtras = false }) {
+function BookingsTab({ bookings, setBookings, equipment, items = [], notify, restrictToBooking = false, currentUsername = "", currentDisplayName = "", embedExtras = false, focusView = null, onFocusHandled }) {
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [view, setView] = useState("pending"); // "pending" | "current" | "history-equipment" | "history-item" | "calendar" | "catalog"
   const [showForm, setShowForm] = useState(false);
   const [actorName, setActorName] = useState("");
+
+  // One-shot external request (from the global reminder banner) to jump
+  // straight to a specific sub-view — e.g. landing directly on "current"
+  // instead of the default "pending" when someone taps "ไปที่รายการที่ต้องคืน"
+  // from another tab.
+  useEffect(() => {
+    if (focusView) {
+      setView(focusView);
+      onFocusHandled?.();
+    }
+  }, [focusView]);
 
   // Restricted (booking-only) accounts can see THAT other bookings exist
   // (via the conflict warning inside BookingForm, which always checks the
@@ -1997,6 +2047,18 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   const historyAll = ownOnly.filter(b => !isBookingCurrent(b) && b.status !== "pending").sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
   const historyEquipment = withMeta(historyAll.filter(b => b.assetType !== "item"));
   const historyItem = withMeta(historyAll.filter(b => b.assetType === "item"));
+
+  // Unfiltered (search/type filters don't apply) personal snapshot for the
+  // summary cards + alerts panel — these should always reflect the whole
+  // account, not just whatever's currently typed into the search box.
+  const ownCurrentAll = ownOnly.filter(isBookingCurrent);
+  const ownPendingAllCount = ownOnly.filter(b => b.status === "pending").length;
+  const ownOverdueAll = ownCurrentAll.filter(isBookingOverdue);
+  const ownNearDueAll = ownCurrentAll.filter(b => isBookingNearDue(b));
+  const ownNormalCurrentAll = ownCurrentAll.filter(b => !isBookingOverdue(b));
+  const ownDueDates = ownNormalCurrentAll.map(b => b.dueBackDate).filter(Boolean).sort();
+  const nearestDueLabel = ownDueDates.length ? fmtDate(ownDueDates[0]) : null;
+  const worstOverdueDays = ownOverdueAll.length ? Math.max(...ownOverdueAll.map(b => Math.abs(daysUntil(b.dueBackDate)))) : null;
 
   // Counts for the two merged read-mostly sub-pages below — these are
   // always company-wide (not ownOnly), since "what's busy right now" and
@@ -2131,6 +2193,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
         canApprove={!restrictToBooking}
         currentUsername={currentUsername}
         defaultActorName={actorName || currentDisplayName}
+        urgent={isBookingOverdue(b)}
         onApprove={(note, name) => approve(b, note, name)}
         onReject={(note, name) => reject(b, note, name)}
         onCancel={() => cancel(b)}
@@ -2149,27 +2212,26 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
           : "ขอใช้เครื่องมือแบบขอใช้งานทันทีหรือจองล่วงหน้า — ทุกคำขอต้องผ่านการอนุมัติก่อน"}
       />
 
-      {restrictToBooking && current.length > 0 && view !== "current" && (() => {
-        const overdueCount = current.filter(isBookingOverdue).length;
-        return (
-          <div
-            style={{
-              ...S.notesBox, marginBottom: 14, display: "flex", alignItems: "center",
-              justifyContent: "space-between", gap: 10, flexWrap: "wrap",
-              background: overdueCount > 0 ? "#FBE9E4" : S.notesBox.background,
-            }}
-          >
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: overdueCount > 0 ? "var(--red)" : "var(--ink)" }}>
-              {overdueCount > 0
-                ? `คุณมี ${current.length} รายการที่ต้องคืน (เลยกำหนดแล้ว ${overdueCount} รายการ)`
-                : `คุณมี ${current.length} รายการที่ต้องคืนหลังใช้เสร็จ`}
-            </span>
-            <button style={S.smallBtn} onClick={() => setView("current")}>
-              ไปที่รายการที่ต้องคืน <ChevronRight size={13} />
-            </button>
+      {restrictToBooking && (
+        <div style={{ display: "flex", gap: 18, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
+          <div style={{ flex: "1 1 480px" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>สรุปสถานะของฉัน</div>
+            <BookingSummaryCards
+              pendingCount={ownPendingAllCount}
+              currentCount={ownCurrentAll.length}
+              overdueCount={ownOverdueAll.length}
+              nearestDueLabel={nearestDueLabel}
+              worstOverdueDays={worstOverdueDays}
+            />
           </div>
-        );
-      })()}
+          <BookingAlertsPanel
+            overdueItems={ownOverdueAll}
+            nearDueItems={ownNearDueAll}
+            onSeeAll={() => setView("current")}
+            onItemAction={() => setView("current")}
+          />
+        </div>
+      )}
 
       {embedExtras && (
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -2239,16 +2301,26 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
             </button>
           </Toolbar>
 
-          <Table
-            cols={bookingCols}
-            rows={shown.map(bookingRow)}
-            empty={
-              view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
-              : view === "current" ? "ไม่มีรายการที่ต้องคืนหรือกำลังใช้งานอยู่"
-              : view === "history-equipment" ? "ยังไม่มีประวัติเครื่องมือ"
-              : "ยังไม่มีประวัติอุปกรณ์"
-            }
-          />
+          {view === "current" ? (
+            <GroupedBookingTable
+              cols={bookingCols}
+              groups={[
+                { label: "เกินกำหนดคืน", color: "var(--red)", rows: shown.filter(isBookingOverdue).map(bookingRow) },
+                { label: "กำลังใช้งาน / จองอยู่", color: "var(--teal-dark)", rows: shown.filter(b => !isBookingOverdue(b)).map(bookingRow) },
+              ]}
+              empty="ไม่มีรายการที่ต้องคืนหรือกำลังใช้งานอยู่"
+            />
+          ) : (
+            <Table
+              cols={bookingCols}
+              rows={shown.map(bookingRow)}
+              empty={
+                view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
+                : view === "history-equipment" ? "ยังไม่มีประวัติเครื่องมือ"
+                : "ยังไม่มีประวัติอุปกรณ์"
+              }
+            />
+          )}
         </>
       )}
 
@@ -2268,7 +2340,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   );
 }
 
-function BookingActions({ booking: b, canApprove, currentUsername, defaultActorName = "", onApprove, onReject, onCancel, onReturn, onDelete }) {
+function BookingActions({ booking: b, canApprove, currentUsername, defaultActorName = "", urgent = false, onApprove, onReject, onCancel, onReturn, onDelete }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmReturn, setConfirmReturn] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -2323,8 +2395,8 @@ function BookingActions({ booking: b, canApprove, currentUsername, defaultActorN
     if (!canMarkFinished) return null;
     return (
       <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-        <button style={S.smallBtn} onClick={() => setConfirmReturn(true)}>
-          <Undo2 size={13} /> {isItem ? "คืนอุปกรณ์แล้ว" : "ใช้งานเสร็จสิ้นแล้ว"}
+        <button style={urgent ? { ...S.smallBtn, background: "#FBE9E4", color: "var(--red)" } : S.smallBtn} onClick={() => setConfirmReturn(true)}>
+          <Undo2 size={13} /> {urgent ? "ดำเนินการคืน" : (isItem ? "คืนอุปกรณ์แล้ว" : "ใช้งานเสร็จสิ้นแล้ว")}
         </button>
         {confirmReturn && (
           <ReturnQtyDialog
@@ -4244,6 +4316,118 @@ function ModalFooter({ onCancel, onSave, disabled }) {
 }
 function Tag({ children, color }) {
   return <span style={{ ...S.tag, color, borderColor: color + "55", background: color + "14" }}>{children}</span>;
+}
+function GroupedBookingTable({ cols, groups, empty }) {
+  const totalRows = groups.reduce((n, g) => n + g.rows.length, 0);
+  return (
+    <div style={S.tableWrap} className="ltTableWrap">
+      <table style={S.table} className="ltTable">
+        <thead><tr>{cols.map((c, i) => <th key={i} style={S.th}>{c}</th>)}</tr></thead>
+        <tbody>
+          {totalRows === 0 && <tr><td colSpan={cols.length}><EmptyState text={empty} /></td></tr>}
+          {groups.flatMap((g, gi) => g.rows.length === 0 ? [] : [
+            <tr key={`h-${gi}`}>
+              <td colSpan={cols.length} style={{ padding: "9px 14px", fontSize: 12, fontWeight: 700, color: g.color, background: "#FAFBFC", borderBottom: "1px solid var(--line)" }}>
+                {g.label} ({g.rows.length})
+              </td>
+            </tr>,
+            ...g.rows.map((r, ri) => (
+              <tr key={`r-${gi}-${ri}`} style={S.tr} className="ltTableRow">
+                {r.map((c, ci) => (
+                  <td key={ci} style={S.td} data-label={cols[ci]} className={ci === 0 ? "ltTableTitleCell" : "ltTableCell"}>{c}</td>
+                ))}
+              </tr>
+            )),
+          ])}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+// Three at-a-glance counts for a restricted (customer) account's own
+// bookings: pending, currently out, and overdue — with the same nearest
+// due date / worst overdue-days hints shown as small pills.
+function BookingSummaryCards({ pendingCount, currentCount, overdueCount, nearestDueLabel, worstOverdueDays }) {
+  const cards = [
+    { label: "รออนุมัติ", value: pendingCount, icon: Clock, tint: "#FDF3E3", color: "var(--amber)", sub: null },
+    { label: "กำลังใช้งาน", value: currentCount, icon: ClipboardList, tint: "#E9F1FB", color: "var(--teal)", sub: nearestDueLabel ? `ต้องคืน ${nearestDueLabel}` : null },
+    { label: "เกินกำหนดคืน", value: overdueCount, icon: AlertTriangle, tint: "#FBE9E4", color: "var(--red)", sub: worstOverdueDays ? `เกินกำหนด ${worstOverdueDays} วัน` : null },
+  ];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px,1fr))", gap: 12 }}>
+      {cards.map((c, i) => {
+        const Icon = c.icon;
+        return (
+          <div key={i} style={S.statCard}>
+            <div style={S.statTop}>
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: c.tint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <Icon size={15} color={c.color} />
+              </div>
+              <span style={S.statLabel}>{c.label}</span>
+            </div>
+            <div style={S.statValue}>{c.value}</div>
+            <div style={S.statSub}>รายการ</div>
+            {c.sub && (
+              <div style={{ marginTop: 8, display: "inline-block", fontSize: 11, fontWeight: 600, color: c.color, background: c.tint, borderRadius: 8, padding: "3px 8px" }}>
+                {c.sub}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+// Right-side alert feed for a restricted account: every overdue booking gets
+// its own actionable card, plus a rollup of anything due soon (or a "nothing
+// upcoming" message when there's none) — so returning something doesn't
+// require first finding it in the table below.
+function BookingAlertsPanel({ overdueItems, nearDueItems, onSeeAll, onItemAction }) {
+  return (
+    <div style={{ width: "100%", maxWidth: 300, flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, fontSize: 13.5 }}>
+          <AlertTriangle size={15} color="var(--red)" /> แจ้งเตือน
+        </div>
+        <button onClick={onSeeAll} style={S.panelLink}>ดูทั้งหมด</button>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {overdueItems.map(b => (
+          <div key={b.id} style={{ background: "#FBE9E4", border: "1px solid #F3C7BA", borderRadius: 12, padding: "12px 14px" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <AlertTriangle size={15} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--red)" }}>เกินกำหนดคืน</div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 2, wordBreak: "break-word" }}>{b.equipmentName || b.equipmentCode}</div>
+                <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 2 }}>เกินกำหนด {Math.abs(daysUntil(b.dueBackDate))} วัน</div>
+              </div>
+            </div>
+            <button
+              style={{ ...S.ghostBtn, borderColor: "var(--red)", color: "var(--red)", width: "100%", marginTop: 10, justifyContent: "center", display: "flex" }}
+              onClick={() => onItemAction(b)}
+            >
+              ดำเนินการคืน
+            </button>
+          </div>
+        ))}
+        <div style={{ background: "#FDF3E3", border: "1px solid #F5DFAF", borderRadius: 12, padding: "12px 14px", display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <Clock size={15} color="var(--amber)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--amber)" }}>ใกล้ถึงกำหนดคืน</div>
+            {nearDueItems.length === 0 ? (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>ไม่มีรายการใกล้ถึงกำหนดคืน</div>
+            ) : (
+              nearDueItems.map(b => (
+                <div key={b.id} style={{ fontSize: 11.5, marginTop: 4, wordBreak: "break-word" }}>
+                  {b.equipmentName || b.equipmentCode} · เหลือ {daysUntil(b.dueBackDate)} วัน
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 function Table({ cols, rows, empty, onRowClick }) {
   return (
