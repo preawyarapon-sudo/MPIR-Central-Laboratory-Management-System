@@ -1,10 +1,10 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
-  LayoutGrid, ZoomIn
+  LayoutGrid, ZoomIn, QrCode
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -667,6 +667,13 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
     }
   }
   const [loading, setLoading] = useState(true);
+  // Set only when the page was opened via a scanned per-scale QR link
+  // (?tab=dailyCheck&scale=<id>) — lets DailyCheckTab jump straight to that
+  // scale and open today's check form instead of landing on the dropdown.
+  const [dailyCheckDeepLinkId] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("scale");
+  });
   const [equipment, setEquipment] = useState([]);
   const [dailyChecks, setDailyChecks] = useState([]);
   const [activities, setActivities] = useState([]);
@@ -862,7 +869,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
               bookings={bookings} setBookings={persist.bookings} items={items} notify={notify} />
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
-            <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} />
+            <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialScaleId={dailyCheckDeepLinkId} />
           )}
           {!restrictToBooking && tab === "items" && (
             <ItemsTab items={items} setItems={persist.items} bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
@@ -1776,14 +1783,42 @@ function SegToggle({ value, options, onChange }) {
     </div>
   );
 }
-function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify }) {
+function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialScaleId }) {
   const scales = equipment.filter(e => e.type === "เครื่องชั่ง").slice().sort((a, b) => alphaCompare(a.code, b.code));
   const [scaleId, setScaleId] = useState(scales[0]?.id || "");
   const [editing, setEditing] = useState(null);
+  const [showShare, setShowShare] = useState(false);
+  const deepLinkHandled = useRef(false);
 
   useEffect(() => {
-    if (!scales.find(s => s.id === scaleId)) setScaleId(scales[0]?.id || "");
-  }, [scales, scaleId]);
+    if (!scales.find(s => s.id === scaleId)) {
+      const fallback = (initialScaleId && scales.find(s => s.id === initialScaleId)) ? initialScaleId : (scales[0]?.id || "");
+      setScaleId(fallback);
+    }
+  }, [scales, scaleId, initialScaleId]);
+
+  // Opened from a scanned per-scale QR code: as soon as that scale's record
+  // is available, jump to it and open today's check form immediately —
+  // that's the whole point of the QR (scan -> fill in, no menu digging).
+  useEffect(() => {
+    if (deepLinkHandled.current || !initialScaleId) return;
+    const target = scales.find(s => s.id === initialScaleId);
+    if (!target) return;
+    deepLinkHandled.current = true;
+    setScaleId(target.id);
+    const priorChecks = dailyChecks
+      .filter(c => c.equipmentId === target.id)
+      .slice()
+      .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+    const prior = priorChecks[0];
+    setEditing({
+      id: uid(), equipmentId: target.id, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
+      condition: "", level: "", clean: "", zero: "",
+      stdWeight: prior ? String(prior.stdWeight) : "", reading: "",
+      tolerance: prior ? String(prior.tolerance) : "",
+      checkedBy: "", approvedBy: "", remarks: "",
+    });
+  }, [initialScaleId, scales, dailyChecks]);
 
   const scale = equipment.find(e => e.id === scaleId);
   const scaleChecks = dailyChecks
@@ -1802,7 +1837,7 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify }) {
 
   return (
     <div>
-      <TabHeader title="ตรวจเช็คเครื่องชั่งประจำวัน" sub="บันทึกผลตรวจสอบเครื่องชั่งแต่ละวัน คำนวณค่าเบี่ยงเบนและผลผ่าน/ไม่ผ่านให้อัตโนมัติ" />
+      <TabHeader title="ตรวจเช็คเครื่องชั่งประจำวัน" sub="บันทึกผลตรวจสอบเครื่องชั่งแต่ละวัน คำนวณค่าเบี่ยงเบนและผลผ่าน/ไม่ผ่านให้อัตโนมัติ — หรือสแกน QR ที่ติดบนเครื่องเพื่อเปิดตรงเครื่องนั้นได้เลย" />
 
       {scales.length === 0 ? (
         <EmptyState text={'ยังไม่มีเครื่องมือประเภท "เครื่องชั่ง" — เพิ่มเครื่องชั่งในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่'} />
@@ -1829,6 +1864,22 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify }) {
           </Toolbar>
 
           {scale && (
+            <div style={{ ...S.panel, display: "flex", gap: 14, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+              <Thumb src={scale.imageUrl} size={60} radius={10} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{scale.code}{scale.name ? ` — ${scale.name}` : ""}</div>
+                <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2, wordBreak: "break-word" }}>
+                  {[scale.brand, scale.model].filter(Boolean).join(" ") || "ไม่มีข้อมูลยี่ห้อ/รุ่น"}
+                  {scale.location ? ` · ${scale.location}` : ""}
+                </div>
+              </div>
+              <button style={S.ghostBtn} onClick={() => setShowShare(true)}>
+                <QrCode size={14} style={{ marginRight: 5 }} /> QR / ลิงก์เครื่องนี้
+              </button>
+            </div>
+          )}
+
+          {scale && (
             <div style={S.statGrid}>
               <div style={S.statCard}>
                 <div style={S.statTop}><Clock size={16} color="var(--teal)" /><span style={S.statLabel}>ตรวจล่าสุด</span></div>
@@ -1837,6 +1888,7 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify }) {
               </div>
               <div style={S.statCard}>
                 <div style={S.statTop}>
+
                   <CheckCircle2 size={16} color={lastCheck ? (lastCheck.result ? "var(--green)" : "var(--red)") : "var(--muted)"} />
                   <span style={S.statLabel}>ผลล่าสุด</span>
                 </div>
@@ -1867,6 +1919,7 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify }) {
       )}
 
       {editing && <DailyCheckForm entry={editing} scale={scale} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {showShare && scale && <ScaleQRLinkModal scale={scale} onClose={() => setShowShare(false)} />}
     </div>
   );
 }
@@ -1956,6 +2009,37 @@ function DailyCheckForm({ entry, scale, onCancel, onSave }) {
         onSave={() => onSave({ ...f, stdWeight: stdWeightNum, reading: readingNum, tolerance: toleranceNum, deviation, result })}
         disabled={!canSave}
       />
+    </Modal>
+  );
+}
+
+// Per-scale deep link (?tab=dailyCheck&scale=<id>) as a printable QR code —
+// scan it on the machine itself to land straight on that scale's info +
+// today's check form, skipping the dropdown. QR image comes from a public
+// QR-rendering endpoint (just an <img>, no extra dependency to install).
+function ScaleQRLinkModal({ scale, onClose }) {
+  const link = typeof window !== "undefined"
+    ? `${window.location.origin}${window.location.pathname}?tab=dailyCheck&scale=${scale.id}`
+    : "";
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(link)}`;
+  const [copied, setCopied] = useState(false);
+  function copyLink() {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); });
+    }
+  }
+  return (
+    <Modal onClose={onClose} title={`QR / ลิงก์ — ${scale.code}`}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        <img src={qrSrc} alt={`QR code for ${scale.code}`} width={200} height={200} style={{ borderRadius: 10, border: "1px solid var(--line)" }} />
+        <div style={{ fontSize: 12.5, color: "var(--muted)", textAlign: "center", maxWidth: 320 }}>
+          พิมพ์แล้วติดไว้ที่ตัว {scale.code} — สแกนเพื่อเปิดหน้าข้อมูลเครื่องและบันทึกเดลี่เช็คของเครื่องนี้ได้ทันที
+        </div>
+        <div style={{ display: "flex", gap: 8, width: "100%" }}>
+          <input readOnly value={link} style={{ ...S.input, flex: 1, fontFamily: "var(--font-mono)", fontSize: 11.5 }} onFocus={(e) => e.target.select()} />
+          <button style={S.ghostBtn} onClick={copyLink}>{copied ? "คัดลอกแล้ว" : "คัดลอก"}</button>
+        </div>
+      </div>
     </Modal>
   );
 }
