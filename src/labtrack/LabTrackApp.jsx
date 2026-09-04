@@ -581,6 +581,8 @@ const SEED_EQUIPMENT = [
   { id: "e4", code: "MPIR-133", name: "UV/VIS Spectrometer", type: "สเปกโตรมิเตอร์", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-09-01", notes: "" },
   { id: "e5", code: "CT-AIR-001", name: "Air conditioner (25,200 BTU)", type: "เครื่องปรับอากาศ", location: "C1", status: "active", lastCalibration: "", nextDue: "", notes: "ซ่อมน้ำแอร์หยด 22/7/2569" },
 ];
+const SEED_DAILY_CHECKS = [
+];
 const SEED_ACTIVITIES = [
   { id: "a1", equipmentId: "e4", date: "2025-07-15", type: "calibration", detail: "สอบเทียบประจำปี โดย บริษัท แอนนาไลท์ติคอลส์ เทคโนโลยี จำกัด", by: "" },
   { id: "a2", equipmentId: "e5", date: "2025-07-22", type: "repair", detail: "ซ่อมน้ำแอร์หยด", by: "" },
@@ -617,6 +619,7 @@ const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   REQUEST_ANALYSIS_LINK_ADMIN,
   { key: "equipment", label: "เครื่องมือ", icon: Wrench },
+  { key: "dailyCheck", label: "ตรวจเช็คเครื่องชั่งประจำวัน", icon: CheckCircle2 },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
@@ -665,6 +668,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   }
   const [loading, setLoading] = useState(true);
   const [equipment, setEquipment] = useState([]);
+  const [dailyChecks, setDailyChecks] = useState([]);
   const [activities, setActivities] = useState([]);
   const [items, setItems] = useState([]);
   const [bookings, setBookings] = useState([]);
@@ -676,8 +680,9 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
 
   useEffect(() => {
     (async () => {
-      const [eq, ac, it, bk, ch, co, pr] = await Promise.all([
+      const [eq, dc, ac, it, bk, ch, co, pr] = await Promise.all([
         loadList("equipment", SEED_EQUIPMENT),
+        loadList("dailyChecks", SEED_DAILY_CHECKS),
         loadList("activities", SEED_ACTIVITIES),
         loadList("items", SEED_ITEMS),
         loadList("bookings", SEED_BOOKINGS),
@@ -685,7 +690,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
         loadList("consumables", SEED_CONSUMABLES),
         loadList("purchaseRequests", []),
       ]);
-      setEquipment(eq); setActivities(ac); setItems(it); setBookings(bk); setChemicals(ch); setConsumables(co); setPurchaseRequests(pr);
+      setEquipment(eq); setDailyChecks(dc); setActivities(ac); setItems(it); setBookings(bk); setChemicals(ch); setConsumables(co); setPurchaseRequests(pr);
       setLoading(false);
     })();
   }, []);
@@ -706,6 +711,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
 
   const persist = {
     equipment: (list) => { setEquipment(list); saveList("equipment", list); },
+    dailyChecks: (list) => { setDailyChecks(list); saveList("dailyChecks", list); },
     activities: (list) => { setActivities(list); saveList("activities", list); },
     items: (list) => { setItems(list); saveList("items", list); },
     bookings: (list) => { setBookings(list); saveList("bookings", list); },
@@ -854,6 +860,9 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
             <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
               activities={activities} setActivities={persist.activities}
               bookings={bookings} setBookings={persist.bookings} items={items} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "dailyCheck" && (
+            <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} />
           )}
           {!restrictToBooking && tab === "items" && (
             <ItemsTab items={items} setItems={persist.items} bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
@@ -1726,6 +1735,197 @@ function ActivityForm({ initial, onCancel, onSave }) {
         </Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave({ ...f, id: initial?.id })} disabled={!f.detail} />
+    </Modal>
+  );
+}
+
+/* ================= DAILY SCALE CHECK (ตรวจเช็คเครื่องชั่งประจำวัน) ================= */
+// Per-equipment daily verification log for scales ("เครื่องชั่ง"). Deviation
+// and pass/fail are always computed at save time (never hand-typed), mirroring
+// how EquipmentTab auto-derives nextDue from lastCalibration + interval above.
+function dailyCheckPasses(c) {
+  return c.condition === "ปกติ" && c.level === "OK" && c.clean === "OK" && c.zero === "OK";
+}
+function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify }) {
+  const scales = equipment.filter(e => e.type === "เครื่องชั่ง").slice().sort((a, b) => alphaCompare(a.code, b.code));
+  const [scaleId, setScaleId] = useState(scales[0]?.id || "");
+  const [editing, setEditing] = useState(null);
+
+  useEffect(() => {
+    if (!scales.find(s => s.id === scaleId)) setScaleId(scales[0]?.id || "");
+  }, [scales, scaleId]);
+
+  const scale = equipment.find(e => e.id === scaleId);
+  const scaleChecks = dailyChecks
+    .filter(c => c.equipmentId === scaleId)
+    .slice()
+    .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const lastCheck = scaleChecks[0];
+
+  function upsert(entry) {
+    if (dailyChecks.find(c => c.id === entry.id)) setDailyChecks(dailyChecks.map(c => c.id === entry.id ? entry : c));
+    else setDailyChecks([entry, ...dailyChecks]);
+    notify("บันทึกผลการตรวจสอบแล้ว");
+    setEditing(null);
+  }
+  function remove(id) { setDailyChecks(dailyChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+
+  return (
+    <div>
+      <TabHeader title="ตรวจเช็คเครื่องชั่งประจำวัน" sub="บันทึกผลตรวจสอบเครื่องชั่งแต่ละวัน คำนวณค่าเบี่ยงเบนและผลผ่าน/ไม่ผ่านให้อัตโนมัติ" />
+
+      {scales.length === 0 ? (
+        <EmptyState text={'ยังไม่มีเครื่องมือประเภท "เครื่องชั่ง" — เพิ่มเครื่องชั่งในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่'} />
+      ) : (
+        <>
+          <Toolbar>
+            <select style={S.select} value={scaleId} onChange={e => setScaleId(e.target.value)}>
+              {scales.map(s => (
+                <option key={s.id} value={s.id}>{s.code}{s.name ? ` — ${s.name}` : ""}{s.location ? ` (${s.location})` : ""}</option>
+              ))}
+            </select>
+            <button
+              style={S.primaryBtn}
+              onClick={() => setEditing({
+                id: uid(), equipmentId: scaleId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
+                condition: "", level: "", clean: "", zero: "",
+                stdWeight: lastCheck ? String(lastCheck.stdWeight) : "", reading: "",
+                tolerance: lastCheck ? String(lastCheck.tolerance) : "",
+                checkedBy: "", approvedBy: "", remarks: "",
+              })}
+            >
+              <Plus size={15} /> บันทึกการตรวจวันนี้
+            </button>
+          </Toolbar>
+
+          {scale && (
+            <div style={S.statGrid}>
+              <div style={S.statCard}>
+                <div style={S.statTop}><Clock size={16} color="var(--teal)" /><span style={S.statLabel}>ตรวจล่าสุด</span></div>
+                <div style={S.statValue}>{lastCheck ? fmtDate(lastCheck.date) : "-"}</div>
+                <div style={S.statSub}>{lastCheck ? lastCheck.time : "ยังไม่มีการตรวจสอบ"}</div>
+              </div>
+              <div style={S.statCard}>
+                <div style={S.statTop}>
+                  <CheckCircle2 size={16} color={lastCheck ? (lastCheck.result ? "var(--green)" : "var(--red)") : "var(--muted)"} />
+                  <span style={S.statLabel}>ผลล่าสุด</span>
+                </div>
+                <div style={S.statValue}>{lastCheck ? (lastCheck.result ? "ผ่าน" : "ไม่ผ่าน") : "-"}</div>
+                <div style={S.statSub}>{lastCheck ? `เบี่ยงเบน ${lastCheck.deviation >= 0 ? "+" : ""}${Number(lastCheck.deviation).toFixed(4)} kg` : ""}</div>
+              </div>
+              <div style={S.statCard}>
+                <div style={S.statTop}><AlertTriangle size={16} color="var(--amber)" /><span style={S.statLabel}>เกณฑ์ยอมรับล่าสุด</span></div>
+                <div style={S.statValue}>{lastCheck ? `±${Number(lastCheck.tolerance).toFixed(4)}` : "-"}</div>
+                <div style={S.statSub}>กิโลกรัม</div>
+              </div>
+            </div>
+          )}
+
+          <Table
+            cols={["วันที่ / เวลา", "ผู้ตรวจสอบ", "ค่าเบี่ยงเบน", "ผล", ""]}
+            onRowClick={(i) => setEditing(scaleChecks[i])}
+            rows={scaleChecks.map(c => [
+              <div>{fmtDate(c.date)}<span style={{ color: "var(--muted)", marginLeft: 6, fontSize: 11.5 }}>{c.time}</span></div>,
+              c.checkedBy || "-",
+              <Mono>{(c.deviation >= 0 ? "+" : "") + Number(c.deviation).toFixed(4)} kg</Mono>,
+              <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>,
+              <RowActions onEdit={() => setEditing(c)} onDelete={() => remove(c.id)} confirmMessage="ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้" />,
+            ])}
+            empty="ยังไม่มีรายการตรวจสอบสำหรับเครื่องชั่งนี้"
+          />
+        </>
+      )}
+
+      {editing && <DailyCheckForm entry={editing} scale={scale} onCancel={() => setEditing(null)} onSave={upsert} />}
+    </div>
+  );
+}
+function DailyCheckForm({ entry, scale, onCancel, onSave }) {
+  const [f, setF] = useState(entry);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const stdWeightNum = Number(f.stdWeight);
+  const readingNum = Number(f.reading);
+  const toleranceNum = Number(f.tolerance);
+  const hasNumbers = f.stdWeight !== "" && f.reading !== "" && f.tolerance !== ""
+    && !isNaN(stdWeightNum) && !isNaN(readingNum) && !isNaN(toleranceNum);
+  const deviation = hasNumbers ? readingNum - stdWeightNum : null;
+  const flagsChosen = f.condition && f.level && f.clean && f.zero;
+  const result = (!flagsChosen || !hasNumbers) ? null
+    : (!dailyCheckPasses(f) ? false : Math.abs(deviation) <= toleranceNum);
+  const canSave = flagsChosen && hasNumbers && f.checkedBy.trim().length > 0;
+
+  return (
+    <Modal onClose={onCancel} title={`บันทึกการตรวจสอบ${scale ? ` — ${scale.code}` : ""}`} wide>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
+        <Field label="เวลา"><input type="time" style={S.input} value={f.time} onChange={set("time")} /></Field>
+
+        <Field label="สภาพทั่วไป">
+          <select style={S.input} value={f.condition} onChange={set("condition")}>
+            <option value="">เลือก...</option>
+            <option value="ปกติ">ปกติ</option>
+            <option value="ผิดปกติ">ผิดปกติ</option>
+          </select>
+        </Field>
+        <Field label="ระดับน้ำ (Level)">
+          <select style={S.input} value={f.level} onChange={set("level")}>
+            <option value="">เลือก...</option>
+            <option value="OK">OK</option>
+            <option value="NG">NG</option>
+          </select>
+        </Field>
+        <Field label="ความสะอาด (Clean)">
+          <select style={S.input} value={f.clean} onChange={set("clean")}>
+            <option value="">เลือก...</option>
+            <option value="OK">OK</option>
+            <option value="NG">NG</option>
+          </select>
+        </Field>
+        <Field label="ค่าศูนย์ (Zero = 0.00)">
+          <select style={S.input} value={f.zero} onChange={set("zero")}>
+            <option value="">เลือก...</option>
+            <option value="OK">OK</option>
+            <option value="NG">NG</option>
+          </select>
+        </Field>
+
+        <Field label="น้ำหนักมาตรฐานที่ใช้ (kg)">
+          <input type="number" step="any" style={{ ...S.input, fontFamily: "var(--font-mono)" }} value={f.stdWeight} onChange={set("stdWeight")} />
+        </Field>
+        <Field label="ค่าที่อ่านได้ (kg)">
+          <input type="number" step="any" style={{ ...S.input, fontFamily: "var(--font-mono)" }} value={f.reading} onChange={set("reading")} />
+        </Field>
+        <Field label="เกณฑ์ยอมรับ (±kg)">
+          <input type="number" step="any" style={{ ...S.input, fontFamily: "var(--font-mono)" }} value={f.tolerance} onChange={set("tolerance")} />
+        </Field>
+        <Field label="ค่าเบี่ยงเบน (คำนวณอัตโนมัติ)">
+          <div style={{ ...S.input, fontFamily: "var(--font-mono)", background: "#F5F8F7", color: deviation === null ? "var(--muted)" : "var(--ink)" }}>
+            {deviation === null ? "—" : (deviation >= 0 ? "+" : "") + deviation.toFixed(4)}
+          </div>
+        </Field>
+
+        <Field label="ผู้ตรวจสอบ"><input style={S.input} value={f.checkedBy} onChange={set("checkedBy")} /></Field>
+        <Field label="ผู้อนุมัติ"><input style={S.input} value={f.approvedBy} onChange={set("approvedBy")} /></Field>
+        <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.remarks} onChange={set("remarks")} /></Field>
+      </div>
+
+      <div style={{
+        marginTop: 14, borderRadius: 10, padding: "12px 14px",
+        background: result === null ? "#F5F8F7" : result ? "#E9F6EC" : "#FBE9E4",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+      }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: result === null ? "var(--muted)" : result ? "var(--green)" : "var(--red)" }}>
+          {result === null ? "กรอกข้อมูลให้ครบเพื่อคำนวณผล" : result ? "ผลการตรวจสอบ: ผ่าน (PASS)" : "ผลการตรวจสอบ: ไม่ผ่าน (FAIL)"}
+        </span>
+        {result === false && <AlertTriangle size={16} color="var(--red)" />}
+      </div>
+
+      <ModalFooter
+        onCancel={onCancel}
+        onSave={() => onSave({ ...f, stdWeight: stdWeightNum, reading: readingNum, tolerance: toleranceNum, deviation, result })}
+        disabled={!canSave}
+      />
     </Modal>
   );
 }
