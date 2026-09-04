@@ -619,7 +619,7 @@ const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   REQUEST_ANALYSIS_LINK_ADMIN,
   { key: "equipment", label: "เครื่องมือ", icon: Wrench },
-  { key: "dailyCheck", label: "ตรวจเช็คเครื่องชั่งประจำวัน", icon: CheckCircle2 },
+  { key: "dailyCheck", label: "Daily check", icon: CheckCircle2 },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
