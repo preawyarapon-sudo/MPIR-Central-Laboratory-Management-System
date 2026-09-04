@@ -1750,8 +1750,34 @@ function ActivityForm({ initial, onCancel, onSave }) {
 // Per-equipment daily verification log for scales ("เครื่องชั่ง"). Deviation
 // and pass/fail are always computed at save time (never hand-typed), mirroring
 // how EquipmentTab auto-derives nextDue from lastCalibration + interval above.
+//
+// Standard weight groups + acceptance range, per form RDI-LF-041-03
+// (บันทึกตรวจสอบเครื่องชั่งประจำวัน / DAILY CHECK): น้ำหนัก 10/50/200 กรัม,
+// each accepted within ±0.01 g of its nominal value. A reading is "ผ่าน"
+// only when it falls inside [min, max] — computed automatically, never
+// hand-ticked.
+const WEIGHT_GROUPS = [
+  { key: "w10", label: "น้ำหนัก 10 กรัม", standard: 10, min: 9.99, max: 10.01 },
+  { key: "w50", label: "น้ำหนัก 50 กรัม", standard: 50, min: 49.99, max: 50.01 },
+  { key: "w200", label: "น้ำหนัก 200 กรัม", standard: 200, min: 199.99, max: 200.01 },
+];
+// General condition flags (สภาพทั่วไป/ระดับน้ำ/ความสะอาด/ค่าศูนย์) — separate
+// from the weight-group readings below; both must be OK for an overall pass.
 function dailyCheckPasses(c) {
   return c.condition === "ปกติ" && c.level === "OK" && c.clean === "OK" && c.zero === "OK";
+}
+// Given raw entry.weights ({ w10, w50, w200 } strings) computes deviation +
+// pass/fail for every weight group. Used both when editing (live preview)
+// and to freeze the result onto the saved entry.
+function computeWeightResults(weights) {
+  return WEIGHT_GROUPS.map(g => {
+    const raw = weights?.[g.key] ?? "";
+    const num = Number(raw);
+    const has = raw !== "" && !isNaN(num);
+    const deviation = has ? num - g.standard : null;
+    const pass = has ? (num >= g.min && num <= g.max) : null;
+    return { ...g, raw, reading: has ? num : null, deviation, pass };
+  });
 }
 // Two/three-way button toggle (replaces a <select> for short, mutually
 // exclusive choices like OK/NG) — tone colors the active option so a bad
@@ -1783,6 +1809,21 @@ function SegToggle({ value, options, onChange }) {
     </div>
   );
 }
+// Compact per-weight-group pass/fail readout (10/50/200 g) for table rows —
+// each point is auto-derived, never hand-ticked.
+function WeightPointsMini({ results }) {
+  if (!results || results.length === 0) return <span style={{ color: "var(--muted)" }}>-</span>;
+  return (
+    <div style={{ display: "flex", gap: 10 }}>
+      {results.map(r => (
+        <span key={r.key} style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, fontFamily: "var(--font-mono)", color: r.pass ? "var(--ink)" : "var(--red)" }}>
+          {r.pass ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}
+          {r.standard}g
+        </span>
+      ))}
+    </div>
+  );
+}
 function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialScaleId }) {
   const scales = equipment.filter(e => e.type === "เครื่องชั่ง").slice().sort((a, b) => alphaCompare(a.code, b.code));
   const [scaleId, setScaleId] = useState(scales[0]?.id || "");
@@ -1806,19 +1847,13 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
     if (!target) return;
     deepLinkHandled.current = true;
     setScaleId(target.id);
-    const priorChecks = dailyChecks
-      .filter(c => c.equipmentId === target.id)
-      .slice()
-      .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
-    const prior = priorChecks[0];
     setEditing({
       id: uid(), equipmentId: target.id, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
       condition: "", level: "", clean: "", zero: "",
-      stdWeight: prior ? String(prior.stdWeight) : "", reading: "",
-      tolerance: prior ? String(prior.tolerance) : "",
+      weights: { w10: "", w50: "", w200: "" },
       checkedBy: "", approvedBy: "", remarks: "",
     });
-  }, [initialScaleId, scales, dailyChecks]);
+  }, [initialScaleId, scales]);
 
   const scale = equipment.find(e => e.id === scaleId);
   const scaleChecks = dailyChecks
@@ -1854,8 +1889,7 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
               onClick={() => setEditing({
                 id: uid(), equipmentId: scaleId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
                 condition: "", level: "", clean: "", zero: "",
-                stdWeight: lastCheck ? String(lastCheck.stdWeight) : "", reading: "",
-                tolerance: lastCheck ? String(lastCheck.tolerance) : "",
+                weights: { w10: "", w50: "", w200: "" },
                 checkedBy: "", approvedBy: "", remarks: "",
               })}
             >
@@ -1893,23 +1927,27 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
                   <span style={S.statLabel}>ผลล่าสุด</span>
                 </div>
                 <div style={S.statValue}>{lastCheck ? (lastCheck.result ? "ผ่าน" : "ไม่ผ่าน") : "-"}</div>
-                <div style={S.statSub}>{lastCheck ? `เบี่ยงเบน ${lastCheck.deviation >= 0 ? "+" : ""}${Number(lastCheck.deviation).toFixed(4)} kg` : ""}</div>
+                <div style={S.statSub}>
+                  {lastCheck ? `เบี่ยงเบนสูงสุด ±${Math.max(...lastCheck.weightResults.map(w => Math.abs(w.deviation ?? 0))).toFixed(4)} g` : ""}
+                </div>
               </div>
               <div style={S.statCard}>
-                <div style={S.statTop}><AlertTriangle size={16} color="var(--amber)" /><span style={S.statLabel}>เกณฑ์ยอมรับล่าสุด</span></div>
-                <div style={S.statValue}>{lastCheck ? `±${Number(lastCheck.tolerance).toFixed(4)}` : "-"}</div>
-                <div style={S.statSub}>กิโลกรัม</div>
+                <div style={S.statTop}><AlertTriangle size={16} color="var(--amber)" /><span style={S.statLabel}>จุดตรวจล่าสุด (10/50/200 ก.)</span></div>
+                <div style={S.statValue}>
+                  {lastCheck ? `${lastCheck.weightResults.filter(w => w.pass).length}/${lastCheck.weightResults.length}` : "-"}
+                </div>
+                <div style={S.statSub}>{lastCheck ? "จุดผ่านเกณฑ์" : ""}</div>
               </div>
             </div>
           )}
 
           <Table
-            cols={["วันที่ / เวลา", "ผู้ตรวจสอบ", "ค่าเบี่ยงเบน", "ผล", ""]}
+            cols={["วันที่ / เวลา", "ผู้ตรวจสอบ", "จุดตรวจ (10/50/200 ก.)", "ผล", ""]}
             onRowClick={(i) => setEditing(scaleChecks[i])}
             rows={scaleChecks.map(c => [
               <div>{fmtDate(c.date)}<span style={{ color: "var(--muted)", marginLeft: 6, fontSize: 11.5 }}>{c.time}</span></div>,
               c.checkedBy || "-",
-              <Mono>{(c.deviation >= 0 ? "+" : "") + Number(c.deviation).toFixed(4)} kg</Mono>,
+              <WeightPointsMini results={c.weightResults} />,
               <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>,
               <RowActions onEdit={() => setEditing(c)} onDelete={() => remove(c.id)} confirmMessage="ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้" />,
             ])}
@@ -1924,19 +1962,16 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
   );
 }
 function DailyCheckForm({ entry, scale, onCancel, onSave }) {
-  const [f, setF] = useState(entry);
+  const [f, setF] = useState(() => ({ weights: { w10: "", w50: "", w200: "" }, ...entry }));
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const setWeight = (key) => (e) => setF({ ...f, weights: { ...f.weights, [key]: e.target.value } });
 
-  const stdWeightNum = Number(f.stdWeight);
-  const readingNum = Number(f.reading);
-  const toleranceNum = Number(f.tolerance);
-  const hasNumbers = f.stdWeight !== "" && f.reading !== "" && f.tolerance !== ""
-    && !isNaN(stdWeightNum) && !isNaN(readingNum) && !isNaN(toleranceNum);
-  const deviation = hasNumbers ? readingNum - stdWeightNum : null;
+  const weightRows = computeWeightResults(f.weights);
+  const allWeightsEntered = weightRows.every(r => r.reading !== null);
   const flagsChosen = f.condition && f.level && f.clean && f.zero;
-  const result = (!flagsChosen || !hasNumbers) ? null
-    : (!dailyCheckPasses(f) ? false : Math.abs(deviation) <= toleranceNum);
-  const canSave = flagsChosen && hasNumbers && f.checkedBy.trim().length > 0;
+  const result = (!flagsChosen || !allWeightsEntered) ? null
+    : (!dailyCheckPasses(f) ? false : weightRows.every(r => r.pass));
+  const canSave = flagsChosen && allWeightsEntered && f.checkedBy.trim().length > 0;
 
   return (
     <Modal onClose={onCancel} title={`บันทึกการตรวจสอบ${scale ? ` — ${scale.code}` : ""}`} wide>
@@ -1973,18 +2008,30 @@ function DailyCheckForm({ entry, scale, onCancel, onSave }) {
           />
         </Field>
 
-        <Field label="น้ำหนักมาตรฐานที่ใช้ (kg)">
-          <input type="number" step="any" style={{ ...S.input, fontFamily: "var(--font-mono)" }} value={f.stdWeight} onChange={set("stdWeight")} />
-        </Field>
-        <Field label="ค่าที่อ่านได้ (kg)">
-          <input type="number" step="any" style={{ ...S.input, fontFamily: "var(--font-mono)" }} value={f.reading} onChange={set("reading")} />
-        </Field>
-        <Field label="เกณฑ์ยอมรับ (±kg)">
-          <input type="number" step="any" style={{ ...S.input, fontFamily: "var(--font-mono)" }} value={f.tolerance} onChange={set("tolerance")} />
-        </Field>
-        <Field label="ค่าเบี่ยงเบน (คำนวณอัตโนมัติ)">
-          <div style={{ ...S.input, fontFamily: "var(--font-mono)", background: "#F5F8F7", color: deviation === null ? "var(--muted)" : "var(--ink)" }}>
-            {deviation === null ? "—" : (deviation >= 0 ? "+" : "") + deviation.toFixed(4)}
+        <Field label="น้ำหนักมาตรฐาน / ค่าที่อ่านได้ (กรัม)" full plain>
+          <div style={{ border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr 0.9fr 0.7fr", gap: 0, background: "#F5F8F7", fontSize: 11, color: "var(--muted)", fontWeight: 600, padding: "7px 10px" }}>
+              <div>จุดตรวจ</div><div>เกณฑ์ยอมรับ</div><div>ค่าที่อ่านได้</div><div>เบี่ยงเบน</div><div>ผล</div>
+            </div>
+            {weightRows.map(r => (
+              <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr 0.9fr 0.7fr", gap: 0, alignItems: "center", padding: "7px 10px", borderTop: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 12.5 }}>{r.label}</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{r.min.toFixed(2)}–{r.max.toFixed(2)}</div>
+                <input
+                  type="number" step="any"
+                  style={{ ...S.input, fontFamily: "var(--font-mono)", padding: "6px 8px" }}
+                  value={f.weights[r.key]} onChange={setWeight(r.key)}
+                />
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: r.deviation === null ? "var(--muted)" : "var(--ink)", paddingLeft: 8 }}>
+                  {r.deviation === null ? "—" : (r.deviation >= 0 ? "+" : "") + r.deviation.toFixed(4)}
+                </div>
+                <div style={{ paddingLeft: 8 }}>
+                  {r.pass === null ? <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                    : r.pass ? <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--green)", fontSize: 12, fontWeight: 600 }}><CheckCircle2 size={13} /> ผ่าน</span>
+                    : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
+                </div>
+              </div>
+            ))}
           </div>
         </Field>
 
@@ -2006,7 +2053,7 @@ function DailyCheckForm({ entry, scale, onCancel, onSave }) {
 
       <ModalFooter
         onCancel={onCancel}
-        onSave={() => onSave({ ...f, stdWeight: stdWeightNum, reading: readingNum, tolerance: toleranceNum, deviation, result })}
+        onSave={() => onSave({ ...f, weightResults: weightRows, result })}
         disabled={!canSave}
       />
     </Modal>
