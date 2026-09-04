@@ -1746,6 +1746,36 @@ function ActivityForm({ initial, onCancel, onSave }) {
 function dailyCheckPasses(c) {
   return c.condition === "ปกติ" && c.level === "OK" && c.clean === "OK" && c.zero === "OK";
 }
+// Two/three-way button toggle (replaces a <select> for short, mutually
+// exclusive choices like OK/NG) — tone colors the active option so a bad
+// reading (NG / ผิดปกติ) is visible at a glance without opening a dropdown.
+function SegToggle({ value, options, onChange }) {
+  const toneColor = { ok: "var(--green)", bad: "var(--red)" };
+  const toneTint = { ok: "#E9F6EC", bad: "#FBE9E4" };
+  return (
+    <div style={{ display: "flex", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+      {options.map((opt, i) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            style={{
+              flex: 1, border: "none", borderLeft: i > 0 ? "1px solid var(--line)" : "none",
+              padding: "9px 6px", fontSize: 13, fontFamily: "inherit", cursor: "pointer",
+              background: active ? toneTint[opt.tone] : "#fff",
+              color: active ? toneColor[opt.tone] : "var(--muted)",
+              fontWeight: active ? 700 : 400,
+            }}
+          >
+            {opt.value}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify }) {
   const scales = equipment.filter(e => e.type === "เครื่องชั่ง").slice().sort((a, b) => alphaCompare(a.code, b.code));
   const [scaleId, setScaleId] = useState(scales[0]?.id || "");
@@ -1861,33 +1891,33 @@ function DailyCheckForm({ entry, scale, onCancel, onSave }) {
         <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="เวลา"><input type="time" style={S.input} value={f.time} onChange={set("time")} /></Field>
 
-        <Field label="สภาพทั่วไป">
-          <select style={S.input} value={f.condition} onChange={set("condition")}>
-            <option value="">เลือก...</option>
-            <option value="ปกติ">ปกติ</option>
-            <option value="ผิดปกติ">ผิดปกติ</option>
-          </select>
+        <Field label="สภาพทั่วไป" plain>
+          <SegToggle
+            value={f.condition}
+            options={[{ value: "ปกติ", tone: "ok" }, { value: "ผิดปกติ", tone: "bad" }]}
+            onChange={(v) => setF({ ...f, condition: v })}
+          />
         </Field>
-        <Field label="ระดับน้ำ (Level)">
-          <select style={S.input} value={f.level} onChange={set("level")}>
-            <option value="">เลือก...</option>
-            <option value="OK">OK</option>
-            <option value="NG">NG</option>
-          </select>
+        <Field label="ระดับน้ำ (Level)" plain>
+          <SegToggle
+            value={f.level}
+            options={[{ value: "OK", tone: "ok" }, { value: "NG", tone: "bad" }]}
+            onChange={(v) => setF({ ...f, level: v })}
+          />
         </Field>
-        <Field label="ความสะอาด (Clean)">
-          <select style={S.input} value={f.clean} onChange={set("clean")}>
-            <option value="">เลือก...</option>
-            <option value="OK">OK</option>
-            <option value="NG">NG</option>
-          </select>
+        <Field label="ความสะอาด (Clean)" plain>
+          <SegToggle
+            value={f.clean}
+            options={[{ value: "OK", tone: "ok" }, { value: "NG", tone: "bad" }]}
+            onChange={(v) => setF({ ...f, clean: v })}
+          />
         </Field>
-        <Field label="ค่าศูนย์ (Zero = 0.00)">
-          <select style={S.input} value={f.zero} onChange={set("zero")}>
-            <option value="">เลือก...</option>
-            <option value="OK">OK</option>
-            <option value="NG">NG</option>
-          </select>
+        <Field label="ค่าศูนย์ (Zero = 0.00)" plain>
+          <SegToggle
+            value={f.zero}
+            options={[{ value: "OK", tone: "ok" }, { value: "NG", tone: "bad" }]}
+            onChange={(v) => setF({ ...f, zero: v })}
+          />
         </Field>
 
         <Field label="น้ำหนักมาตรฐานที่ใช้ (kg)">
