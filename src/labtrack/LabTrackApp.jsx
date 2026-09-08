@@ -623,6 +623,7 @@ const NAV = [
   // below) — still its own top-level tab/URL, and stays a normal flat
   // item in the mobile bottom bar since that layout has no room to nest.
   { key: "dailyCheck", label: "Daily check", icon: CheckCircle2, parent: "equipment" },
+  { key: "dailyCheckMeter", label: "Daily check pH/EC", icon: CheckCircle2, parent: "equipment" },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
@@ -676,6 +677,11 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   const [dailyCheckDeepLinkId] = useState(() => {
     if (typeof window === "undefined") return null;
     return new URLSearchParams(window.location.search).get("scale");
+  });
+  // Same idea as above, but for the pH/EC meter QR link (?tab=dailyCheckMeter&meter=<id>).
+  const [dailyCheckMeterDeepLinkId] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("meter");
   });
   const [equipment, setEquipment] = useState([]);
   const [dailyChecks, setDailyChecks] = useState([]);
@@ -894,6 +900,9 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
             <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialScaleId={dailyCheckDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+          )}
+          {!restrictToBooking && tab === "dailyCheckMeter" && (
+            <MeterDailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialMeterId={dailyCheckMeterDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "items" && (
             <ItemsTab items={items} setItems={persist.items} bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
@@ -1966,15 +1975,18 @@ const PH_POINTS = [
   { key: "ph7", label: "pH 7.00", standard: 7.00, min: 6.95, max: 7.05 },
   { key: "ph10", label: "pH 10.00", standard: 10.00, min: 9.95, max: 10.05 },
 ];
+// OK/NG segmented-toggle items (same style as the scale form's สภาพทั่วไป
+// / ระดับน้ำ / ความสะอาด / ค่าศูนย์ fields), not checkboxes.
 const METER_PREUSE_ITEMS = [
   { key: "ready", label: "เครื่องอยู่ในสภาพพร้อมใช้งาน" },
   { key: "display", label: "หน้าจอแสดงผลปกติ" },
-  { key: "noDamage", label: "ไม่มีความเสียหายของสาย/หัววัด" },
-  { key: "probeClean", label: "ทำความสะอาดหัววัดเรียบร้อย" },
-  { key: "withinLimit", label: "ผลการตรวจสอบอยู่ในเกณฑ์ พร้อมใช้งาน" },
+  { key: "probeClean", label: "หัววัดทำความสะอาดเรียบร้อย" },
 ];
-function meterPreUsePasses(preUse) {
+function meterPreUseChosen(preUse) {
   return METER_PREUSE_ITEMS.every(i => preUse?.[i.key]);
+}
+function meterPreUsePasses(preUse) {
+  return METER_PREUSE_ITEMS.every(i => preUse?.[i.key] === "OK");
 }
 // pH readings vs the fixed ±0.05 buffer tolerance table above.
 function computePhResults(phReadings) {
@@ -2031,7 +2043,7 @@ function CheckPointsMini({ c }) {
 function blankMeterCheckEntry(equipmentId) {
   return {
     id: uid(), equipmentId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
-    preUse: { ready: false, display: false, noDamage: false, probeClean: false, withinLimit: false },
+    preUse: { ready: "", display: "", probeClean: "" },
     phReadings: { ph4: "", ph7: "", ph10: "" },
     ecStandard: "1413", ecReading: "",
     checkedBy: "", remarks: "",
@@ -2047,14 +2059,15 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
   const [f, setF] = useState(() => ({ ...blankMeterCheckEntry(entry?.equipmentId), ...entry }));
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setPh = (key) => (e) => setF({ ...f, phReadings: { ...f.phReadings, [key]: e.target.value } });
-  const togglePreUse = (key) => setF({ ...f, preUse: { ...f.preUse, [key]: !f.preUse[key] } });
+  const setPreUse = (key) => (v) => setF({ ...f, preUse: { ...f.preUse, [key]: v } });
 
   const phRows = isPh ? computePhResults(f.phReadings) : [];
   const ecResult = !isPh ? computeEcResult(f.ecStandard, f.ecReading) : null;
   const readingsComplete = isPh ? phRows.every(r => r.reading !== null) : (ecResult.standard !== null && ecResult.reading !== null);
+  const preUseChosen = meterPreUseChosen(f.preUse);
   const preUseOk = meterPreUsePasses(f.preUse);
-  const result = !readingsComplete ? null : (!preUseOk ? false : (isPh ? phRows.every(r => r.pass) : ecResult.pass));
-  const canSave = readingsComplete && f.checkedBy.trim().length > 0;
+  const result = (!readingsComplete || !preUseChosen) ? null : (!preUseOk ? false : (isPh ? phRows.every(r => r.pass) : ecResult.pass));
+  const canSave = readingsComplete && preUseChosen && f.checkedBy.trim().length > 0;
   const showApproveButton = isExisting && canApprove && !f.approved;
 
   return (
@@ -2063,16 +2076,15 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
         <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="เวลา"><input type="time" style={S.input} value={f.time} onChange={set("time")} /></Field>
 
-        <Field label="ก่อนใช้งานทุกครั้ง" full plain>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7, border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px" }}>
-            {METER_PREUSE_ITEMS.map(it => (
-              <label key={it.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
-                <input type="checkbox" checked={!!f.preUse[it.key]} onChange={() => togglePreUse(it.key)} />
-                {it.label}
-              </label>
-            ))}
-          </div>
-        </Field>
+        {METER_PREUSE_ITEMS.map(it => (
+          <Field key={it.key} label={it.label} plain>
+            <SegToggle
+              value={f.preUse[it.key]}
+              options={[{ value: "OK", tone: "ok" }, { value: "NG", tone: "bad" }]}
+              onChange={setPreUse(it.key)}
+            />
+          </Field>
+        ))}
 
         {isPh ? (
           <Field label="ค่า Buffer มาตรฐาน / ค่าที่อ่านได้ (pH)" full plain>
@@ -2478,6 +2490,187 @@ function ScaleQRLinkModal({ scale, onClose }) {
         <img src={qrSrc} alt={`QR code for ${scale.code}`} width={200} height={200} style={{ borderRadius: 10, border: "1px solid var(--line)" }} />
         <div style={{ fontSize: 12.5, color: "var(--muted)", textAlign: "center", maxWidth: 320 }}>
           พิมพ์แล้วติดไว้ที่ตัว {scale.code} — สแกนเพื่อเปิดหน้าข้อมูลเครื่องและบันทึกเดลี่เช็คของเครื่องนี้ได้ทันที
+        </div>
+        <div style={{ display: "flex", gap: 8, width: "100%" }}>
+          <input readOnly value={link} style={{ ...S.input, flex: 1, fontFamily: "var(--font-mono)", fontSize: 11.5 }} onFocus={(e) => e.target.select()} />
+          <button style={S.ghostBtn} onClick={copyLink}>{copied ? "คัดลอกแล้ว" : "คัดลอก"}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Combined pH/EC "Daily check" tab — same pattern as DailyCheckTab (scale),
+// but the dropdown lists both pH Meter and EC Meter equipment together;
+// MeterCheckForm itself already renders the right block (pH table vs EC
+// fields) based on the selected item's type, so this tab stays generic.
+function MeterDailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialMeterId, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+  const meters = equipment
+    .filter(e => e.type === "pH Meter" || e.type === "EC Meter")
+    .slice()
+    .sort((a, b) => alphaCompare(a.code, b.code));
+  const [meterId, setMeterId] = useState(meters[0]?.id || "");
+  const [editing, setEditing] = useState(null);
+  const [showShare, setShowShare] = useState(false);
+  const deepLinkHandled = useRef(false);
+
+  useEffect(() => {
+    if (!meters.find(m => m.id === meterId)) {
+      const fallback = (initialMeterId && meters.find(m => m.id === initialMeterId)) ? initialMeterId : (meters[0]?.id || "");
+      setMeterId(fallback);
+    }
+  }, [meters, meterId, initialMeterId]);
+
+  // Opened from a scanned per-meter QR code: jump straight to that meter
+  // and open today's check form, same idea as the scale QR flow.
+  useEffect(() => {
+    if (deepLinkHandled.current || !initialMeterId) return;
+    const target = meters.find(m => m.id === initialMeterId);
+    if (!target) return;
+    deepLinkHandled.current = true;
+    setMeterId(target.id);
+    setEditing(blankMeterCheckEntry(target.id));
+  }, [initialMeterId, meters]);
+
+  const meter = equipment.find(e => e.id === meterId);
+  const meterChecks = dailyChecks
+    .filter(c => c.equipmentId === meterId)
+    .slice()
+    .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const lastCheck = meterChecks[0];
+
+  function upsert(entry, message = "บันทึกผลการตรวจสอบแล้ว") {
+    if (dailyChecks.find(c => c.id === entry.id)) setDailyChecks(dailyChecks.map(c => c.id === entry.id ? entry : c));
+    else setDailyChecks([entry, ...dailyChecks]);
+    notify(message);
+    setEditing(null);
+  }
+  function remove(id) { setDailyChecks(dailyChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+
+  return (
+    <div>
+      <TabHeader title="ตรวจเช็คเครื่อง pH / EC ประจำวัน" sub="บันทึกผลตรวจสอบเครื่อง pH Meter และ EC Meter แต่ละวัน คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — หรือสแกน QR ที่ติดบนเครื่องเพื่อเปิดตรงเครื่องนั้นได้เลย" />
+
+      {meters.length === 0 ? (
+        <EmptyState text={'ยังไม่มีเครื่องมือประเภท "pH Meter" หรือ "EC Meter" — เพิ่มเครื่องในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่'} />
+      ) : (
+        <>
+          <Toolbar>
+            <select style={S.select} value={meterId} onChange={e => setMeterId(e.target.value)}>
+              {meters.map(m => (
+                <option key={m.id} value={m.id}>{m.code}{m.name ? ` — ${m.name}` : ""} · {m.type}{m.location ? ` (${m.location})` : ""}</option>
+              ))}
+            </select>
+            <button style={S.primaryBtn} onClick={() => setEditing(blankMeterCheckEntry(meterId))}>
+              <Plus size={15} /> บันทึกการตรวจวันนี้
+            </button>
+          </Toolbar>
+
+          {meter && (
+            <div style={{ ...S.panel, display: "flex", gap: 14, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+              <Thumb src={meter.imageUrl} size={60} radius={10} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{meter.code}{meter.name ? ` — ${meter.name}` : ""}</div>
+                <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2, wordBreak: "break-word" }}>
+                  {meter.type}{[meter.brand, meter.model].filter(Boolean).length ? ` · ${[meter.brand, meter.model].filter(Boolean).join(" ")}` : ""}
+                  {meter.location ? ` · ${meter.location}` : ""}
+                </div>
+              </div>
+              <button style={S.ghostBtn} onClick={() => setShowShare(true)}>
+                <QrCode size={14} style={{ marginRight: 5 }} /> QR / ลิงก์เครื่องนี้
+              </button>
+            </div>
+          )}
+
+          {meter && (
+            <div style={S.statGrid}>
+              <div style={S.statCard}>
+                <div style={S.statTop}><Clock size={16} color="var(--teal)" /><span style={S.statLabel}>ตรวจล่าสุด</span></div>
+                <div style={S.statValue}>{lastCheck ? fmtDate(lastCheck.date) : "-"}</div>
+                <div style={S.statSub}>{lastCheck ? lastCheck.time : "ยังไม่มีการตรวจสอบ"}</div>
+              </div>
+              <div style={S.statCard}>
+                <div style={S.statTop}>
+                  <CheckCircle2 size={16} color={lastCheck ? (lastCheck.result ? "var(--green)" : "var(--red)") : "var(--muted)"} />
+                  <span style={S.statLabel}>ผลล่าสุด</span>
+                </div>
+                <div style={S.statValue}>{lastCheck ? (lastCheck.result ? "ผ่าน" : "ไม่ผ่าน") : "-"}</div>
+                <div style={S.statSub}>
+                  {lastCheck ? <CheckPointsMini c={lastCheck} /> : ""}
+                </div>
+              </div>
+              <div style={S.statCard}>
+                <div style={S.statTop}><AlertTriangle size={16} color="var(--amber)" /><span style={S.statLabel}>ก่อนใช้งานทุกครั้ง</span></div>
+                <div style={S.statValue}>
+                  {lastCheck ? `${METER_PREUSE_ITEMS.filter(i => lastCheck.preUse?.[i.key] === "OK").length}/${METER_PREUSE_ITEMS.length}` : "-"}
+                </div>
+                <div style={S.statSub}>{lastCheck ? "ข้อผ่านเกณฑ์" : ""}</div>
+              </div>
+            </div>
+          )}
+
+          <Table
+            cols={["วันที่ / เวลา", "ผู้ตรวจสอบ", "จุดตรวจ", "ผล", "การอนุมัติ", ""]}
+            onRowClick={(i) => setEditing(meterChecks[i])}
+            rows={meterChecks.map(c => [
+              <div>{fmtDate(c.date)}<span style={{ color: "var(--muted)", marginLeft: 6, fontSize: 11.5 }}>{c.time}</span></div>,
+              c.checkedBy || "-",
+              <CheckPointsMini c={c} />,
+              <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>,
+              c.approved
+                ? <Tag color="var(--green)">อนุมัติแล้ว{c.approvedByName ? ` · ${c.approvedByName}` : ""}</Tag>
+                : <Tag color="var(--amber)">รออนุมัติ</Tag>,
+              <RowActions onEdit={() => setEditing(c)} onDelete={() => remove(c.id)} confirmMessage="ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้" />,
+            ])}
+            empty="ยังไม่มีรายการตรวจสอบสำหรับเครื่องนี้"
+          />
+        </>
+      )}
+
+      {editing && (
+        <MeterCheckForm
+          entry={editing}
+          equip={meter}
+          isExisting={dailyChecks.some(c => c.id === editing.id)}
+          canApprove={canApprove}
+          currentUsername={currentUsername}
+          currentDisplayName={currentDisplayName}
+          onCancel={() => setEditing(null)}
+          onSave={upsert}
+          onApprove={(entry) => {
+            upsert({
+              ...entry,
+              approved: true,
+              approvedByName: currentDisplayName || currentUsername,
+              approvedByUsername: currentUsername,
+              approvedAt: new Date().toISOString(),
+            }, "อนุมัติรายการเรียบร้อยแล้ว");
+          }}
+        />
+      )}
+      {showShare && meter && <MeterQRLinkModal meter={meter} onClose={() => setShowShare(false)} />}
+    </div>
+  );
+}
+// Per-meter deep link (?tab=dailyCheckMeter&meter=<id>) as a printable QR
+// code — same idea as ScaleQRLinkModal, for pH/EC meters.
+function MeterQRLinkModal({ meter, onClose }) {
+  const link = typeof window !== "undefined"
+    ? `${window.location.origin}${window.location.pathname}?tab=dailyCheckMeter&meter=${meter.id}`
+    : "";
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(link)}`;
+  const [copied, setCopied] = useState(false);
+  function copyLink() {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); });
+    }
+  }
+  return (
+    <Modal onClose={onClose} title={`QR / ลิงก์ — ${meter.code}`}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        <img src={qrSrc} alt={`QR code for ${meter.code}`} width={200} height={200} style={{ borderRadius: 10, border: "1px solid var(--line)" }} />
+        <div style={{ fontSize: 12.5, color: "var(--muted)", textAlign: "center", maxWidth: 320 }}>
+          พิมพ์แล้วติดไว้ที่ตัว {meter.code} — สแกนเพื่อเปิดหน้าข้อมูลเครื่องและบันทึกเดลี่เช็คของเครื่องนี้ได้ทันที
         </div>
         <div style={{ display: "flex", gap: 8, width: "100%" }}>
           <input readOnly value={link} style={{ ...S.input, flex: 1, fontFamily: "var(--font-mono)", fontSize: 11.5 }} onFocus={(e) => e.target.select()} />
