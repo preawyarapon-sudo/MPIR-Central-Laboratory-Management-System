@@ -118,15 +118,17 @@ const ACCOUNTS = [
 
 const SESSION_KEY = "mpirLabSession";
 
-// A scanned equipment QR code links to ?tab=dailyCheck&equip=<id> (see
-// EquipQRLinkModal in LabTrackApp.jsx). Anyone who opens that link — with no
-// account and no session — should land straight on the Daily check page
-// instead of a login wall, but touch nothing else in the app. This only
-// checks the URL, never the current session, so a signed-in user's own
-// ?tab=dailyCheck reload still goes through their normal session as before.
-function isGuestDailyCheckLink() {
-  if (typeof window === "undefined") return false;
-  return new URLSearchParams(window.location.search).get("tab") === "dailyCheck";
+// A scanned equipment QR code links to either ?tab=dailyCheck&equip=<id> or
+// ?tab=equipmentView&equip=<id> (see EquipQRLinkModal in LabTrackApp.jsx).
+// Anyone who opens either link — with no account and no session — should
+// land straight on that one page instead of a login wall, and touch nothing
+// else in the app. This only checks the URL, never the current session, so
+// a signed-in user's own reload of either link still goes through their
+// normal session as before.
+function guestLinkTab() {
+  if (typeof window === "undefined") return null;
+  const tab = new URLSearchParams(window.location.search).get("tab");
+  return tab === "dailyCheck" || tab === "equipmentView" ? tab : null;
 }
 
 function loadSession() {
@@ -269,9 +271,12 @@ export default function App() {
   }, [session]);
 
   // Guest access: no session, but the URL is a scanned equipment QR link —
-  // skip the login wall entirely and drop straight into a Daily-check-only
-  // view of LabTrack (no other tab, no other page, and no account created).
-  if (!session && isGuestDailyCheckLink()) {
+  // skip the login wall entirely and drop straight into a single-page view
+  // of LabTrack (Daily check, or read-only equipment info/history) — no
+  // other tab, no other page, and no account created.
+  const guestTab = !session ? guestLinkTab() : null;
+  if (guestTab) {
+    const isView = guestTab === "equipmentView";
     return (
       <div style={styles.page} className="appPage">
         <style>{`
@@ -285,7 +290,9 @@ export default function App() {
             <img src="/logo.png" alt="MPIR Central Lab" style={styles.logo} />
             <div>
               <div style={styles.brandName}>MPIR Central Lab</div>
-              <div style={styles.brandSub}>Daily check · โหมดผู้เยี่ยมชม (ไม่ต้องเข้าสู่ระบบ)</div>
+              <div style={styles.brandSub}>
+                {isView ? "ข้อมูลเครื่องมือ · โหมดผู้เยี่ยมชม (ไม่ต้องเข้าสู่ระบบ)" : "Daily check · โหมดผู้เยี่ยมชม (ไม่ต้องเข้าสู่ระบบ)"}
+              </div>
             </div>
           </div>
           <div style={styles.userBox}>
@@ -306,7 +313,13 @@ export default function App() {
           </div>
         </div>
         <div style={styles.content}>
-          <LabTrackApp restrictToDailyCheck currentUsername="" currentDisplayName="ผู้เยี่ยมชม (สแกน QR)" canApprove={false} />
+          <LabTrackApp
+            restrictToDailyCheck={!isView}
+            restrictToEquipmentView={isView}
+            currentUsername=""
+            currentDisplayName="ผู้เยี่ยมชม (สแกน QR)"
+            canApprove={false}
+          />
         </div>
       </div>
     );
