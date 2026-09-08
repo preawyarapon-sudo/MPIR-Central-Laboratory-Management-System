@@ -14,11 +14,16 @@ const TABS = [
 // This only gates the UI in the browser — it does NOT restrict who can read
 // or write the underlying data at the storage layer (see notes in README).
 // Roles:
-//   "admin"   — full access to every tab (both LabTrack and Analysis), same
-//               as the original shared login.
-//   "booking" — LabTrack only, and inside LabTrack restricted to just the
-//               "จอง/ยืมเครื่องมือ" (equipment booking) tab. Cannot see
-//               equipment/chemicals/consumables/PR/reports or Analysis at all.
+//   "admin"    — full access to every tab (both LabTrack and Analysis), same
+//                as the original shared login.
+//   "approver" — same full access as "admin" (every tab, both apps), but is
+//                specifically one of the named main approvers: these are the
+//                accounts meant to click "อนุมัติ" (approve) on daily scale
+//                checks and other approval steps, distinct from ordinary
+//                booking-only staff.
+//   "booking"  — LabTrack only, and inside LabTrack restricted to just the
+//                "จอง/ยืมเครื่องมือ" (equipment booking) tab. Cannot see
+//                equipment/chemicals/consumables/PR/reports or Analysis at all.
 const ACCOUNTS = [
   {
     username: import.meta.env.VITE_APP_USERNAME || "mpirlab",
@@ -38,7 +43,7 @@ const ACCOUNTS = [
   { username: "somwunga", password: "mpir1234", role: "booking", name: "Somwung Anusonpornperm" },
   { username: "nuchnichap", password: "mpir1234", role: "booking", name: "Nuchnicha Phaeon" },
   { username: "chaiwatn", password: "mpir1234", role: "booking", name: "Chaiwat Ngasan" },
-  { username: "pimchanokb", password: "mpir1234", role: "booking", name: "Pimchanok Busayapongchai" },
+  { username: "pimchanokb", password: "mpir1234", role: "approver", name: "Pimchanok Busayapongchai" },
   { username: "jirachayak", password: "mpir1234", role: "booking", name: "Jirachaya Klisumalee" },
   { username: "pisittineec", password: "mpir1234", role: "booking", name: "Pisittinee Chapanya" },
   { username: "varinthonj", password: "mpir1234", role: "booking", name: "Varinthon Jarnkoon" },
@@ -95,7 +100,7 @@ const ACCOUNTS = [
   { username: "thipphawanw", password: "mpir1234", role: "booking", name: "Thipphawan Wongfaideang" },
   { username: "chontichan", password: "mpir1234", role: "booking", name: "Chonticha Naeoaolo" },
   { username: "ponchaiw", password: "mpir1234", role: "booking", name: "Ponchai Wawilai" },
-  { username: "yaraponp", password: "mpir1234", role: "booking", name: "Yarapon Puttakot" },
+  { username: "yaraponp", password: "mpir1234", role: "approver", name: "Yarapon Puttakot" },
   { username: "sasipimf", password: "mpir1234", role: "booking", name: "Sasipim Foisoongnern" },
   { username: "thimphilatchanantl", password: "mpir1234", role: "booking", name: "Thimphilatchanant Lakool" },
   { username: "sarawutc", password: "mpir1234", role: "booking", name: "Sarawut Chuayaurachon" },
@@ -106,7 +111,7 @@ const ACCOUNTS = [
   { username: "butsabawany", password: "mpir1234", role: "booking", name: "Butsabawan Yenkhan" },
   { username: "noppamasc", password: "mpir1234", role: "booking", name: "Noppamas Chantawan" },
   { username: "kanokkans", password: "mpir1234", role: "booking", name: "Kanokkan Sriwaiyaphram" },
-  { username: "thidarati", password: "mpir1234", role: "booking", name: "Thidarat Intakham" },
+  { username: "thidarati", password: "mpir1234", role: "approver", name: "Thidarat Intakham" },
   { username: "panitk", password: "mpir1234", role: "booking", name: "Panit Kitsubun" },
   { username: "suteek", password: "mpir1234", role: "booking", name: "Sutee Kiddee" },
 ];
@@ -257,6 +262,7 @@ export default function App() {
   }
 
   const isBookingOnly = session.role === "booking";
+  const canApprove = session.role === "admin" || session.role === "approver";
   const visibleTabs = isBookingOnly ? TABS.filter(t => t.key === "labtrack") : TABS;
   const activeSection = isBookingOnly ? "labtrack" : section;
 
@@ -314,7 +320,7 @@ export default function App() {
       </div>
 
       <div style={styles.content}>
-        {activeSection === "labtrack" && <LabTrackApp restrictToBooking={isBookingOnly} currentUsername={session.username} currentDisplayName={session.name} />}
+        {activeSection === "labtrack" && <LabTrackApp restrictToBooking={isBookingOnly} currentUsername={session.username} currentDisplayName={session.name} canApprove={canApprove} />}
         {activeSection === "analysis" && !isBookingOnly && <AnalysisApp />}
       </div>
     </div>
