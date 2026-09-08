@@ -644,19 +644,21 @@ const RESTRICTED_NAV = [
   { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
 ];
 
-export default function App({ restrictToBooking = false, restrictToDailyCheck = false, currentUsername = "", currentDisplayName = "", canApprove = false }) {
+export default function App({ restrictToBooking = false, restrictToDailyCheck = false, restrictToEquipmentView = false, currentUsername = "", currentDisplayName = "", canApprove = false }) {
   // Which tab loads first, and stays after a refresh:
   // - Default (no ?tab= yet): restricted accounts land on "ติดตามงานวิเคราะห์"
   //   (now the featured/first item), everyone else on the dashboard.
   // - If the URL already has a valid ?tab=, that wins instead — this is what
   //   makes reloading the page (or sharing a link to a specific page) land
   //   back on the same tab instead of always bouncing to the default.
-  // - Guest access (restrictToDailyCheck, e.g. someone who scanned an
-  //   equipment's QR code without an account): always "dailyCheck", and no
-  //   other tab is reachable — see visibleNav below.
-  const defaultTab = restrictToDailyCheck ? "dailyCheck" : restrictToBooking ? "analysisTracking" : "dashboard";
+  // - Guest access (restrictToDailyCheck / restrictToEquipmentView, e.g.
+  //   someone who scanned an equipment's QR code without an account): always
+  //   that one tab, and no other tab is reachable — see visibleNav below.
+  const defaultTab = restrictToDailyCheck ? "dailyCheck" : restrictToEquipmentView ? "equipmentView" : restrictToBooking ? "analysisTracking" : "dashboard";
   const allowedTabKeys = restrictToDailyCheck
     ? ["dailyCheck"]
+    : restrictToEquipmentView
+    ? ["equipmentView"]
     : (restrictToBooking ? RESTRICTED_NAV : NAV).filter(n => !n.external).map(n => n.key);
   const [tab, setTabState] = useState(() => {
     if (typeof window === "undefined") return defaultTab;
@@ -675,12 +677,13 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
     }
   }
   const [loading, setLoading] = useState(true);
-  // Set only when the page was opened via a scanned per-equipment QR link
-  // (?tab=dailyCheck&equip=<id>) — lets DailyCheckTab jump straight to that
-  // equipment and open today's check form instead of landing on the
-  // dropdown. Also reads the older ?scale= / ?meter= params so any labels
-  // printed before the scale and pH/EC tabs were merged still work.
-  const [dailyCheckDeepLinkId] = useState(() => {
+  // Set whenever the page was opened via a scanned per-equipment QR link
+  // that carries an ?equip=<id> — either the Daily check QR
+  // (?tab=dailyCheck&equip=<id>) or the newer read-only equipment-history QR
+  // (?tab=equipmentView&equip=<id>). Also reads the older ?scale= / ?meter=
+  // params so any labels printed before the scale and pH/EC tabs were
+  // merged still work.
+  const [equipDeepLinkId] = useState(() => {
     if (typeof window === "undefined") return null;
     const params = new URLSearchParams(window.location.search);
     return params.get("equip") || params.get("scale") || params.get("meter");
@@ -765,9 +768,9 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
 
   // Guest access gets no nav at all — the sidebar/bottom-bar rendering below
   // already hides itself whenever visibleNav.length <= 1, so this alone
-  // keeps a guest confined to the single Daily check page with no other tab
-  // ever a click away.
-  const visibleNav = restrictToDailyCheck ? [] : restrictToBooking ? RESTRICTED_NAV : NAV;
+  // keeps a guest confined to their single page (Daily check, or read-only
+  // equipment history) with no other tab ever a click away.
+  const visibleNav = (restrictToDailyCheck || restrictToEquipmentView) ? [] : restrictToBooking ? RESTRICTED_NAV : NAV;
   // One-shot: when set, the Bookings tab (once mounted) jumps straight to
   // this sub-view instead of its default "pending" — used by the global
   // "ต้องคืน" reminder banner below so restricted accounts land exactly on
@@ -871,6 +874,8 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
           <div style={S.sidebarFoot} className="ltSidebarFoot">
             {restrictToDailyCheck
               ? "โหมดผู้เยี่ยมชม: เข้าถึงได้เฉพาะหน้า Daily check เท่านั้น (ไม่ต้องเข้าสู่ระบบ)"
+              : restrictToEquipmentView
+              ? "โหมดผู้เยี่ยมชม: ดูข้อมูลและประวัติของเครื่องมือนี้ได้อย่างเดียว (ไม่ต้องเข้าสู่ระบบ)"
               : restrictToBooking
               ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน, รายการที่ยืมได้ และติดตามงานวิเคราะห์"
               : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
@@ -909,7 +914,15 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
               canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
-            <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialCheckId={dailyCheckDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+            <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialCheckId={equipDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+          )}
+          {restrictToEquipmentView && tab === "equipmentView" && (
+            <EquipmentGuestView
+              equip={equipment.find(e => e.id === equipDeepLinkId)}
+              activities={activities.filter(a => a.equipmentId === equipDeepLinkId).slice().sort((a, b) => b.date.localeCompare(a.date))}
+              dailyChecks={dailyChecks.filter(c => c.equipmentId === equipDeepLinkId)}
+              bookings={bookings.filter(b => b.equipmentId === equipDeepLinkId).slice().sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""))}
+            />
           )}
           {!restrictToBooking && tab === "items" && (
             <ItemsTab items={items} setItems={persist.items} bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
@@ -1566,6 +1579,7 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDeleteAct, setConfirmDeleteAct] = useState(null);
   const [showDisable, setShowDisable] = useState(false);
+  const [showShareView, setShowShareView] = useState(false);
   const [dailyCheckEntry, setDailyCheckEntry] = useState(null);
   // Daily check has dedicated forms for เครื่องชั่ง (weight-deviation check)
   // and for pH Meter / EC Meter (buffer / standard-solution check, per the
@@ -1676,6 +1690,7 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
                 <AlertTriangle size={13} /> ปิดใช้งานชั่วคราว
               </button>
             )}
+            <button style={S.smallBtn} onClick={() => setShowShareView(true)}><QrCode size={13} /> QR ดูข้อมูล</button>
             <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
             <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
           </div>
@@ -1791,6 +1806,7 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
           onConfirm={(reason) => { setShowDisable(false); onSetAvailability(true, reason); }}
         />
       )}
+      {showShareView && <EquipQRLinkModal equip={item} mode="equipmentView" onClose={() => setShowShareView(false)} />}
       {confirmDelete && (
         <ConfirmDialog
           message={`ต้องการลบเครื่องมือ ${item.code} · ${item.name} ใช่ไหม การลบไม่สามารถกู้คืนได้`}
@@ -2502,14 +2518,20 @@ function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, 
   );
 }
 
-// Per-equipment deep link (?tab=dailyCheck&equip=<id>) as a printable QR
-// code — scan it on the machine itself to land straight on that item's
-// info + today's check form (right shape for its type), skipping the
-// dropdown. QR image comes from a public QR-rendering endpoint (just an
-// <img>, no extra dependency to install).
-function EquipQRLinkModal({ equip, onClose }) {
+// Per-equipment deep link, printed as a QR code and stuck on the machine
+// itself. Two flavours share this one modal, picked by `mode`:
+//  - "dailyCheck" (?tab=dailyCheck&equip=<id>): jumps straight to that
+//    item's info + today's check form (right shape for its type).
+//  - "equipmentView" (?tab=equipmentView&equip=<id>): opens a read-only
+//    info + history card for the item — no daily check form, no edit
+//    buttons, nothing that changes data.
+// Both skip login entirely (see the guest branch in the top-level App.jsx)
+// and are otherwise the same as scanning a link shared by URL. QR image
+// comes from a public QR-rendering endpoint (just an <img>, no extra
+// dependency to install).
+function EquipQRLinkModal({ equip, mode = "dailyCheck", onClose }) {
   const link = typeof window !== "undefined"
-    ? `${window.location.origin}${window.location.pathname}?tab=dailyCheck&equip=${equip.id}`
+    ? `${window.location.origin}${window.location.pathname}?tab=${mode}&equip=${equip.id}`
     : "";
   const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(link)}`;
   const [copied, setCopied] = useState(false);
@@ -2518,12 +2540,16 @@ function EquipQRLinkModal({ equip, onClose }) {
       navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); });
     }
   }
+  const title = mode === "equipmentView" ? `QR / ลิงก์ดูข้อมูลเครื่องมือ — ${equip.code}` : `QR / ลิงก์ — ${equip.code}`;
+  const desc = mode === "equipmentView"
+    ? `พิมพ์แล้วติดไว้ที่ตัว ${equip.code} — สแกนเพื่อดูข้อมูลและประวัติของเครื่องนี้ได้ทันที ไม่ต้องเข้าสู่ระบบ (ดูอย่างเดียว แก้ไขอะไรไม่ได้)`
+    : `พิมพ์แล้วติดไว้ที่ตัว ${equip.code} — สแกนเพื่อเปิดหน้าข้อมูลเครื่องและบันทึกเดลี่เช็คของเครื่องนี้ได้ทันที`;
   return (
-    <Modal onClose={onClose} title={`QR / ลิงก์ — ${equip.code}`}>
+    <Modal onClose={onClose} title={title}>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
         <img src={qrSrc} alt={`QR code for ${equip.code}`} width={200} height={200} style={{ borderRadius: 10, border: "1px solid var(--line)" }} />
         <div style={{ fontSize: 12.5, color: "var(--muted)", textAlign: "center", maxWidth: 320 }}>
-          พิมพ์แล้วติดไว้ที่ตัว {equip.code} — สแกนเพื่อเปิดหน้าข้อมูลเครื่องและบันทึกเดลี่เช็คของเครื่องนี้ได้ทันที
+          {desc}
         </div>
         <div style={{ display: "flex", gap: 8, width: "100%" }}>
           <input readOnly value={link} style={{ ...S.input, flex: 1, fontFamily: "var(--font-mono)", fontSize: 11.5 }} onFocus={(e) => e.target.select()} />
@@ -2531,6 +2557,193 @@ function EquipQRLinkModal({ equip, onClose }) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+// Read-only equipment card for guest QR access (?tab=equipmentView&equip=<id>)
+// — same photo/info/history as the admin equipment card (EquipmentDetail),
+// minus every action (edit, delete, book, disable, add activity, daily
+// check entry): this page is reachable with no account at all, so nothing
+// on it may change data.
+function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings = [] }) {
+  const [activityFilter, setActivityFilter] = useState("all");
+
+  if (!equip) {
+    return (
+      <div style={{ ...S.panel, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
+        ไม่พบข้อมูลเครื่องมือนี้ — ลิงก์อาจไม่ถูกต้องหรือเครื่องมือถูกลบไปแล้ว
+      </div>
+    );
+  }
+
+  const days = daysUntil(equip.nextDue);
+  const st = statusOf(days);
+  const isScale = equip.type === "เครื่องชั่ง";
+  const isMeter = equip.type === "pH Meter" || equip.type === "EC Meter";
+  const bk = equipmentBookingSummary(equip.id, bookings);
+  const typeLabel = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ" };
+  const sortedDailyChecks = dailyChecks.slice().sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const typeCounts = {
+    all: activities.length,
+    calibration: activities.filter(a => a.type === "calibration").length,
+    repair: activities.filter(a => a.type === "repair").length,
+    request: activities.filter(a => a.type === "request").length,
+    other: activities.filter(a => a.type === "other").length,
+    dailyCheck: sortedDailyChecks.length,
+  };
+  const shownActivities = activityFilter === "all" ? activities : activities.filter(a => a.type === activityFilter);
+
+  const filterTab = (key, label) => (
+    <button
+      key={key}
+      onClick={() => setActivityFilter(key)}
+      style={{
+        display: "flex", alignItems: "center", gap: 6,
+        background: activityFilter === key ? "#E9F1FB" : "transparent",
+        border: `1px solid ${activityFilter === key ? "var(--teal)" : "var(--line)"}`,
+        color: activityFilter === key ? "var(--teal-dark)" : "var(--muted)",
+        borderRadius: 999, padding: "5px 11px", fontSize: 12, fontWeight: 600,
+        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+      }}
+    >
+      {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({typeCounts[key]})</span>
+    </button>
+  );
+
+  return (
+    <div>
+      <TabHeader title={equip.code} sub="ข้อมูลและประวัติของเครื่องมือนี้ — โหมดผู้เยี่ยมชม (ดูอย่างเดียว)" />
+      <div style={S.equipDetailGrid} className="ltEquipDetailGrid">
+        {/* LEFT: photo + info + status — same as the admin card, no actions */}
+        <div style={S.equipDetailLeft}>
+          {equip.imageUrl && (
+            <div style={{ position: "relative" }}>
+              <img src={equip.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+                style={{ width: "100%", maxHeight: 200, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
+              <a
+                href={equip.imageUrl} target="_blank" rel="noopener noreferrer"
+                style={{
+                  position: "absolute", top: 8, right: 8, display: "flex", alignItems: "center", gap: 5,
+                  background: "rgba(18,37,59,0.75)", color: "#fff", fontSize: 11.5, fontWeight: 600,
+                  padding: "5px 9px", borderRadius: 8, textDecoration: "none",
+                }}
+              >
+                <ExternalLink size={12} /> เปิดไฟล์รูปภาพ
+              </a>
+            </div>
+          )}
+
+          <div>
+            <div style={S.detailName}>{equip.name}</div>
+            {(equip.brand || equip.model) && (
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                {[equip.brand, equip.model].filter(Boolean).join(" · ")}
+              </div>
+            )}
+            {equip.serialNo && (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
+                S/N: {equip.serialNo}
+              </div>
+            )}
+            <div style={S.eqMeta}><MapPin size={12} /> {equip.location || "-"} · {equip.type || "-"}</div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Tag color={equip.status === "active" ? "var(--green)" : equip.status === "maintenance" ? "var(--amber)" : "var(--muted)"}>
+              {equip.status === "active" ? "ใช้งานอยู่" : equip.status === "maintenance" ? "ซ่อมบำรุง" : "ปิดใช้งาน"}
+            </Tag>
+            <Tag color={STATUS_COLOR[st]}>{equip.nextDue ? `${STATUS_LABEL[st]} · ${fmtDate(equip.nextDue)}` : "ไม่มีกำหนด"}</Tag>
+            <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
+          </div>
+
+          {equip.status === "maintenance" && equip.unavailableReason && (
+            <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", fontSize: 12.5, color: "var(--ink)" }}>
+              <strong>ปิดใช้งานชั่วคราว:</strong> {equip.unavailableReason}
+            </div>
+          )}
+          {equip.notes && <div style={S.notesBox}>{equip.notes}</div>}
+
+          {bookings.length > 0 && (
+            <div>
+              <div style={S.panelTitle}>ประวัติการจอง/ยืม</div>
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
+                {bookings.slice(0, 8).map(b => (
+                  <div key={b.id} style={{ ...S.activityRow, alignItems: "center" }}>
+                    <div style={S.activityDate}>{fmtDate(b.startDate)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type]} · {b.requestedBy || "-"}</div>
+                      <div style={S.activityDetail}>{b.purpose || "-"}</div>
+                    </div>
+                    <Tag color={BOOKING_STATUS_COLOR[b.status]}>{bookingHistoryStatusLabel(b)}</Tag>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT: history — read-only, no add/edit/delete affordances */}
+        <div style={S.equipDetailRight}>
+          <div style={S.panelTitle}>ประวัติกิจกรรม</div>
+          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+            {filterTab("all", "ทั้งหมด")}
+            {filterTab("calibration", "สอบเทียบ")}
+            {filterTab("repair", "ซ่อม")}
+            {filterTab("request", "แจ้งซ่อม")}
+            {filterTab("other", "อื่นๆ")}
+            {(isScale || isMeter) && filterTab("dailyCheck", "ตรวจเช็คประจำวัน")}
+          </div>
+
+          {activityFilter === "dailyCheck" ? (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+              {sortedDailyChecks.length === 0 && <EmptyState text="ยังไม่มีรายการตรวจเช็คประจำวันสำหรับเครื่องมือนี้" small />}
+              {sortedDailyChecks.map(c => (
+                <div key={c.id} style={{ ...S.activityRow, alignItems: "center" }}>
+                  <div style={S.activityDate}>{fmtDate(c.date)}<div>{c.time}</div></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={S.activityType}>ตรวจเช็คประจำวัน · {c.checkedBy || "-"}</div>
+                    <div style={{ marginTop: 4 }}><CheckPointsMini c={c} /></div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
+                    <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>
+                    {c.approved
+                      ? <Tag color="var(--green)">อนุมัติแล้ว</Tag>
+                      : <Tag color="var(--amber)">รออนุมัติ</Tag>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+              {shownActivities.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
+              {shownActivities.map(a => (
+                <div key={a.id} style={{ ...S.activityRow, alignItems: "center" }}>
+                  <div style={S.activityDate}>{fmtDate(a.date)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={S.activityType}>{typeLabel[a.type] || a.type}</div>
+                    <div style={S.activityDetail}>
+                      {a.detail}{a.by ? ` · โดย ${a.by}` : ""}
+                      {a.poNo ? (
+                        a.poUrl ? (
+                          <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>PO: {a.poNo}</a></>
+                        ) : ` · PO: ${a.poNo}`
+                      ) : (
+                        a.poUrl ? <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>ไฟล์ PO</a></> : ""
+                      )}
+                    </div>
+                    {a.certUrl && (
+                      <a href={a.certUrl} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal)", marginTop: 4 }}>
+                        <FileDown size={11} /> ดูใบ Certificate
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
