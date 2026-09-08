@@ -644,15 +644,20 @@ const RESTRICTED_NAV = [
   { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
 ];
 
-export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "", canApprove = false }) {
+export default function App({ restrictToBooking = false, restrictToDailyCheck = false, currentUsername = "", currentDisplayName = "", canApprove = false }) {
   // Which tab loads first, and stays after a refresh:
   // - Default (no ?tab= yet): restricted accounts land on "ติดตามงานวิเคราะห์"
   //   (now the featured/first item), everyone else on the dashboard.
   // - If the URL already has a valid ?tab=, that wins instead — this is what
   //   makes reloading the page (or sharing a link to a specific page) land
   //   back on the same tab instead of always bouncing to the default.
-  const defaultTab = restrictToBooking ? "analysisTracking" : "dashboard";
-  const allowedTabKeys = (restrictToBooking ? RESTRICTED_NAV : NAV).filter(n => !n.external).map(n => n.key);
+  // - Guest access (restrictToDailyCheck, e.g. someone who scanned an
+  //   equipment's QR code without an account): always "dailyCheck", and no
+  //   other tab is reachable — see visibleNav below.
+  const defaultTab = restrictToDailyCheck ? "dailyCheck" : restrictToBooking ? "analysisTracking" : "dashboard";
+  const allowedTabKeys = restrictToDailyCheck
+    ? ["dailyCheck"]
+    : (restrictToBooking ? RESTRICTED_NAV : NAV).filter(n => !n.external).map(n => n.key);
   const [tab, setTabState] = useState(() => {
     if (typeof window === "undefined") return defaultTab;
     const fromUrl = new URLSearchParams(window.location.search).get("tab");
@@ -758,7 +763,11 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
   const totalAlertCount = alerts.calib.length + alerts.expiry.length + alerts.lowStock.length
     + alerts.lowChem.length + alerts.pendingBookings.length + alerts.overdueBookings.length;
 
-  const visibleNav = restrictToBooking ? RESTRICTED_NAV : NAV;
+  // Guest access gets no nav at all — the sidebar/bottom-bar rendering below
+  // already hides itself whenever visibleNav.length <= 1, so this alone
+  // keeps a guest confined to the single Daily check page with no other tab
+  // ever a click away.
+  const visibleNav = restrictToDailyCheck ? [] : restrictToBooking ? RESTRICTED_NAV : NAV;
   // One-shot: when set, the Bookings tab (once mounted) jumps straight to
   // this sub-view instead of its default "pending" — used by the global
   // "ต้องคืน" reminder banner below so restricted accounts land exactly on
@@ -860,7 +869,11 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
             </nav>
           )}
           <div style={S.sidebarFoot} className="ltSidebarFoot">
-            {restrictToBooking ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน, รายการที่ยืมได้ และติดตามงานวิเคราะห์" : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
+            {restrictToDailyCheck
+              ? "โหมดผู้เยี่ยมชม: เข้าถึงได้เฉพาะหน้า Daily check เท่านั้น (ไม่ต้องเข้าสู่ระบบ)"
+              : restrictToBooking
+              ? "บัญชีนี้เข้าถึงได้เฉพาะหน้าจอง/ยืม, ปฏิทินการใช้งาน, รายการที่ยืมได้ และติดตามงานวิเคราะห์"
+              : "ข้อมูลนี้ใช้ร่วมกันในทีมของคุณ"}
           </div>
           <div style={S.sidebarDeco} className="ltSidebarDeco" />
         </aside>
