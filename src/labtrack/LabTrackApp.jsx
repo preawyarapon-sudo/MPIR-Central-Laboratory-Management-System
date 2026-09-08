@@ -655,11 +655,18 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   //   someone who scanned an equipment's QR code without an account): always
   //   that one tab, and no other tab is reachable — see visibleNav below.
   const defaultTab = restrictToDailyCheck ? "dailyCheck" : restrictToEquipmentView ? "equipmentView" : restrictToBooking ? "analysisTracking" : "dashboard";
+  // "equipmentView" is added on top of the normal nav list (not just the
+  // guest-only branch above) so that a signed-in user who scans/reloads an
+  // equipment read-only QR link (?tab=equipmentView&equip=<id>) also lands
+  // on that specific equipment instead of falling back to defaultTab
+  // ("dashboard") just because "equipmentView" isn't one of their normal
+  // nav tabs. It stays out of NAV/RESTRICTED_NAV itself, so it never shows
+  // up as its own sidebar/bottom-nav button — only reachable via the URL.
   const allowedTabKeys = restrictToDailyCheck
     ? ["dailyCheck"]
     : restrictToEquipmentView
     ? ["equipmentView"]
-    : (restrictToBooking ? RESTRICTED_NAV : NAV).filter(n => !n.external).map(n => n.key);
+    : [...(restrictToBooking ? RESTRICTED_NAV : NAV).filter(n => !n.external).map(n => n.key), "equipmentView"];
   const [tab, setTabState] = useState(() => {
     if (typeof window === "undefined") return defaultTab;
     const fromUrl = new URLSearchParams(window.location.search).get("tab");
@@ -916,7 +923,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
           {!restrictToBooking && tab === "dailyCheck" && (
             <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialCheckId={equipDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
-          {restrictToEquipmentView && tab === "equipmentView" && (
+          {tab === "equipmentView" && (
             <EquipmentGuestView
               equip={equipment.find(e => e.id === equipDeepLinkId)}
               activities={activities.filter(a => a.equipmentId === equipDeepLinkId).slice().sort((a, b) => b.date.localeCompare(a.date))}
@@ -6294,13 +6301,23 @@ button { cursor: pointer; }
     background: #fff; border-top: 1px solid var(--line);
     padding: 2px 4px calc(4px + env(safe-area-inset-bottom));
     box-shadow: 0 -2px 10px rgba(18,37,59,0.06);
+    /* With up to 10 items, forcing them all to share the screen width edge
+       to edge (old flex:1 on every button) squeezed each one down to ~35px
+       and wrapped every label onto 2 lines. Scroll horizontally instead so
+       each button keeps a comfortable minimum width and a single-line
+       label, same pattern as a native app's scrollable tab bar. */
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
+  .ltBottomNav::-webkit-scrollbar { display: none; }
 }
 
 .ltBottomNav { display: none; }
 .ltBottomNavBtn {
-  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 3px; background: none; border: none; padding: 7px 2px 6px; font-family: var(--font-body);
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; background: none; border: none; padding: 7px 10px 6px; font-family: var(--font-body);
+  min-width: 60px; white-space: nowrap;
 }
 .ltBottomNavBadge {
   position: absolute; top: -4px; right: -8px; background: var(--red); color: #fff;
