@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import {
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
@@ -619,7 +619,10 @@ const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   REQUEST_ANALYSIS_LINK_ADMIN,
   { key: "equipment", label: "เครื่องมือ", icon: Wrench },
-  { key: "dailyCheck", label: "Daily check", icon: CheckCircle2 },
+  // Sub-link of "equipment" in the desktop sidebar (see nested rendering
+  // below) — still its own top-level tab/URL, and stays a normal flat
+  // item in the mobile bottom bar since that layout has no room to nest.
+  { key: "dailyCheck", label: "Daily check", icon: CheckCircle2, parent: "equipment" },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
@@ -800,7 +803,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           </div>
           {visibleNav.length > 1 && (
             <nav style={{ marginTop: 18 }} className="ltNav">
-              {visibleNav.map(n => {
+              {visibleNav.filter(n => !n.parent).map(n => {
                 const Icon = n.icon;
                 const active = tab === n.key;
                 const pendingCount = n.key === "dashboard"
@@ -813,23 +816,42 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
                       ? bookings.filter(b => isBookingCurrent(b) && (b.requestedByUsername || b.requestedBy) === currentUsername).length
                       : bookings.filter(isBookingCurrent).length)
                   : 0;
+                // Sub-links (e.g. "Daily check" under "เครื่องมือ") render
+                // indented directly beneath their parent's button.
+                const children = visibleNav.filter(c => c.parent === n.key);
                 return (
-                  <button
-                    key={n.key}
-                    onClick={() => n.external ? window.open(n.external, "_blank", "noopener,noreferrer") : setTab(n.key)}
-                    style={{
-                      ...S.navBtn,
-                      ...(active ? S.navBtnActive : {}),
-                      ...(n.featured ? S.navBtnFeatured : {}),
-                      ...(n.featured && active ? S.navBtnFeaturedActive : {}),
-                    }}
-                    className="ltNavBtn"
-                  >
-                    <Icon size={n.featured ? 18 : 16} strokeWidth={n.featured ? 2.3 : 2} />
-                    <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
-                    {activeBookingCount > 0 && <span style={S.navBadgeGreen}>{activeBookingCount}</span>}
-                    {pendingCount > 0 && <span style={S.navBadge}>{pendingCount}</span>}
-                  </button>
+                  <Fragment key={n.key}>
+                    <button
+                      onClick={() => n.external ? window.open(n.external, "_blank", "noopener,noreferrer") : setTab(n.key)}
+                      style={{
+                        ...S.navBtn,
+                        ...(active ? S.navBtnActive : {}),
+                        ...(n.featured ? S.navBtnFeatured : {}),
+                        ...(n.featured && active ? S.navBtnFeaturedActive : {}),
+                      }}
+                      className="ltNavBtn"
+                    >
+                      <Icon size={n.featured ? 18 : 16} strokeWidth={n.featured ? 2.3 : 2} />
+                      <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{n.label}</span>
+                      {activeBookingCount > 0 && <span style={S.navBadgeGreen}>{activeBookingCount}</span>}
+                      {pendingCount > 0 && <span style={S.navBadge}>{pendingCount}</span>}
+                    </button>
+                    {children.map(c => {
+                      const CIcon = c.icon;
+                      const cActive = tab === c.key;
+                      return (
+                        <button
+                          key={c.key}
+                          onClick={() => c.external ? window.open(c.external, "_blank", "noopener,noreferrer") : setTab(c.key)}
+                          style={{ ...S.navSubBtn, ...(cActive ? S.navSubBtnActive : {}) }}
+                          className="ltNavBtn"
+                        >
+                          <CIcon size={14} strokeWidth={2} />
+                          <span style={{ flex: 1, textAlign: "left" }} className="ltNavBtnLabel">{c.label}</span>
+                        </button>
+                      );
+                    })}
+                  </Fragment>
                 );
               })}
             </nav>
@@ -5771,6 +5793,8 @@ const S = {
   brandSub: { fontSize: 10.5, color: "var(--muted)", marginTop: 1 },
   navBtn: { width: "100%", display: "flex", alignItems: "center", gap: 9, background: "transparent", border: "none", color: "#4B5C72", padding: "9px 10px", borderRadius: 8, fontSize: 13, marginBottom: 2, textAlign: "left" },
   navBtnActive: { background: "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)", color: "#fff", fontWeight: 600, boxShadow: "0 2px 6px rgba(11,79,108,0.25)" },
+  navSubBtn: { width: "100%", display: "flex", alignItems: "center", gap: 8, background: "transparent", border: "none", color: "#6B7A8D", padding: "7px 10px 7px 30px", borderRadius: 8, fontSize: 12.5, marginBottom: 2, marginTop: -1, textAlign: "left" },
+  navSubBtnActive: { background: "#E9F1FB", color: "var(--teal-dark)", fontWeight: 700 },
   navBtnFeatured: {
     background: "linear-gradient(135deg, #EAF4FC 0%, #F3F9FD 100%)",
     border: "1px solid #CFE6F5", color: "var(--teal-dark)", fontWeight: 700, fontSize: 13.5,
