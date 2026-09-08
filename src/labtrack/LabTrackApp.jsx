@@ -1551,12 +1551,14 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
   const [confirmDeleteAct, setConfirmDeleteAct] = useState(null);
   const [showDisable, setShowDisable] = useState(false);
   const [dailyCheckEntry, setDailyCheckEntry] = useState(null);
-  // Daily check currently only has a real, working form for เครื่องชั่ง
-  // (the weight-deviation check below). pH Meter, EC Meter, and every other
-  // equipment type will each need their own dedicated check design before
-  // they get this button — until then it stays hidden so no one is shown a
-  // scale-only weight-check form for equipment it doesn't apply to.
-  const showDailyCheckBtn = item.type === "เครื่องชั่ง";
+  // Daily check has dedicated forms for เครื่องชั่ง (weight-deviation check)
+  // and for pH Meter / EC Meter (buffer / standard-solution check, per the
+  // reference form). Every other equipment type still has no design of its
+  // own, so the button stays hidden for those until one exists.
+  const isPhMeter = item.type === "pH Meter";
+  const isEcMeter = item.type === "EC Meter";
+  const isMeter = isPhMeter || isEcMeter;
+  const showDailyCheckBtn = item.type === "เครื่องชั่ง" || isMeter;
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
   const bk = equipmentBookingSummary(item.id, bookings);
@@ -1689,7 +1691,7 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
               {showDailyCheckBtn && (
                 <button
                   style={S.ghostBtn}
-                  onClick={() => setDailyCheckEntry({
+                  onClick={() => setDailyCheckEntry(isMeter ? blankMeterCheckEntry(item.id) : {
                     id: uid(), equipmentId: item.id, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
                     condition: "", level: "", clean: "", zero: "",
                     weights: { w10: "", w50: "", w200: "" },
@@ -1709,7 +1711,7 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
             {filterTab("repair", "ซ่อม")}
             {filterTab("request", "แจ้งซ่อม")}
             {filterTab("other", "อื่นๆ")}
-            {isScale && filterTab("dailyCheck", "ตรวจเช็คประจำวัน")}
+            {(isScale || isMeter) && filterTab("dailyCheck", "ตรวจเช็คประจำวัน")}
           </div>
 
           {activityFilter === "dailyCheck" ? (
@@ -1720,7 +1722,7 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
                   <div style={S.activityDate}>{fmtDate(c.date)}<div>{c.time}</div></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={S.activityType}>ตรวจเช็คประจำวัน · {c.checkedBy || "-"}</div>
-                    <div style={{ marginTop: 4 }}><WeightPointsMini results={c.weightResults} /></div>
+                    <div style={{ marginTop: 4 }}><CheckPointsMini c={c} /></div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
                     <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>
@@ -1794,7 +1796,19 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
           onSave={(act) => { onAddActivity(act); setShowAct(false); }}
         />
       )}
-      {dailyCheckEntry && (
+      {dailyCheckEntry && (isMeter ? (
+        <MeterCheckForm
+          entry={dailyCheckEntry}
+          equip={item}
+          isExisting={false}
+          canApprove={canApprove}
+          currentUsername={currentUsername}
+          currentDisplayName={currentDisplayName}
+          onCancel={() => setDailyCheckEntry(null)}
+          onSave={(entry) => { onSaveDailyCheck(entry); setDailyCheckEntry(null); }}
+          onApprove={(entry) => { onApproveDailyCheck(entry); setDailyCheckEntry(null); }}
+        />
+      ) : (
         <DailyCheckForm
           entry={dailyCheckEntry}
           scale={item}
@@ -1806,7 +1820,7 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
           onSave={(entry) => { onSaveDailyCheck(entry); setDailyCheckEntry(null); }}
           onApprove={(entry) => { onApproveDailyCheck(entry); setDailyCheckEntry(null); }}
         />
-      )}
+      ))}
       {editingAct && (
         <ActivityForm
           initial={editingAct}
@@ -1941,6 +1955,214 @@ function WeightPointsMini({ results }) {
     </div>
   );
 }
+/* ================= pH / EC METER DAILY CHECK ================= */
+// Per form "Daily Check pH / EC Meter": pH points are checked against a
+// fixed ±0.05 buffer tolerance; EC is checked against whatever standard
+// solution value was used that day, ±2%. Equipment is kept as two separate
+// records (type "pH Meter" / "EC Meter" — see EquipmentForm), so each one
+// only ever sees its own half of the form.
+const PH_POINTS = [
+  { key: "ph4", label: "pH 4.00", standard: 4.00, min: 3.95, max: 4.05 },
+  { key: "ph7", label: "pH 7.00", standard: 7.00, min: 6.95, max: 7.05 },
+  { key: "ph10", label: "pH 10.00", standard: 10.00, min: 9.95, max: 10.05 },
+];
+const METER_PREUSE_ITEMS = [
+  { key: "ready", label: "เครื่องอยู่ในสภาพพร้อมใช้งาน" },
+  { key: "display", label: "หน้าจอแสดงผลปกติ" },
+  { key: "noDamage", label: "ไม่มีความเสียหายของสาย/หัววัด" },
+  { key: "probeClean", label: "ทำความสะอาดหัววัดเรียบร้อย" },
+  { key: "withinLimit", label: "ผลการตรวจสอบอยู่ในเกณฑ์ พร้อมใช้งาน" },
+];
+function meterPreUsePasses(preUse) {
+  return METER_PREUSE_ITEMS.every(i => preUse?.[i.key]);
+}
+// pH readings vs the fixed ±0.05 buffer tolerance table above.
+function computePhResults(phReadings) {
+  return PH_POINTS.map(p => {
+    const raw = phReadings?.[p.key] ?? "";
+    const num = Number(raw);
+    const has = raw !== "" && !isNaN(num);
+    return { ...p, raw, reading: has ? num : null, pass: has ? (num >= p.min && num <= p.max) : null };
+  });
+}
+// EC reading vs whatever standard solution value was entered that day,
+// accepted within ±2% (matches the reference form's 1,413 -> 1,385–1,441).
+function computeEcResult(ecStandard, ecReading) {
+  const std = Number(ecStandard);
+  const hasStd = ecStandard !== "" && !isNaN(std) && std > 0;
+  const read = Number(ecReading);
+  const hasRead = ecReading !== "" && !isNaN(read);
+  const min = hasStd ? std * 0.98 : null;
+  const max = hasStd ? std * 1.02 : null;
+  return {
+    standard: hasStd ? std : null, min, max, reading: hasRead ? read : null,
+    pass: (hasStd && hasRead) ? (read >= min && read <= max) : null,
+  };
+}
+// Compact pass/fail readout for table/history rows — handles whichever
+// shape of daily-check entry it's given (scale weights, pH points, or EC).
+function CheckPointsMini({ c }) {
+  if (c.weightResults) return <WeightPointsMini results={c.weightResults} />;
+  if (c.phResults) {
+    return (
+      <div style={{ display: "flex", gap: 10 }}>
+        {c.phResults.map(r => (
+          <span key={r.key} style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, fontFamily: "var(--font-mono)", color: r.pass ? "var(--ink)" : "var(--red)" }}>
+            {r.pass ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}
+            pH{r.standard.toFixed(2)}
+          </span>
+        ))}
+      </div>
+    );
+  }
+  if (c.ecResult) {
+    const r = c.ecResult;
+    return (
+      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, fontFamily: "var(--font-mono)", color: r.pass ? "var(--ink)" : "var(--red)" }}>
+        {r.pass ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}
+        {r.reading ?? "-"} µS/cm
+      </span>
+    );
+  }
+  return <span style={{ color: "var(--muted)" }}>-</span>;
+}
+// Blank entry shape for a fresh pH/EC daily check — mirrors the blank scale
+// entry created alongside it in EquipmentDetail's "Daily check" button.
+function blankMeterCheckEntry(equipmentId) {
+  return {
+    id: uid(), equipmentId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
+    preUse: { ready: false, display: false, noDamage: false, probeClean: false, withinLimit: false },
+    phReadings: { ph4: "", ph7: "", ph10: "" },
+    ecStandard: "1413", ecReading: "",
+    checkedBy: "", remarks: "",
+    approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
+  };
+}
+// Form for one day's pH or EC meter check — same save/approve flow as the
+// scale's DailyCheckForm, but shows only the pH block or the EC block
+// depending on which type the equipment record is (they're always kept as
+// two separate equipment entries, never one combined "pH/EC" item).
+function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, currentUsername = "", currentDisplayName = "", onCancel, onSave, onApprove }) {
+  const isPh = equip?.type === "pH Meter";
+  const [f, setF] = useState(() => ({ ...blankMeterCheckEntry(entry?.equipmentId), ...entry }));
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const setPh = (key) => (e) => setF({ ...f, phReadings: { ...f.phReadings, [key]: e.target.value } });
+  const togglePreUse = (key) => setF({ ...f, preUse: { ...f.preUse, [key]: !f.preUse[key] } });
+
+  const phRows = isPh ? computePhResults(f.phReadings) : [];
+  const ecResult = !isPh ? computeEcResult(f.ecStandard, f.ecReading) : null;
+  const readingsComplete = isPh ? phRows.every(r => r.reading !== null) : (ecResult.standard !== null && ecResult.reading !== null);
+  const preUseOk = meterPreUsePasses(f.preUse);
+  const result = !readingsComplete ? null : (!preUseOk ? false : (isPh ? phRows.every(r => r.pass) : ecResult.pass));
+  const canSave = readingsComplete && f.checkedBy.trim().length > 0;
+  const showApproveButton = isExisting && canApprove && !f.approved;
+
+  return (
+    <Modal onClose={onCancel} title={`บันทึกการตรวจสอบ${equip ? ` — ${equip.code}` : ""}`} wide>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
+        <Field label="เวลา"><input type="time" style={S.input} value={f.time} onChange={set("time")} /></Field>
+
+        <Field label="ก่อนใช้งานทุกครั้ง" full plain>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7, border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px" }}>
+            {METER_PREUSE_ITEMS.map(it => (
+              <label key={it.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!f.preUse[it.key]} onChange={() => togglePreUse(it.key)} />
+                {it.label}
+              </label>
+            ))}
+          </div>
+        </Field>
+
+        {isPh ? (
+          <Field label="ค่า Buffer มาตรฐาน / ค่าที่อ่านได้ (pH)" full plain>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr 0.7fr", gap: 0, background: "#F5F8F7", fontSize: 11, color: "var(--muted)", fontWeight: 600, padding: "7px 10px" }}>
+                <div>จุดตรวจ</div><div>เกณฑ์ยอมรับ</div><div>ค่าที่อ่านได้</div><div>ผล</div>
+              </div>
+              {phRows.map(r => (
+                <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr 0.7fr", gap: 0, alignItems: "center", padding: "7px 10px", borderTop: "1px solid var(--line)" }}>
+                  <div style={{ fontSize: 12.5 }}>{r.label}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{r.min.toFixed(2)}–{r.max.toFixed(2)}</div>
+                  <input
+                    type="number" step="any"
+                    style={{ ...S.input, fontFamily: "var(--font-mono)", padding: "6px 8px" }}
+                    value={f.phReadings[r.key]} onChange={setPh(r.key)}
+                  />
+                  <div style={{ paddingLeft: 8 }}>
+                    {r.pass === null ? <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                      : r.pass ? <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--green)", fontSize: 12, fontWeight: 600 }}><CheckCircle2 size={13} /> ผ่าน</span>
+                      : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Field>
+        ) : (
+          <>
+            <Field label="ค่ามาตรฐาน (µS/cm)"><input type="number" step="any" style={S.input} value={f.ecStandard} onChange={set("ecStandard")} /></Field>
+            <Field label="ค่าที่อ่านได้ (µS/cm)"><input type="number" step="any" style={S.input} value={f.ecReading} onChange={set("ecReading")} /></Field>
+            <Field label="เกณฑ์ที่ยอมรับ (± 2%)" plain>
+              <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                {ecResult.min !== null ? `${ecResult.min.toFixed(0)} – ${ecResult.max.toFixed(0)} µS/cm` : "กรอกค่ามาตรฐานก่อน"}
+              </div>
+            </Field>
+            <Field label="ผล" plain>
+              <div style={{ ...S.input, display: "flex", alignItems: "center" }}>
+                {ecResult.pass === null ? <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                  : ecResult.pass ? <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--green)", fontSize: 12, fontWeight: 600 }}><CheckCircle2 size={13} /> ผ่าน</span>
+                  : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
+              </div>
+            </Field>
+          </>
+        )}
+
+        <Field label="ผู้ตรวจสอบ"><input style={S.input} value={f.checkedBy} onChange={set("checkedBy")} /></Field>
+        <Field label="การอนุมัติ">
+          <div style={{
+            ...S.input, display: "flex", alignItems: "center", gap: 6,
+            background: f.approved ? "#E9F6EC" : "#F5F8F7",
+            color: f.approved ? "var(--green)" : "var(--muted)", fontWeight: f.approved ? 600 : 400,
+          }}>
+            {f.approved
+              ? <><CheckCircle2 size={14} /> อนุมัติแล้วโดย {f.approvedByName}{f.approvedAt ? ` · ${fmtDate(f.approvedAt.slice(0, 10))}` : ""}</>
+              : "ยังไม่อนุมัติ"}
+          </div>
+        </Field>
+        <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.remarks} onChange={set("remarks")} /></Field>
+      </div>
+
+      <div style={{
+        marginTop: 14, borderRadius: 10, padding: "12px 14px",
+        background: result === null ? "#F5F8F7" : result ? "#E9F6EC" : "#FBE9E4",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+      }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: result === null ? "var(--muted)" : result ? "var(--green)" : "var(--red)" }}>
+          {result === null ? "กรอกข้อมูลให้ครบเพื่อคำนวณผล" : result ? "ผลการตรวจสอบ: ผ่าน (PASS)" : "ผลการตรวจสอบ: ไม่ผ่าน (FAIL)"}
+        </span>
+        {result === false && <AlertTriangle size={16} color="var(--red)" />}
+      </div>
+
+      <ModalFooter
+        onCancel={onCancel}
+        onSave={() => {
+          const resetApproval = f.approved ? { approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "" } : {};
+          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: !isPh ? ecResult : undefined, result, ...resetApproval });
+        }}
+        disabled={!canSave}
+        extra={showApproveButton && (
+          <button
+            style={{ ...S.primaryBtn, background: "var(--green)", boxShadow: "none" }}
+            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: !isPh ? ecResult : undefined, result })}
+          >
+            <CheckCircle2 size={15} /> อนุมัติรายการนี้
+          </button>
+        )}
+      />
+    </Modal>
+  );
+}
+
 function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialScaleId, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const scales = equipment.filter(e => e.type === "เครื่องชั่ง").slice().sort((a, b) => alphaCompare(a.code, b.code));
   const [scaleId, setScaleId] = useState(scales[0]?.id || "");
