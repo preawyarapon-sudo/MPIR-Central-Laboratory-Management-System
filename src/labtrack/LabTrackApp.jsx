@@ -866,7 +866,8 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
           {!restrictToBooking && tab === "equipment" && (
             <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
               activities={activities} setActivities={persist.activities}
-              bookings={bookings} setBookings={persist.bookings} items={items} notify={notify} />
+              bookings={bookings} setBookings={persist.bookings} items={items} notify={notify}
+              dailyChecks={dailyChecks} />
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
             <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialScaleId={dailyCheckDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
@@ -1158,7 +1159,7 @@ function AlertPanel({ title, icon: Icon, items, empty, onSeeAll }) {
 }
 
 /* ================= EQUIPMENT ================= */
-function EquipmentTab({ equipment, setEquipment, activities, setActivities, bookings, setBookings, items = [], notify }) {
+function EquipmentTab({ equipment, setEquipment, activities, setActivities, bookings, setBookings, items = [], notify, dailyChecks = [] }) {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -1324,6 +1325,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
         <EquipmentDetail
           item={selectedItem}
           activities={activities.filter(a => a.equipmentId === selectedItem.id).sort((a, b) => b.date.localeCompare(a.date))}
+          dailyChecks={dailyChecks.filter(c => c.equipmentId === selectedItem.id)}
           bookings={bookings.filter(b => b.equipmentId === selectedItem.id).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""))}
           onClose={() => setSelected(null)}
           onEdit={() => { setEditing(selectedItem); setSelected(null); }}
@@ -1498,7 +1500,7 @@ function EquipmentImportForm({ onCancel, onImport }) {
   );
 }
 
-function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity }) {
+function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity }) {
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
@@ -1509,12 +1511,18 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
   const st = statusOf(days);
   const bk = equipmentBookingSummary(item.id, bookings);
   const typeLabel = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ" };
+  // "ตรวจเช็คประจำวัน" (daily scale check) only applies to scales, and pulls
+  // from the separate dailyChecks log rather than the activities list —
+  // shown as its own history tab here instead of mixed into "ทั้งหมด".
+  const isScale = item.type === "เครื่องชั่ง";
+  const sortedDailyChecks = dailyChecks.slice().sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   const typeCounts = {
     all: activities.length,
     calibration: activities.filter(a => a.type === "calibration").length,
     repair: activities.filter(a => a.type === "repair").length,
     request: activities.filter(a => a.type === "request").length,
     other: activities.filter(a => a.type === "other").length,
+    dailyCheck: sortedDailyChecks.length,
   };
   const shownActivities = activityFilter === "all" ? activities : activities.filter(a => a.type === activityFilter);
 
@@ -1536,60 +1544,165 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
   );
 
   return (
-    <Modal onClose={onClose} title={item.code} wide>
-      {item.imageUrl && (
-        <div style={{ position: "relative", marginBottom: 14 }}>
-          <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-            style={{ width: "100%", maxHeight: 260, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
-          <a
-            href={item.imageUrl} target="_blank" rel="noopener noreferrer"
-            style={{
-              position: "absolute", top: 10, right: 10, display: "flex", alignItems: "center", gap: 5,
-              background: "rgba(18,37,59,0.75)", color: "#fff", fontSize: 12, fontWeight: 600,
-              padding: "6px 10px", borderRadius: 8, textDecoration: "none",
-            }}
-          >
-            <ExternalLink size={13} /> เปิดไฟล์รูปภาพ
-          </a>
-        </div>
-      )}
-      <div style={S.detailHead}>
-        <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-          <div style={S.detailName}>{item.name}</div>
-          {(item.brand || item.model) && (
-            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-              {[item.brand, item.model].filter(Boolean).join(" · ")}
+    <Modal onClose={onClose} title={item.code} xwide>
+      <div style={S.equipDetailGrid} className="ltEquipDetailGrid">
+        {/* LEFT: photo + info + status + actions — stays put, no scrolling */}
+        <div style={S.equipDetailLeft}>
+          {item.imageUrl && (
+            <div style={{ position: "relative" }}>
+              <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+                style={{ width: "100%", maxHeight: 200, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
+              <a
+                href={item.imageUrl} target="_blank" rel="noopener noreferrer"
+                style={{
+                  position: "absolute", top: 8, right: 8, display: "flex", alignItems: "center", gap: 5,
+                  background: "rgba(18,37,59,0.75)", color: "#fff", fontSize: 11.5, fontWeight: 600,
+                  padding: "5px 9px", borderRadius: 8, textDecoration: "none",
+                }}
+              >
+                <ExternalLink size={12} /> เปิดไฟล์รูปภาพ
+              </a>
             </div>
           )}
-          {item.serialNo && (
-            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
-              S/N: {item.serialNo}
+
+          <div>
+            <div style={S.detailName}>{item.name}</div>
+            {(item.brand || item.model) && (
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                {[item.brand, item.model].filter(Boolean).join(" · ")}
+              </div>
+            )}
+            {item.serialNo && (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
+                S/N: {item.serialNo}
+              </div>
+            )}
+            <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"} · {item.type || "-"}</div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Tag color={item.status === "active" ? "var(--green)" : item.status === "maintenance" ? "var(--amber)" : "var(--muted)"}>
+              {item.status === "active" ? "ใช้งานอยู่" : item.status === "maintenance" ? "ซ่อมบำรุง" : "ปิดใช้งาน"}
+            </Tag>
+            <Tag color={STATUS_COLOR[st]}>{item.nextDue ? `${STATUS_LABEL[st]} · ${fmtDate(item.nextDue)}` : "ไม่มีกำหนด"}</Tag>
+            <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
+          </div>
+
+          {item.status === "maintenance" && item.unavailableReason && (
+            <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", fontSize: 12.5, color: "var(--ink)" }}>
+              <strong>ปิดใช้งานชั่วคราว:</strong> {item.unavailableReason}
             </div>
           )}
-          <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"} · {item.type || "-"}</div>
-        </div>
-        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-          {item.status === "active" && (
-            <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
+          {item.notes && <div style={S.notesBox}>{item.notes}</div>}
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {item.status === "active" && (
+              <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
+            )}
+            {item.status === "maintenance" ? (
+              <button style={{ ...S.smallBtn, color: "var(--green)", borderColor: "var(--green)" }} onClick={() => onSetAvailability(false, "")}>
+                <CheckCircle2 size={13} /> เปิดใช้งานอีกครั้ง
+              </button>
+            ) : (
+              <button style={{ ...S.smallBtn, color: "var(--amber)", borderColor: "var(--amber)" }} onClick={() => setShowDisable(true)}>
+                <AlertTriangle size={13} /> ปิดใช้งานชั่วคราว
+              </button>
+            )}
+            <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
+            <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
+          </div>
+
+          {bookings.length > 0 && (
+            <div>
+              <div style={S.panelTitle}>ประวัติการจอง/ยืม</div>
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
+                {bookings.slice(0, 8).map(b => (
+                  <div key={b.id} style={{ ...S.activityRow, alignItems: "center" }}>
+                    <div style={S.activityDate}>{fmtDate(b.startDate)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type]} · {b.requestedBy || "-"}</div>
+                      <div style={S.activityDetail}>{b.purpose || "-"}</div>
+                    </div>
+                    <Tag color={BOOKING_STATUS_COLOR[b.status]}>{bookingHistoryStatusLabel(b)}</Tag>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
-          {item.status === "maintenance" ? (
-            <button style={{ ...S.smallBtn, color: "var(--green)", borderColor: "var(--green)" }} onClick={() => onSetAvailability(false, "")}>
-              <CheckCircle2 size={13} /> เปิดใช้งานอีกครั้ง
-            </button>
+        </div>
+
+        {/* RIGHT: history — filter tabs stay fixed, only the list below scrolls */}
+        <div style={S.equipDetailRight}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <div style={S.panelTitle}>ประวัติกิจกรรม</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={S.ghostBtn} onClick={() => setShowAct("external-cal")}>ส่งสอบเทียบภายนอก</button>
+              <button style={S.smallBtn} onClick={() => setShowAct(true)}><Plus size={13} /> บันทึกกิจกรรม</button>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+            {filterTab("all", "ทั้งหมด")}
+            {filterTab("calibration", "สอบเทียบ")}
+            {filterTab("repair", "ซ่อม")}
+            {filterTab("request", "แจ้งซ่อม")}
+            {filterTab("other", "อื่นๆ")}
+            {isScale && filterTab("dailyCheck", "ตรวจเช็คประจำวัน")}
+          </div>
+
+          {activityFilter === "dailyCheck" ? (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+              {sortedDailyChecks.length === 0 && <EmptyState text="ยังไม่มีรายการตรวจเช็คประจำวันสำหรับเครื่องมือนี้" small />}
+              {sortedDailyChecks.map(c => (
+                <div key={c.id} style={{ ...S.activityRow, alignItems: "center" }}>
+                  <div style={S.activityDate}>{fmtDate(c.date)}<div>{c.time}</div></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={S.activityType}>ตรวจเช็คประจำวัน · {c.checkedBy || "-"}</div>
+                    <div style={{ marginTop: 4 }}><WeightPointsMini results={c.weightResults} /></div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
+                    <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>
+                    {c.approved
+                      ? <Tag color="var(--green)">อนุมัติแล้ว</Tag>
+                      : <Tag color="var(--amber)">รออนุมัติ</Tag>}
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : (
-            <button style={{ ...S.smallBtn, color: "var(--amber)", borderColor: "var(--amber)" }} onClick={() => setShowDisable(true)}>
-              <AlertTriangle size={13} /> ปิดใช้งานชั่วคราว
-            </button>
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+              {shownActivities.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
+              {shownActivities.map(a => (
+                <div key={a.id} style={{ ...S.activityRow, alignItems: "center" }}>
+                  <div style={S.activityDate}>{fmtDate(a.date)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={S.activityType}>{typeLabel[a.type] || a.type}</div>
+                    <div style={S.activityDetail}>
+                      {a.detail}{a.by ? ` · โดย ${a.by}` : ""}
+                      {a.poNo ? (
+                        a.poUrl ? (
+                          <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>PO: {a.poNo}</a></>
+                        ) : ` · PO: ${a.poNo}`
+                      ) : (
+                        a.poUrl ? <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>ไฟล์ PO</a></> : ""
+                      )}
+                    </div>
+                    {a.certUrl && (
+                      <a href={a.certUrl} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal)", marginTop: 4 }}>
+                        <FileDown size={11} /> ดูใบ Certificate
+                      </a>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button style={S.iconBtnSm} onClick={() => setEditingAct(a)}><Pencil size={12} /></button>
+                    <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteAct(a)}><Trash2 size={12} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
-          <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
-          <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
         </div>
       </div>
-      {item.status === "maintenance" && item.unavailableReason && (
-        <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", marginTop: 4, fontSize: 12.5, color: "var(--ink)" }}>
-          <strong>ปิดใช้งานชั่วคราว:</strong> {item.unavailableReason}
-        </div>
-      )}
+
       {showDisable && (
         <DisableAssetDialog
           asset={item}
@@ -1604,77 +1717,6 @@ function EquipmentDetail({ item, activities, bookings, onClose, onEdit, onDelete
           onConfirm={() => { setConfirmDelete(false); onDelete(); }}
         />
       )}
-      <div style={{ display: "flex", gap: 10, margin: "12px 0 6px", flexWrap: "wrap" }}>
-        <Tag color={item.status === "active" ? "var(--green)" : item.status === "maintenance" ? "var(--amber)" : "var(--muted)"}>
-          {item.status === "active" ? "ใช้งานอยู่" : item.status === "maintenance" ? "ซ่อมบำรุง" : "ปิดใช้งาน"}
-        </Tag>
-        <Tag color={STATUS_COLOR[st]}>{item.nextDue ? `${STATUS_LABEL[st]} · ${fmtDate(item.nextDue)}` : "ไม่มีกำหนด"}</Tag>
-        <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
-      </div>
-      {item.notes && <div style={S.notesBox}>{item.notes}</div>}
-
-      {bookings.length > 0 && (
-        <>
-          <div style={{ ...S.panelTitle, marginTop: 18 }}>ประวัติการจอง/ยืม</div>
-          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
-            {bookings.slice(0, 8).map(b => (
-              <div key={b.id} style={{ ...S.activityRow, alignItems: "center" }}>
-                <div style={S.activityDate}>{fmtDate(b.startDate)}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type]} · {b.requestedBy || "-"}</div>
-                  <div style={S.activityDetail}>{b.purpose || "-"}</div>
-                </div>
-                <Tag color={BOOKING_STATUS_COLOR[b.status]}>{bookingHistoryStatusLabel(b)}</Tag>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 18, flexWrap: "wrap", gap: 8 }}>
-        <div style={S.panelTitle}>ประวัติกิจกรรม</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={S.ghostBtn} onClick={() => setShowAct("external-cal")}>ส่งสอบเทียบภายนอก</button>
-          <button style={S.smallBtn} onClick={() => setShowAct(true)}><Plus size={13} /> บันทึกกิจกรรม</button>
-        </div>
-      </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-        {filterTab("all", "ทั้งหมด")}
-        {filterTab("calibration", "สอบเทียบ")}
-        {filterTab("repair", "ซ่อม")}
-        {filterTab("request", "แจ้งซ่อม")}
-        {filterTab("other", "อื่นๆ")}
-      </div>
-      <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 260, overflowY: "auto" }}>
-        {shownActivities.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
-        {shownActivities.map(a => (
-          <div key={a.id} style={{ ...S.activityRow, alignItems: "center" }}>
-            <div style={S.activityDate}>{fmtDate(a.date)}</div>
-            <div style={{ flex: 1 }}>
-              <div style={S.activityType}>{typeLabel[a.type] || a.type}</div>
-              <div style={S.activityDetail}>
-                {a.detail}{a.by ? ` · โดย ${a.by}` : ""}
-                {a.poNo ? (
-                  a.poUrl ? (
-                    <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>PO: {a.poNo}</a></>
-                  ) : ` · PO: ${a.poNo}`
-                ) : (
-                  a.poUrl ? <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>ไฟล์ PO</a></> : ""
-                )}
-              </div>
-              {a.certUrl && (
-                <a href={a.certUrl} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal)", marginTop: 4 }}>
-                  <FileDown size={11} /> ดูใบ Certificate
-                </a>
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 4 }}>
-              <button style={S.iconBtnSm} onClick={() => setEditingAct(a)}><Pencil size={12} /></button>
-              <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteAct(a)}><Trash2 size={12} /></button>
-            </div>
-          </div>
-        ))}
-      </div>
       {confirmDeleteAct && (
         <ConfirmDialog
           message={`ต้องการลบกิจกรรม "${confirmDeleteAct.detail || confirmDeleteAct.type}" ใช่ไหม การลบไม่สามารถกู้คืนได้`}
@@ -4754,10 +4796,10 @@ function Field({ label, children, full, plain }) {
     <span style={S.fieldLabel}>{label}</span>{children}
   </Tag>;
 }
-function Modal({ title, children, onClose, wide }) {
+function Modal({ title, children, onClose, wide, xwide }) {
   return (
     <div style={S.modalOverlay} onClick={onClose}>
-      <div style={{ ...S.modalBox, maxWidth: wide ? 620 : 480 }} onClick={e => e.stopPropagation()}>
+      <div style={{ ...S.modalBox, maxWidth: xwide ? 960 : wide ? 620 : 480 }} onClick={e => e.stopPropagation()}>
         <div style={S.modalHead}>
           <span style={{ ...S.modalTitle, flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
           <button style={{ ...S.iconBtn, flexShrink: 0 }} onClick={onClose}><X size={16} /></button>
@@ -5597,6 +5639,7 @@ button { cursor: pointer; }
   .ltHero { padding: 18px 16px !important; border-radius: 12px !important; }
   .ltH1 { font-size: 20px !important; }
   .ltFormGrid { grid-template-columns: 1fr !important; }
+  .ltEquipDetailGrid { grid-template-columns: 1fr !important; }
   .ltAnalysisOverviewGrid { grid-template-columns: 1fr !important; }
 
   /* Chemicals / Consumables tables: collapse into stacked cards.
@@ -5807,6 +5850,12 @@ const S = {
   modalTitle: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 },
   modalFoot: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 },
   formGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
+  // Equipment detail modal: photo/info card on the left, activity history
+  // (with its own independent scroll) on the right — replaces the old
+  // stacked layout where the whole modal had to be scrolled to see history.
+  equipDetailGrid: { display: "grid", gridTemplateColumns: "270px 1fr", gap: 20, alignItems: "start" },
+  equipDetailLeft: { display: "flex", flexDirection: "column", gap: 12, minWidth: 0 },
+  equipDetailRight: { display: "flex", flexDirection: "column", minWidth: 0 },
   fieldLabel: { fontSize: 11.5, color: "var(--muted)", fontWeight: 500 },
   input: { border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px", fontSize: 13, width: "100%" },
 
