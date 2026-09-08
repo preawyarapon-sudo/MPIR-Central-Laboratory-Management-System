@@ -1551,10 +1551,12 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
   const [confirmDeleteAct, setConfirmDeleteAct] = useState(null);
   const [showDisable, setShowDisable] = useState(false);
   const [dailyCheckEntry, setDailyCheckEntry] = useState(null);
-  // Daily check applies to routine lab/support equipment — air conditioners
-  // are fixed-installed and have no daily-check routine, so the button is
-  // hidden for that one type (see resolveEquipGroup's aircon check elsewhere).
-  const showDailyCheckBtn = item.type !== "เครื่องปรับอากาศ";
+  // Daily check currently only has a real, working form for เครื่องชั่ง
+  // (the weight-deviation check below). pH Meter, EC Meter, and every other
+  // equipment type will each need their own dedicated check design before
+  // they get this button — until then it stays hidden so no one is shown a
+  // scale-only weight-check form for equipment it doesn't apply to.
+  const showDailyCheckBtn = item.type === "เครื่องชั่ง";
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
   const bk = equipmentBookingSummary(item.id, bookings);
