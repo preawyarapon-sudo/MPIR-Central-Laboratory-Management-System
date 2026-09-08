@@ -889,7 +889,8 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
             <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
               activities={activities} setActivities={persist.activities}
               bookings={bookings} setBookings={persist.bookings} items={items} notify={notify}
-              dailyChecks={dailyChecks} />
+              dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks}
+              canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
             <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialScaleId={dailyCheckDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
@@ -1181,7 +1182,7 @@ function AlertPanel({ title, icon: Icon, items, empty, onSeeAll }) {
 }
 
 /* ================= EQUIPMENT ================= */
-function EquipmentTab({ equipment, setEquipment, activities, setActivities, bookings, setBookings, items = [], notify, dailyChecks = [] }) {
+function EquipmentTab({ equipment, setEquipment, activities, setActivities, bookings, setBookings, items = [], notify, dailyChecks = [], setDailyChecks, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -1258,6 +1259,15 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       const nextDue = e.intervalMonths ? (addMonths(act.date, e.intervalMonths) || e.nextDue) : e.nextDue;
       return { ...e, lastCalibration: act.date, nextDue };
     }));
+  }
+
+  // Same upsert logic as DailyCheckTab's, but reachable straight from the
+  // equipment detail popup (see the "Daily check" button below) so filling
+  // one in doesn't require leaving this page to go to the Daily check tab.
+  function upsertDailyCheck(entry, message = "บันทึกผลการตรวจสอบแล้ว") {
+    if (dailyChecks.find(c => c.id === entry.id)) setDailyChecks(dailyChecks.map(c => c.id === entry.id ? entry : c));
+    else setDailyChecks([entry, ...dailyChecks]);
+    notify(message);
   }
 
   const selectedItem = equipment.find(e => e.id === selected);
@@ -1365,6 +1375,17 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
             notify("แก้ไขกิจกรรมแล้ว");
           }}
           onDeleteActivity={(actId) => { setActivities(activities.filter(a => a.id !== actId)); notify("ลบกิจกรรมแล้ว"); }}
+          canApprove={canApprove}
+          currentUsername={currentUsername}
+          currentDisplayName={currentDisplayName}
+          onSaveDailyCheck={(entry) => upsertDailyCheck(entry)}
+          onApproveDailyCheck={(entry) => upsertDailyCheck({
+            ...entry,
+            approved: true,
+            approvedByName: currentDisplayName || currentUsername,
+            approvedByUsername: currentUsername,
+            approvedAt: new Date().toISOString(),
+          }, "อนุมัติรายการเรียบร้อยแล้ว")}
         />
       )}
       {bookingFor && (
@@ -1522,13 +1543,18 @@ function EquipmentImportForm({ onCancel, onImport }) {
   );
 }
 
-function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity }) {
+function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity, onSaveDailyCheck, onApproveDailyCheck, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDeleteAct, setConfirmDeleteAct] = useState(null);
   const [showDisable, setShowDisable] = useState(false);
+  const [dailyCheckEntry, setDailyCheckEntry] = useState(null);
+  // Daily check applies to routine lab/support equipment — air conditioners
+  // are fixed-installed and have no daily-check routine, so the button is
+  // hidden for that one type (see resolveEquipGroup's aircon check elsewhere).
+  const showDailyCheckBtn = item.type !== "เครื่องปรับอากาศ";
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
   const bk = equipmentBookingSummary(item.id, bookings);
@@ -1658,7 +1684,20 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
             <div style={S.panelTitle}>ประวัติกิจกรรม</div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button style={S.ghostBtn} onClick={() => setShowAct("external-cal")}>ส่งสอบเทียบภายนอก</button>
+              {showDailyCheckBtn && (
+                <button
+                  style={S.ghostBtn}
+                  onClick={() => setDailyCheckEntry({
+                    id: uid(), equipmentId: item.id, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
+                    condition: "", level: "", clean: "", zero: "",
+                    weights: { w10: "", w50: "", w200: "" },
+                    checkedBy: "", remarks: "",
+                    approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
+                  })}
+                >
+                  <CheckCircle2 size={13} style={{ marginRight: 4, verticalAlign: -2 }} /> Daily check
+                </button>
+              )}
               <button style={S.smallBtn} onClick={() => setShowAct(true)}><Plus size={13} /> บันทึกกิจกรรม</button>
             </div>
           </div>
@@ -1749,9 +1788,21 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
 
       {showAct && (
         <ActivityForm
-          initial={showAct === "external-cal" ? { type: "calibration", external: true } : undefined}
           onCancel={() => setShowAct(false)}
           onSave={(act) => { onAddActivity(act); setShowAct(false); }}
+        />
+      )}
+      {dailyCheckEntry && (
+        <DailyCheckForm
+          entry={dailyCheckEntry}
+          scale={item}
+          isExisting={false}
+          canApprove={canApprove}
+          currentUsername={currentUsername}
+          currentDisplayName={currentDisplayName}
+          onCancel={() => setDailyCheckEntry(null)}
+          onSave={(entry) => { onSaveDailyCheck(entry); setDailyCheckEntry(null); }}
+          onApprove={(entry) => { onApproveDailyCheck(entry); setDailyCheckEntry(null); }}
         />
       )}
       {editingAct && (
