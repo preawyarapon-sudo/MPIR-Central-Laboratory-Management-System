@@ -118,6 +118,17 @@ const ACCOUNTS = [
 
 const SESSION_KEY = "mpirLabSession";
 
+// A scanned equipment QR code links to ?tab=dailyCheck&equip=<id> (see
+// EquipQRLinkModal in LabTrackApp.jsx). Anyone who opens that link — with no
+// account and no session — should land straight on the Daily check page
+// instead of a login wall, but touch nothing else in the app. This only
+// checks the URL, never the current session, so a signed-in user's own
+// ?tab=dailyCheck reload still goes through their normal session as before.
+function isGuestDailyCheckLink() {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("tab") === "dailyCheck";
+}
+
 function loadSession() {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -256,6 +267,50 @@ export default function App() {
       events.forEach(ev => window.removeEventListener(ev, resetTimer));
     };
   }, [session]);
+
+  // Guest access: no session, but the URL is a scanned equipment QR link —
+  // skip the login wall entirely and drop straight into a Daily-check-only
+  // view of LabTrack (no other tab, no other page, and no account created).
+  if (!session && isGuestDailyCheckLink()) {
+    return (
+      <div style={styles.page} className="appPage">
+        <style>{`
+          @media (max-width: 640px) {
+            .appPage { padding: 10px 10px 18px !important; }
+            .appTopbar { padding: 8px 10px !important; }
+          }
+        `}</style>
+        <div style={styles.topbar} className="appTopbar">
+          <div style={styles.brand}>
+            <img src="/logo.png" alt="MPIR Central Lab" style={styles.logo} />
+            <div>
+              <div style={styles.brandName}>MPIR Central Lab</div>
+              <div style={styles.brandSub}>Daily check · โหมดผู้เยี่ยมชม (ไม่ต้องเข้าสู่ระบบ)</div>
+            </div>
+          </div>
+          <div style={styles.userBox}>
+            <button
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.delete("tab");
+                url.searchParams.delete("equip");
+                url.searchParams.delete("scale");
+                url.searchParams.delete("meter");
+                window.location.href = url.toString();
+              }}
+              style={{ ...styles.logoutBtn, width: "auto", padding: "7px 12px", gap: 6 }}
+              title="เข้าสู่ระบบด้วยบัญชีของคุณ"
+            >
+              เข้าสู่ระบบ
+            </button>
+          </div>
+        </div>
+        <div style={styles.content}>
+          <LabTrackApp restrictToDailyCheck currentUsername="" currentDisplayName="ผู้เยี่ยมชม (สแกน QR)" canApprove={false} />
+        </div>
+      </div>
+    );
+  }
 
   if (!session) {
     return <PasswordGate onLogin={(s) => { setAutoLoggedOut(false); setSession(s); }} autoLoggedOut={autoLoggedOut} />;
