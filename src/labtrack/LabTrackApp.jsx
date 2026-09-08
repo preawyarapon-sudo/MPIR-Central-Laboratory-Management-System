@@ -641,7 +641,7 @@ const RESTRICTED_NAV = [
   { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
 ];
 
-export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "" }) {
+export default function App({ restrictToBooking = false, currentUsername = "", currentDisplayName = "", canApprove = false }) {
   // Which tab loads first, and stays after a refresh:
   // - Default (no ?tab= yet): restricted accounts land on "ติดตามงานวิเคราะห์"
   //   (now the featured/first item), everyone else on the dashboard.
@@ -869,7 +869,7 @@ export default function App({ restrictToBooking = false, currentUsername = "", c
               bookings={bookings} setBookings={persist.bookings} items={items} notify={notify} />
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
-            <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialScaleId={dailyCheckDeepLinkId} />
+            <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialScaleId={dailyCheckDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "items" && (
             <ItemsTab items={items} setItems={persist.items} bookings={bookings} setBookings={persist.bookings} equipment={equipment} notify={notify} />
@@ -1824,7 +1824,7 @@ function WeightPointsMini({ results }) {
     </div>
   );
 }
-function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialScaleId }) {
+function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialScaleId, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const scales = equipment.filter(e => e.type === "เครื่องชั่ง").slice().sort((a, b) => alphaCompare(a.code, b.code));
   const [scaleId, setScaleId] = useState(scales[0]?.id || "");
   const [editing, setEditing] = useState(null);
@@ -1851,7 +1851,8 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
       id: uid(), equipmentId: target.id, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
       condition: "", level: "", clean: "", zero: "",
       weights: { w10: "", w50: "", w200: "" },
-      checkedBy: "", approvedBy: "", remarks: "",
+      checkedBy: "", remarks: "",
+      approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
     });
   }, [initialScaleId, scales]);
 
@@ -1862,10 +1863,10 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
     .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   const lastCheck = scaleChecks[0];
 
-  function upsert(entry) {
+  function upsert(entry, message = "บันทึกผลการตรวจสอบแล้ว") {
     if (dailyChecks.find(c => c.id === entry.id)) setDailyChecks(dailyChecks.map(c => c.id === entry.id ? entry : c));
     else setDailyChecks([entry, ...dailyChecks]);
-    notify("บันทึกผลการตรวจสอบแล้ว");
+    notify(message);
     setEditing(null);
   }
   function remove(id) { setDailyChecks(dailyChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
@@ -1890,7 +1891,8 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
                 id: uid(), equipmentId: scaleId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
                 condition: "", level: "", clean: "", zero: "",
                 weights: { w10: "", w50: "", w200: "" },
-                checkedBy: "", approvedBy: "", remarks: "",
+                checkedBy: "", remarks: "",
+                approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
               })}
             >
               <Plus size={15} /> บันทึกการตรวจวันนี้
@@ -1942,13 +1944,16 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
           )}
 
           <Table
-            cols={["วันที่ / เวลา", "ผู้ตรวจสอบ", "จุดตรวจ (10/50/200 ก.)", "ผล", ""]}
+            cols={["วันที่ / เวลา", "ผู้ตรวจสอบ", "จุดตรวจ (10/50/200 ก.)", "ผล", "การอนุมัติ", ""]}
             onRowClick={(i) => setEditing(scaleChecks[i])}
             rows={scaleChecks.map(c => [
               <div>{fmtDate(c.date)}<span style={{ color: "var(--muted)", marginLeft: 6, fontSize: 11.5 }}>{c.time}</span></div>,
               c.checkedBy || "-",
               <WeightPointsMini results={c.weightResults} />,
               <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>,
+              c.approved
+                ? <Tag color="var(--green)">อนุมัติแล้ว{c.approvedByName ? ` · ${c.approvedByName}` : ""}</Tag>
+                : <Tag color="var(--amber)">รออนุมัติ</Tag>,
               <RowActions onEdit={() => setEditing(c)} onDelete={() => remove(c.id)} confirmMessage="ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้" />,
             ])}
             empty="ยังไม่มีรายการตรวจสอบสำหรับเครื่องชั่งนี้"
@@ -1956,13 +1961,37 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
         </>
       )}
 
-      {editing && <DailyCheckForm entry={editing} scale={scale} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {editing && (
+        <DailyCheckForm
+          entry={editing}
+          scale={scale}
+          isExisting={dailyChecks.some(c => c.id === editing.id)}
+          canApprove={canApprove}
+          currentUsername={currentUsername}
+          currentDisplayName={currentDisplayName}
+          onCancel={() => setEditing(null)}
+          onSave={upsert}
+          onApprove={(entry) => {
+            upsert({
+              ...entry,
+              approved: true,
+              approvedByName: currentDisplayName || currentUsername,
+              approvedByUsername: currentUsername,
+              approvedAt: new Date().toISOString(),
+            }, "อนุมัติรายการเรียบร้อยแล้ว");
+          }}
+        />
+      )}
       {showShare && scale && <ScaleQRLinkModal scale={scale} onClose={() => setShowShare(false)} />}
     </div>
   );
 }
-function DailyCheckForm({ entry, scale, onCancel, onSave }) {
-  const [f, setF] = useState(() => ({ weights: { w10: "", w50: "", w200: "" }, ...entry }));
+function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, currentUsername = "", currentDisplayName = "", onCancel, onSave, onApprove }) {
+  const [f, setF] = useState(() => ({
+    weights: { w10: "", w50: "", w200: "" },
+    approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
+    ...entry,
+  }));
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setWeight = (key) => (e) => setF({ ...f, weights: { ...f.weights, [key]: e.target.value } });
 
@@ -1972,6 +2001,11 @@ function DailyCheckForm({ entry, scale, onCancel, onSave }) {
   const result = (!flagsChosen || !allWeightsEntered) ? null
     : (!dailyCheckPasses(f) ? false : weightRows.every(r => r.pass));
   const canSave = flagsChosen && allWeightsEntered && f.checkedBy.trim().length > 0;
+  // The approve button only ever acts on an already-saved record — a brand
+  // new, unsaved form has nothing yet for an approver to sign off on. It
+  // must be saved first (by whoever performed the check), then a separate
+  // authorized approver account opens it and approves.
+  const showApproveButton = isExisting && canApprove && !f.approved;
 
   return (
     <Modal onClose={onCancel} title={`บันทึกการตรวจสอบ${scale ? ` — ${scale.code}` : ""}`} wide>
@@ -2036,7 +2070,17 @@ function DailyCheckForm({ entry, scale, onCancel, onSave }) {
         </Field>
 
         <Field label="ผู้ตรวจสอบ"><input style={S.input} value={f.checkedBy} onChange={set("checkedBy")} /></Field>
-        <Field label="ผู้อนุมัติ"><input style={S.input} value={f.approvedBy} onChange={set("approvedBy")} /></Field>
+        <Field label="การอนุมัติ">
+          <div style={{
+            ...S.input, display: "flex", alignItems: "center", gap: 6,
+            background: f.approved ? "#E9F6EC" : "#F5F8F7",
+            color: f.approved ? "var(--green)" : "var(--muted)", fontWeight: f.approved ? 600 : 400,
+          }}>
+            {f.approved
+              ? <><CheckCircle2 size={14} /> อนุมัติแล้วโดย {f.approvedByName}{f.approvedAt ? ` · ${fmtDate(f.approvedAt.slice(0, 10))}` : ""}</>
+              : "ยังไม่อนุมัติ"}
+          </div>
+        </Field>
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.remarks} onChange={set("remarks")} /></Field>
       </div>
 
@@ -2053,8 +2097,22 @@ function DailyCheckForm({ entry, scale, onCancel, onSave }) {
 
       <ModalFooter
         onCancel={onCancel}
-        onSave={() => onSave({ ...f, weightResults: weightRows, result })}
+        onSave={() => {
+          // Editing and re-saving an already-approved record clears its
+          // approval — an approver should re-review the new numbers rather
+          // than have an old approval silently carry over to changed data.
+          const resetApproval = f.approved ? { approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "" } : {};
+          onSave({ ...f, weightResults: weightRows, result, ...resetApproval });
+        }}
         disabled={!canSave}
+        extra={showApproveButton && (
+          <button
+            style={{ ...S.primaryBtn, background: "var(--green)", boxShadow: "none" }}
+            onClick={() => onApprove({ ...f, weightResults: weightRows, result })}
+          >
+            <CheckCircle2 size={15} /> อนุมัติรายการนี้
+          </button>
+        )}
       />
     </Modal>
   );
@@ -4709,9 +4767,11 @@ function Modal({ title, children, onClose, wide }) {
     </div>
   );
 }
-function ModalFooter({ onCancel, onSave, disabled }) {
+function ModalFooter({ onCancel, onSave, disabled, extra }) {
   return (
     <div style={S.modalFoot}>
+      {extra}
+      <div style={{ flex: 1 }} />
       <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
       <button style={{ ...S.primaryBtn, opacity: disabled ? 0.5 : 1 }} disabled={disabled} onClick={onSave}>บันทึก</button>
     </div>
