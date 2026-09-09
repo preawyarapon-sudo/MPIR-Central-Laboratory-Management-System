@@ -580,6 +580,7 @@ const SEED_EQUIPMENT = [
   { id: "e3", code: "MPIR-003", name: "เครื่องชั่ง 4 ตำแหน่ง", type: "เครื่องชั่ง", location: "C2", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-08-20", notes: "" },
   { id: "e4", code: "MPIR-133", name: "UV/VIS Spectrometer", type: "สเปกโตรมิเตอร์", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-09-01", notes: "" },
   { id: "e5", code: "CT-AIR-001", name: "Air conditioner (25,200 BTU)", type: "เครื่องปรับอากาศ", location: "C1", status: "active", lastCalibration: "", nextDue: "", notes: "ซ่อมน้ำแอร์หยด 22/7/2569" },
+  { id: "e6", code: "MPIR-058", name: "Polarimeter", type: "Polarimeter", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-07-15", quartzNo: "5578", wavelengthNm: "589.3", quartzMin: 100.09, quartzMax: 100.13, notes: "" },
 ];
 const SEED_DAILY_CHECKS = [
 ];
@@ -1487,7 +1488,23 @@ function EquipmentForm({ item, onCancel, onSave }) {
         <Field label="ยี่ห้อ"><input style={S.input} value={f.brand || ""} onChange={set("brand")} placeholder="เช่น Mitsubishi Electric" /></Field>
         <Field label="รุ่น (Model)"><input style={S.input} value={f.model || ""} onChange={set("model")} placeholder="เช่น SRK24CYV-W1" /></Field>
         <Field label="หมายเลขเครื่อง (Serial No.)"><input style={S.input} value={f.serialNo || ""} onChange={set("serialNo")} /></Field>
-        <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder="เช่น เครื่องชั่ง" /></Field>
+        <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder='เช่น เครื่องชั่ง, pH Meter, EC Meter, Polarimeter' /></Field>
+        {f.type === "Polarimeter" && (
+          <>
+            <Field label="แผ่นควอตซ์มาตรฐาน (Quartz Control Plate No.)">
+              <input style={S.input} value={f.quartzNo || ""} onChange={set("quartzNo")} placeholder="เช่น 5578" />
+            </Field>
+            <Field label="ความยาวคลื่น (Wavelength, nm)">
+              <input style={S.input} value={f.wavelengthNm || ""} onChange={set("wavelengthNm")} placeholder="เช่น 589.3 (Sodium D-line)" />
+            </Field>
+            <Field label="ค่ามาตรฐานต่ำสุด (°)">
+              <input type="number" step="any" style={S.input} value={f.quartzMin ?? ""} onChange={set("quartzMin")} placeholder="เช่น 100.09" />
+            </Field>
+            <Field label="ค่ามาตรฐานสูงสุด (°)">
+              <input type="number" step="any" style={S.input} value={f.quartzMax ?? ""} onChange={set("quartzMax")} placeholder="เช่น 100.13" />
+            </Field>
+          </>
+        )}
         <Field label="หมวดหมู่เครื่องมือ">
           <select style={S.input} value={f.group || resolveEquipGroup(f)} onChange={set("group")}>
             <option value="analytical">เครื่องมือวิเคราะห์</option>
@@ -1588,13 +1605,15 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
   const [showDisable, setShowDisable] = useState(false);
   const [showShareView, setShowShareView] = useState(false);
   const [dailyCheckEntry, setDailyCheckEntry] = useState(null);
-  // Daily check has dedicated forms for เครื่องชั่ง (weight-deviation check)
-  // and for pH Meter / EC Meter (buffer / standard-solution check, per the
-  // reference form). Every other equipment type still has no design of its
-  // own, so the button stays hidden for those until one exists.
+  // Daily check has dedicated forms for เครื่องชั่ง (weight-deviation check),
+  // pH Meter / EC Meter (buffer / standard-solution check), and Polarimeter
+  // (quartz control plate check) — all per their reference forms. Every
+  // other equipment type still has no design of its own, so the button
+  // stays hidden for those until one exists.
   const isPhMeter = item.type === "pH Meter";
   const isEcMeter = item.type === "EC Meter";
-  const isMeter = isPhMeter || isEcMeter;
+  const isPolarimeter = item.type === "Polarimeter";
+  const isMeter = isPhMeter || isEcMeter || isPolarimeter;
   const showDailyCheckBtn = item.type === "เครื่องชั่ง" || isMeter;
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
@@ -2012,11 +2031,42 @@ const METER_PREUSE_ITEMS = [
   { key: "display", label: "หน้าจอแสดงผลปกติ" },
   { key: "probeClean", label: "หัววัดทำความสะอาดเรียบร้อย" },
 ];
-function meterPreUseChosen(preUse) {
-  return METER_PREUSE_ITEMS.every(i => preUse?.[i.key]);
+function meterPreUseChosen(preUse, items = METER_PREUSE_ITEMS) {
+  return items.every(i => preUse?.[i.key]);
 }
-function meterPreUsePasses(preUse) {
-  return METER_PREUSE_ITEMS.every(i => preUse?.[i.key] === "OK");
+function meterPreUsePasses(preUse, items = METER_PREUSE_ITEMS) {
+  return items.every(i => preUse?.[i.key] === "OK");
+}
+/* ================= POLARIMETER DAILY CHECK ================= */
+// Per form "บันทึกตรวจสอบเครื่องมือประจำวัน (DAILY CHECK) — Polarimeter":
+// checked once a day against a certified Quartz Control Plate. Unlike the
+// EC meter (where the standard value is entered fresh each day), the
+// quartz plate's number and its certified acceptance range are fixed
+// properties of a specific instrument, so they live on the equipment
+// record itself (quartzNo / quartzMin / quartzMax, set in EquipmentForm)
+// and are only ever read here, never re-entered.
+const POLARIMETER_PREUSE_ITEMS = [
+  { key: "ready", label: "เครื่องอยู่ในสภาพพร้อมใช้งาน" },
+  { key: "display", label: "หน้าจอแสดงผลปกติ" },
+  { key: "tubeClean", label: "หลอดบรรจุตัวอย่าง (Sample tube) สะอาด" },
+];
+// Reading vs the instrument's own certified quartz-plate range. Returns
+// null pass/min/max when the equipment record has no range configured yet
+// (prompts the user to set it on the equipment page rather than silently
+// treating everything as a pass).
+function computePolarimeterResult(equip, reading) {
+  const min = Number(equip?.quartzMin);
+  const max = Number(equip?.quartzMax);
+  const hasRange = equip?.quartzMin !== undefined && equip?.quartzMin !== "" && !isNaN(min)
+    && equip?.quartzMax !== undefined && equip?.quartzMax !== "" && !isNaN(max);
+  const read = Number(reading);
+  const hasRead = reading !== "" && reading !== undefined && !isNaN(read);
+  return {
+    quartzNo: equip?.quartzNo || "",
+    min: hasRange ? min : null, max: hasRange ? max : null,
+    reading: hasRead ? read : null,
+    pass: (hasRange && hasRead) ? (read >= min && read <= max) : null,
+  };
 }
 // pH readings vs the fixed ±0.05 buffer tolerance table above.
 function computePhResults(phReadings) {
@@ -2066,6 +2116,15 @@ function CheckPointsMini({ c }) {
       </span>
     );
   }
+  if (c.polarimeterResult) {
+    const r = c.polarimeterResult;
+    return (
+      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, fontFamily: "var(--font-mono)", color: r.pass ? "var(--ink)" : "var(--red)" }}>
+        {r.pass ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}
+        {r.reading ?? "-"}°
+      </span>
+    );
+  }
   return <span style={{ color: "var(--muted)" }}>-</span>;
 }
 // Blank entry shape for a fresh pH/EC daily check — mirrors the blank scale
@@ -2073,9 +2132,10 @@ function CheckPointsMini({ c }) {
 function blankMeterCheckEntry(equipmentId) {
   return {
     id: uid(), equipmentId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
-    preUse: { ready: "", display: "", probeClean: "" },
+    preUse: { ready: "", display: "", probeClean: "", tubeClean: "" },
     phReadings: { ph4: "", ph7: "", ph10: "" },
     ecStandard: "1413", ecReading: "",
+    polarimeterReading: "",
     checkedBy: "", remarks: "",
     approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
   };
@@ -2086,17 +2146,22 @@ function blankMeterCheckEntry(equipmentId) {
 // two separate equipment entries, never one combined "pH/EC" item).
 function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, currentUsername = "", currentDisplayName = "", onCancel, onSave, onApprove }) {
   const isPh = equip?.type === "pH Meter";
+  const isPolarimeter = equip?.type === "Polarimeter";
+  const preUseItems = isPolarimeter ? POLARIMETER_PREUSE_ITEMS : METER_PREUSE_ITEMS;
   const [f, setF] = useState(() => ({ ...blankMeterCheckEntry(entry?.equipmentId), ...entry }));
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setPh = (key) => (e) => setF({ ...f, phReadings: { ...f.phReadings, [key]: e.target.value } });
   const setPreUse = (key) => (v) => setF({ ...f, preUse: { ...f.preUse, [key]: v } });
 
   const phRows = isPh ? computePhResults(f.phReadings) : [];
-  const ecResult = !isPh ? computeEcResult(f.ecStandard, f.ecReading) : null;
-  const readingsComplete = isPh ? phRows.every(r => r.reading !== null) : (ecResult.standard !== null && ecResult.reading !== null);
-  const preUseChosen = meterPreUseChosen(f.preUse);
-  const preUseOk = meterPreUsePasses(f.preUse);
-  const result = (!readingsComplete || !preUseChosen) ? null : (!preUseOk ? false : (isPh ? phRows.every(r => r.pass) : ecResult.pass));
+  const ecResult = (!isPh && !isPolarimeter) ? computeEcResult(f.ecStandard, f.ecReading) : null;
+  const polarimeterResult = isPolarimeter ? computePolarimeterResult(equip, f.polarimeterReading) : null;
+  const readingsComplete = isPh ? phRows.every(r => r.reading !== null)
+    : isPolarimeter ? polarimeterResult.reading !== null
+    : (ecResult.standard !== null && ecResult.reading !== null);
+  const preUseChosen = meterPreUseChosen(f.preUse, preUseItems);
+  const preUseOk = meterPreUsePasses(f.preUse, preUseItems);
+  const result = (!readingsComplete || !preUseChosen) ? null : (!preUseOk ? false : (isPh ? phRows.every(r => r.pass) : isPolarimeter ? polarimeterResult.pass : ecResult.pass));
   const canSave = readingsComplete && preUseChosen && f.checkedBy.trim().length > 0;
   const showApproveButton = isExisting && canApprove && !f.approved;
 
@@ -2106,7 +2171,7 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
         <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="เวลา"><input type="time" style={S.input} value={f.time} onChange={set("time")} /></Field>
 
-        {METER_PREUSE_ITEMS.map(it => (
+        {preUseItems.map(it => (
           <Field key={it.key} label={it.label} plain>
             <SegToggle
               value={f.preUse[it.key]}
@@ -2140,6 +2205,27 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
               ))}
             </div>
           </Field>
+        ) : isPolarimeter ? (
+          <>
+            <Field label="แผ่นควอตซ์มาตรฐาน (Quartz Control Plate No.)" plain>
+              <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)" }}>
+                {polarimeterResult.quartzNo || "ยังไม่ได้ตั้งค่า — กรอกได้ที่หน้าเครื่องมือ"}
+              </div>
+            </Field>
+            <Field label="เกณฑ์ที่ยอมรับ (°)" plain>
+              <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                {polarimeterResult.min !== null ? `${polarimeterResult.min} – ${polarimeterResult.max} °` : "ยังไม่ได้ตั้งค่า — กรอกได้ที่หน้าเครื่องมือ"}
+              </div>
+            </Field>
+            <Field label="ค่าที่อ่านได้ (°)"><input type="number" step="any" style={S.input} value={f.polarimeterReading} onChange={set("polarimeterReading")} /></Field>
+            <Field label="ผล" plain>
+              <div style={{ ...S.input, display: "flex", alignItems: "center" }}>
+                {polarimeterResult.pass === null ? <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                  : polarimeterResult.pass ? <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--green)", fontSize: 12, fontWeight: 600 }}><CheckCircle2 size={13} /> ผ่าน</span>
+                  : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
+              </div>
+            </Field>
+          </>
         ) : (
           <>
             <Field label="ค่ามาตรฐาน (µS/cm)"><input type="number" step="any" style={S.input} value={f.ecStandard} onChange={set("ecStandard")} /></Field>
@@ -2189,13 +2275,13 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
         onCancel={onCancel}
         onSave={() => {
           const resetApproval = f.approved ? { approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "" } : {};
-          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: !isPh ? ecResult : undefined, result, ...resetApproval });
+          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: (!isPh && !isPolarimeter) ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, result, ...resetApproval });
         }}
         disabled={!canSave}
         extra={showApproveButton && (
           <button
             style={{ ...S.primaryBtn, background: "var(--green)", boxShadow: "none" }}
-            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: !isPh ? ecResult : undefined, result })}
+            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: (!isPh && !isPolarimeter) ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, result })}
           >
             <CheckCircle2 size={15} /> อนุมัติรายการนี้
           </button>
@@ -2216,13 +2302,14 @@ function blankScaleCheckEntry(equipmentId) {
   };
 }
 // Unified "Daily check" tab — one dropdown covering every equipment type
-// that has a dedicated daily-check design: เครื่องชั่ง (weight check) and
-// pH Meter / EC Meter (buffer / standard-solution check). Which form opens
-// (DailyCheckForm vs MeterCheckForm) is decided per selected item's type,
-// so this tab stays a single entry point instead of splitting by type.
+// that has a dedicated daily-check design: เครื่องชั่ง (weight check),
+// pH Meter / EC Meter (buffer / standard-solution check), and Polarimeter
+// (quartz control plate check). Which form opens (DailyCheckForm vs
+// MeterCheckForm) is decided per selected item's type, so this tab stays a
+// single entry point instead of splitting by type.
 function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialCheckId, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const checkable = equipment
-    .filter(e => e.type === "เครื่องชั่ง" || e.type === "pH Meter" || e.type === "EC Meter")
+    .filter(e => e.type === "เครื่องชั่ง" || e.type === "pH Meter" || e.type === "EC Meter" || e.type === "Polarimeter")
     .slice()
     .sort((a, b) => alphaCompare(a.code, b.code));
   const [equipId, setEquipId] = useState(checkable[0]?.id || "");
@@ -2282,10 +2369,10 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
 
   return (
     <div>
-      <TabHeader title="ตรวจเช็คเครื่องมือประจำวัน" sub="บันทึกผลตรวจสอบเครื่องชั่ง, pH Meter และ EC Meter แต่ละวัน คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — หรือสแกน QR ที่ติดบนเครื่องเพื่อเปิดตรงเครื่องนั้นได้เลย" />
+      <TabHeader title="ตรวจเช็คเครื่องมือประจำวัน" sub="บันทึกผลตรวจสอบเครื่องชั่ง, pH Meter, EC Meter และ Polarimeter แต่ละวัน คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — หรือสแกน QR ที่ติดบนเครื่องเพื่อเปิดตรงเครื่องนั้นได้เลย" />
 
       {checkable.length === 0 ? (
-        <EmptyState text={'ยังไม่มีเครื่องมือประเภท "เครื่องชั่ง", "pH Meter" หรือ "EC Meter" — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่'} />
+        <EmptyState text={'ยังไม่มีเครื่องมือประเภท "เครื่องชั่ง", "pH Meter", "EC Meter" หรือ "Polarimeter" — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่'} />
       ) : (
         <>
           <Toolbar>
@@ -2586,7 +2673,7 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
   const days = daysUntil(equip.nextDue);
   const st = statusOf(days);
   const isScale = equip.type === "เครื่องชั่ง";
-  const isMeter = equip.type === "pH Meter" || equip.type === "EC Meter";
+  const isMeter = equip.type === "pH Meter" || equip.type === "EC Meter" || equip.type === "Polarimeter";
   const bk = equipmentBookingSummary(equip.id, bookings);
   const typeLabel = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ" };
   const sortedDailyChecks = dailyChecks.slice().sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
