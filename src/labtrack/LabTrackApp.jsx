@@ -402,17 +402,25 @@ function pendingReturnQty(item) {
 
 /* ---------- booking (จอง/ยืมเครื่องมือ) helpers ---------- */
 const BOOKING_TYPE_LABEL = { checkout: "ขอใช้งาน", reservation: "จองล่วงหน้า" };
+// The 3 original groups, kept as the "known" defaults that always show
+// first (when in use) — legacy equipment records store these short codes
+// in `group` (e.g. "analytical") rather than the Thai label itself.
 const EQUIP_GROUP_LABEL = { analytical: "เครื่องมือวิเคราะห์", aircon: "เครื่องปรับอากาศ", support: "เครื่องมือสนับสนุน" };
 // Equipment records created before this grouping existed have no explicit
 // `group` field. Rather than silently defaulting everything to one bucket
 // (which would misfile every air conditioner), fall back to the type field
 // that already reliably marks air conditioners elsewhere in the app — any
-// other ungrouped equipment defaults to "analytical" since that's the
-// majority of what's tracked here; admins can reclassify individual items
-// to "support" from the equipment form.
+// other ungrouped equipment defaults to "เครื่องมือวิเคราะห์" since that's
+// the majority of what's tracked here.
+// `group` is now free text (see EquipmentForm) — an admin can type any
+// category name and it becomes its own filter tab. Legacy records that
+// still hold one of the old short codes ("analytical" / "aircon" /
+// "support") are translated to their Thai label for display; anything
+// else is used exactly as typed.
 function resolveEquipGroup(e) {
-  if (e.group === "analytical" || e.group === "aircon" || e.group === "support") return e.group;
-  return e.type === "เครื่องปรับอากาศ" ? "aircon" : "analytical";
+  const g = (e.group || "").trim();
+  if (g) return EQUIP_GROUP_LABEL[g] || g;
+  return e.type === "เครื่องปรับอากาศ" ? EQUIP_GROUP_LABEL.aircon : EQUIP_GROUP_LABEL.analytical;
 }
 const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
 // A more honest label than the raw status: "approved" alone doesn't say
@@ -1227,7 +1235,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [groupFilter, setGroupFilter] = useState("all"); // all | analytical | aircon | support
+  const [groupFilter, setGroupFilter] = useState("all"); // "all" or any group label (free text)
   const [calibFilter, setCalibFilter] = useState("all"); // "all" | "warn" | "danger"
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
@@ -1249,10 +1257,23 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
     .sort((a, b) => alphaCompare(a.code, b.code));
 
   const groupCounts = useMemo(() => {
-    const c = { analytical: 0, aircon: 0, support: 0 };
-    equipment.forEach(e => { c[resolveEquipGroup(e)]++; });
+    const c = {};
+    equipment.forEach(e => { const g = resolveEquipGroup(e); c[g] = (c[g] || 0) + 1; });
     return c;
   }, [equipment]);
+  // Known groups (if any equipment still uses them) come first in a fixed
+  // order; any custom group an admin typed in shows up after, alphabetically
+  // — so a brand-new category appears as its own tab as soon as it's saved
+  // on at least one piece of equipment.
+  const groupOrder = useMemo(() => {
+    const known = [EQUIP_GROUP_LABEL.analytical, EQUIP_GROUP_LABEL.aircon, EQUIP_GROUP_LABEL.support];
+    const present = Object.keys(groupCounts);
+    const custom = present.filter(g => !known.includes(g)).sort((a, b) => a.localeCompare(b, "th"));
+    return [...known.filter(g => groupCounts[g] > 0), ...custom];
+  }, [groupCounts]);
+  // Existing group names (across all equipment) offered as autocomplete
+  // suggestions in the equipment form's category field.
+  const groupOptions = useMemo(() => [...new Set([...Object.values(EQUIP_GROUP_LABEL), ...Object.keys(groupCounts)])], [groupCounts]);
 
   function upsert(item) {
     if (equipment.find(e => e.id === item.id)) {
@@ -1281,7 +1302,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   function importItems(items) {
     const newItems = items.map(it => ({
       id: uid(), code: it.code, name: it.name, brand: it.brand || "", model: it.model || "", serialNo: it.serialNo || "",
-      type: it.type || "", group: it.type === "เครื่องปรับอากาศ" ? "aircon" : "analytical", location: it.location || "",
+      type: it.type || "", group: it.type === "เครื่องปรับอากาศ" ? EQUIP_GROUP_LABEL.aircon : EQUIP_GROUP_LABEL.analytical, location: it.location || "",
       status: "active", lastCalibration: it.lastCalibration || "", nextDue: it.nextDue || "", intervalMonths: it.intervalMonths || "",
       notes: "", imageUrl: "",
     }));
@@ -1318,9 +1339,9 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       <TabHeader title="เครื่องมือ" sub="รายการเครื่องมือทั้งหมดและกำหนดสอบเทียบ" />
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <ViewTab active={groupFilter === "all"} onClick={() => setGroupFilter("all")} label="ทั้งหมด" count={equipment.length} />
-        <ViewTab active={groupFilter === "analytical"} onClick={() => setGroupFilter("analytical")} label={EQUIP_GROUP_LABEL.analytical} count={groupCounts.analytical} />
-        <ViewTab active={groupFilter === "aircon"} onClick={() => setGroupFilter("aircon")} label={EQUIP_GROUP_LABEL.aircon} count={groupCounts.aircon} />
-        <ViewTab active={groupFilter === "support"} onClick={() => setGroupFilter("support")} label={EQUIP_GROUP_LABEL.support} count={groupCounts.support} />
+        {groupOrder.map(g => (
+          <ViewTab key={g} active={groupFilter === g} onClick={() => setGroupFilter(g)} label={g} count={groupCounts[g]} />
+        ))}
       </div>
       <Toolbar>
         <SearchBox value={q} onChange={setQ} placeholder="ค้นหารหัส, ชื่อ, ตำแหน่ง..." />
@@ -1342,7 +1363,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", group: "analytical", location: "", status: "active", lastCalibration: "", nextDue: "", intervalMonths: "", notes: "", imageUrl: "" })}>
+        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", group: "", location: "", status: "active", lastCalibration: "", nextDue: "", intervalMonths: "", notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
@@ -1392,7 +1413,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       </div>
 
       {editing && (
-        <EquipmentForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />
+        <EquipmentForm item={editing} groupOptions={groupOptions} onCancel={() => setEditing(null)} onSave={upsert} />
       )}
       {selectedItem && (
         <EquipmentDetail
@@ -1481,7 +1502,7 @@ function ImageUploadField({ label, value, onChange }) {
   );
 }
 
-function EquipmentForm({ item, onCancel, onSave }) {
+function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
   const [f, setF] = useState(item);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
@@ -1530,11 +1551,14 @@ function EquipmentForm({ item, onCancel, onSave }) {
           </>
         )}
         <Field label="หมวดหมู่เครื่องมือ">
-          <select style={S.input} value={f.group || resolveEquipGroup(f)} onChange={set("group")}>
-            <option value="analytical">เครื่องมือวิเคราะห์</option>
-            <option value="aircon">เครื่องปรับอากาศ</option>
-            <option value="support">เครื่องมือสนับสนุน</option>
-          </select>
+          <input
+            style={S.input} list="equipGroupOptions"
+            value={f.group || resolveEquipGroup(f)} onChange={set("group")}
+            placeholder="เช่น เครื่องมือวิเคราะห์ — พิมพ์ชื่อหมวดใหม่ได้เลย"
+          />
+          <datalist id="equipGroupOptions">
+            {groupOptions.map(g => <option key={g} value={g} />)}
+          </datalist>
         </Field>
         <Field label="ตำแหน่งที่ตั้ง"><input style={S.input} value={f.location} onChange={set("location")} placeholder="เช่น C1" /></Field>
         <Field label="สถานะ">
