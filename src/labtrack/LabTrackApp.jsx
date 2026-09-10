@@ -1514,7 +1514,7 @@ function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
         <Field label="ยี่ห้อ"><input style={S.input} value={f.brand || ""} onChange={set("brand")} placeholder="เช่น Mitsubishi Electric" /></Field>
         <Field label="รุ่น (Model)"><input style={S.input} value={f.model || ""} onChange={set("model")} placeholder="เช่น SRK24CYV-W1" /></Field>
         <Field label="หมายเลขเครื่อง (Serial No.)"><input style={S.input} value={f.serialNo || ""} onChange={set("serialNo")} /></Field>
-        <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder='เช่น เครื่องชั่ง, pH Meter, EC Meter, Polarimeter, Oven, เครื่องควบคุมความชื้น, Cooling Bath, Refractometer' /></Field>
+        <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder='เช่น เครื่องชั่ง, pH Meter, EC Meter, Polarimeter, Oven, เครื่องควบคุมความชื้น, Cooling Bath, Refractometer, Glass Thermometer' /></Field>
         {f.type === "Refractometer" && (
           <>
             <Field label="เกณฑ์การยอมรับ %Brix — ต่ำสุด">
@@ -1686,7 +1686,8 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
   const isHumidity = item.type === "เครื่องควบคุมความชื้น";
   const isCoolingBath = item.type === "Cooling Bath";
   const isRefractometer = item.type === "Refractometer";
-  const isMeter = isPhMeter || isEcMeter || isPolarimeter || isOven || isHumidity || isCoolingBath || isRefractometer;
+  const isGlassThermometer = item.type === "Glass Thermometer";
+  const isMeter = isPhMeter || isEcMeter || isPolarimeter || isOven || isHumidity || isCoolingBath || isRefractometer || isGlassThermometer;
   const showDailyCheckBtn = item.type === "เครื่องชั่ง" || isMeter;
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
@@ -2234,6 +2235,13 @@ function computeRefractometerResult(equip, reading) {
     pass: (hasRange && hasRead) ? (read >= min && read <= max) : null,
   };
 }
+/* ================= GLASS THERMOMETER DAILY CHECK ================= */
+// Simple condition checklist — no numeric reading, just confirming the
+// thermometer is intact and its mercury/alcohol column reads normally.
+const GLASS_THERMOMETER_PREUSE_ITEMS = [
+  { key: "notBroken", label: "สภาพเครื่องไม่แตก ไม่บิ่น" },
+  { key: "mercuryNormal", label: "สายปรอทไม่ขาดช่วง อ่านค่าได้ปกติ" },
+];
 // pH readings vs the fixed ±0.05 buffer tolerance table above.
 function computePhResults(phReadings) {
   return PH_POINTS.map(p => {
@@ -2343,7 +2351,7 @@ function CheckPointsMini({ c }) {
 function blankMeterCheckEntry(equipmentId) {
   return {
     id: uid(), equipmentId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
-    preUse: { ready: "", display: "", probeClean: "", tubeClean: "", waterLevel: "", cleaned: "", stdPrepared: "" },
+    preUse: { ready: "", display: "", probeClean: "", tubeClean: "", waterLevel: "", cleaned: "", stdPrepared: "", notBroken: "", mercuryNormal: "" },
     phReadings: { ph4: "", ph7: "", ph10: "" },
     ecStandard: "1413", ecReading: "",
     polarimeterReading: "",
@@ -2367,11 +2375,13 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
   const isHumidity = equip?.type === "เครื่องควบคุมความชื้น";
   const isCoolingBath = equip?.type === "Cooling Bath";
   const isRefractometer = equip?.type === "Refractometer";
+  const isGlassThermometer = equip?.type === "Glass Thermometer";
   const preUseItems = isPolarimeter ? POLARIMETER_PREUSE_ITEMS
     : isOven ? OVEN_PREUSE_ITEMS
     : isHumidity ? HUMIDITY_PREUSE_ITEMS
     : isCoolingBath ? COOLING_BATH_PREUSE_ITEMS
     : isRefractometer ? REFRACTOMETER_PREUSE_ITEMS
+    : isGlassThermometer ? GLASS_THERMOMETER_PREUSE_ITEMS
     : METER_PREUSE_ITEMS;
   const [f, setF] = useState(() => ({ ...blankMeterCheckEntry(entry?.equipmentId), ...entry }));
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -2618,7 +2628,7 @@ function blankScaleCheckEntry(equipmentId) {
 // type, so this tab stays a single entry point instead of splitting by type.
 function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialCheckId, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const checkable = equipment
-    .filter(e => e.type === "เครื่องชั่ง" || e.type === "pH Meter" || e.type === "EC Meter" || e.type === "Polarimeter" || e.type === "Oven" || e.type === "เครื่องควบคุมความชื้น" || e.type === "Cooling Bath" || e.type === "Refractometer")
+    .filter(e => e.type === "เครื่องชั่ง" || e.type === "pH Meter" || e.type === "EC Meter" || e.type === "Polarimeter" || e.type === "Oven" || e.type === "เครื่องควบคุมความชื้น" || e.type === "Cooling Bath" || e.type === "Refractometer" || e.type === "Glass Thermometer")
     .slice()
     .sort((a, b) => alphaCompare(a.code, b.code));
   const [equipId, setEquipId] = useState(checkable[0]?.id || "");
@@ -2741,6 +2751,7 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
                           : equip?.type === "เครื่องควบคุมความชื้น" ? HUMIDITY_PREUSE_ITEMS
                           : equip?.type === "Cooling Bath" ? COOLING_BATH_PREUSE_ITEMS
                           : equip?.type === "Refractometer" ? REFRACTOMETER_PREUSE_ITEMS
+                          : equip?.type === "Glass Thermometer" ? GLASS_THERMOMETER_PREUSE_ITEMS
                           : METER_PREUSE_ITEMS;
                         return `${items.filter(i => lastCheck.preUse?.[i.key] === "OK").length}/${items.length}`;
                       })()}
@@ -2990,7 +3001,7 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
   const days = daysUntil(equip.nextDue);
   const st = statusOf(days);
   const isScale = equip.type === "เครื่องชั่ง";
-  const isMeter = equip.type === "pH Meter" || equip.type === "EC Meter" || equip.type === "Polarimeter" || equip.type === "Oven" || equip.type === "เครื่องควบคุมความชื้น" || equip.type === "Cooling Bath" || equip.type === "Refractometer";
+  const isMeter = equip.type === "pH Meter" || equip.type === "EC Meter" || equip.type === "Polarimeter" || equip.type === "Oven" || equip.type === "เครื่องควบคุมความชื้น" || equip.type === "Cooling Bath" || equip.type === "Refractometer" || equip.type === "Glass Thermometer";
   const bk = equipmentBookingSummary(equip.id, bookings);
   const typeLabel = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ" };
   const sortedDailyChecks = dailyChecks.slice().sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
