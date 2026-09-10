@@ -974,7 +974,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} />
           )}
           {!restrictToBooking && tab === "reports" && (
-            <ReportsTab equipment={equipment} activities={activities} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests} />
+            <ReportsTab equipment={equipment} activities={activities} dailyChecks={dailyChecks} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests} />
           )}
         </main>
       </div>
@@ -5521,7 +5521,39 @@ function PurchaseRequestsImportForm({ onCancel, onImport }) {
 }
 
 
-function ReportsTab({ equipment, activities, chemicals, consumables, purchaseRequests }) {
+// Builds an Excel-compatible HYPERLINK() formula for a CSV cell. Excel (and
+// Google Sheets, when importing) evaluate a cell starting with "=" as a
+// formula even inside a plain CSV file, so this is how a "link" column can
+// render as an actual clickable hyperlink instead of a raw URL string —
+// no separate .xlsx library needed. Falls back to plain text when there's
+// no URL to link (nothing worse than what the column showed before).
+function hyperlink(url, label) {
+  const clean = (url || "").toString().trim();
+  const text = (label ?? clean ?? "").toString().trim();
+  if (!clean) return text;
+  // Quotes inside either argument would break the formula's own quoting
+  // once CSV-unescaped by Excel, so swap them for a safe lookalike.
+  const safe = (s) => s.replace(/"/g, "'");
+  return `=HYPERLINK("${safe(clean)}", "${safe(text) || safe(clean)}")`;
+}
+const ACTIVITY_TYPE_LABEL = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ", dailyCheck: "Daily check" };
+// Flattens whichever daily-check result shape an entry has (scale weights,
+// pH points, EC, Polarimeter, Oven, Refractometer, or a plain OK/NG check
+// like Humidity control / Cooling Bath) into one readable line for reports.
+function dailyCheckSummaryText(c) {
+  const parts = [];
+  if (c.weightResults) parts.push(c.weightResults.map(w => `${w.label} ${w.reading ?? "-"}g: ${w.pass ? "ผ่าน" : "ไม่ผ่าน"}`).join(" / "));
+  if (c.phResults) parts.push(c.phResults.map(r => `${r.label} ${r.reading ?? "-"}: ${r.pass ? "ผ่าน" : "ไม่ผ่าน"}`).join(" / "));
+  if (c.ecResult) parts.push(`EC ${c.ecResult.reading ?? "-"} µS/cm: ${c.ecResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
+  if (c.polarimeterResult) parts.push(`Polarimeter ${c.polarimeterResult.reading ?? "-"}°: ${c.polarimeterResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
+  if (c.ovenResult) parts.push(`${c.ovenResult.reading ?? "-"}°C: ${c.ovenResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
+  if (c.refractometerResult) parts.push(`${c.refractometerResult.reading ?? "-"} °Brix: ${c.refractometerResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
+  if (parts.length === 0) parts.push(c.result ? "ผ่าน" : c.result === false ? "ไม่ผ่าน" : "-");
+  if (c.remarks) parts.push(`หมายเหตุ: ${c.remarks}`);
+  return parts.join(" · ");
+}
+
+function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consumables, purchaseRequests }) {
   function toCSV(rows, headers) {
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     return [headers.join(","), ...rows.map(r => r.map(esc).join(","))].join("\n");
@@ -5538,7 +5570,7 @@ function ReportsTab({ equipment, activities, chemicals, consumables, purchaseReq
     ["รหัส", "ชื่อ", "ยี่ห้อ", "รุ่น", "Serial No.", "ประเภท", "ตำแหน่ง", "สถานะ", "สอบเทียบล่าสุด", "กำหนดถัดไป", "หมายเหตุ"]
   ));
   const exportActivities = () => download("activities.csv", toCSV(
-    activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, a.type, a.detail, a.by, a.poNo || "", a.poUrl || "", a.certUrl || ""]),
+    activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, ACTIVITY_TYPE_LABEL[a.type] || a.type, a.detail, a.by, a.poNo || "", hyperlink(a.poUrl, a.poNo || "เปิดไฟล์ PO"), hyperlink(a.certUrl, "เปิดไฟล์ Certificate")]),
     ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ PO", "ลิงก์ Certificate"]
   ));
   const exportChemicals = () => download("chemicals.csv", toCSV(
@@ -5575,9 +5607,9 @@ function ReportsTab({ equipment, activities, chemicals, consumables, purchaseReq
     const rows = [];
     purchaseRequests.forEach(r => {
       const cats = (r.categories || []).map(c => PR_CATEGORY_LABEL[c] || c).join("; ");
-      const poList = getPRPos(r).map(p => p.poNo).filter(Boolean).join("; ");
+      const poCell = getPRPos(r).map(p => hyperlink(p.fileUrl, p.poNo || "เปิดไฟล์ PO")).filter(Boolean).join(" ; ");
       getPRItems(r).forEach(it => {
-        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", poList, r.requestedBy, r.notes || ""]);
+        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", poCell, r.requestedBy, r.notes || ""]);
       });
     });
     download("purchase-requests.csv", toCSV(
@@ -5590,16 +5622,78 @@ function ReportsTab({ equipment, activities, chemicals, consumables, purchaseReq
 
   const cards = [
     { title: "เครื่องมือทั้งหมด", desc: `${equipment.length} รายการ พร้อมกำหนดสอบเทียบ`, action: exportEquipment, icon: Wrench },
-    { title: "ประวัติกิจกรรม", desc: `${activities.length} รายการ สอบเทียบ/ซ่อม/แจ้งซ่อม`, action: exportActivities, icon: CalendarClock },
+    { title: "ประวัติกิจกรรม (ทุกเครื่องมือ)", desc: `${activities.length} รายการ สอบเทียบ/ซ่อม/แจ้งซ่อม`, action: exportActivities, icon: CalendarClock },
     { title: "สต็อคสารเคมี", desc: `${chemicals.length} รายการ พร้อมวันหมดอายุ`, action: exportChemicals, icon: FlaskConical },
     { title: "พัสดุสิ้นเปลือง", desc: `${consumables.length} รายการ พร้อมปริมาณคงเหลือ`, action: exportConsumables, icon: Package },
     { title: "สรุปรับเข้า-เบิกใช้รายเดือน", desc: `${txCount} รายการรับเข้า/เบิกใช้ สรุปตามเดือนและรายการ`, action: exportMonthlySummary, icon: CalendarClock },
     { title: "ใบขอซื้อ (PR)", desc: `${purchaseRequests.length} รายการ ทุกหมวดหมู่`, action: exportPurchaseRequests, icon: ClipboardList },
   ];
 
+  // ---- per-equipment history export: pick one instrument + which activity
+  // types to include (calibration / repair / request / other / daily check)
+  const sortedEquip = useMemo(() => equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)), [equipment]);
+  const [historyEquipId, setHistoryEquipId] = useState(sortedEquip[0]?.id || "");
+  const [historyTypes, setHistoryTypes] = useState({ calibration: true, repair: true, request: true, other: true, dailyCheck: true });
+  useEffect(() => {
+    if (!historyEquipId && sortedEquip[0]) setHistoryEquipId(sortedEquip[0].id);
+  }, [sortedEquip, historyEquipId]);
+  const historyEquip = equipment.find(e => e.id === historyEquipId);
+  const toggleHistoryType = (key) => setHistoryTypes({ ...historyTypes, [key]: !historyTypes[key] });
+  const anyHistoryTypeChosen = Object.values(historyTypes).some(Boolean);
+
+  const exportEquipmentHistory = () => {
+    if (!historyEquip) return;
+    const rows = [];
+    activities
+      .filter(a => a.equipmentId === historyEquipId && historyTypes[a.type])
+      .forEach(a => rows.push([
+        a.date, ACTIVITY_TYPE_LABEL[a.type] || a.type, a.detail || "", a.by || "",
+        a.poNo || "", hyperlink(a.poUrl, a.poNo || "เปิดไฟล์ PO"), hyperlink(a.certUrl, "เปิดไฟล์ Certificate"),
+      ]));
+    if (historyTypes.dailyCheck) {
+      dailyChecks
+        .filter(c => c.equipmentId === historyEquipId)
+        .forEach(c => rows.push([
+          c.date, "Daily check", dailyCheckSummaryText(c), c.checkedBy || "",
+          "", "", "",
+        ]));
+    }
+    rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    download(`ประวัติ-${historyEquip.code}.csv`, toCSV(
+      rows,
+      ["วันที่", "ประเภท", "รายละเอียด / ผลตรวจ", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ PO", "ลิงก์ Certificate"]
+    ));
+  };
+
   return (
     <div>
-      <TabHeader title="รายงาน" sub="ส่งออกข้อมูลเป็นไฟล์ CSV เพื่อใช้งานต่อ" />
+      <TabHeader title="รายงาน" sub="ส่งออกข้อมูลเป็นไฟล์ CSV เพื่อใช้งานต่อ — เปิดด้วย Excel เพื่อให้ลิงก์ PO/Certificate คลิกได้โดยตรง" />
+
+      <div style={{ ...S.panel, marginBottom: 20 }}>
+        <div style={S.panelHead}><ClipboardList size={16} color="var(--teal)" /><span style={S.panelTitle}>ประวัติเครื่องมือรายตัว</span></div>
+        <div style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 12px" }}>เลือกเครื่องมือ 1 ชิ้น และเลือกประเภทกิจกรรมที่ต้องการรวมในรายงาน</div>
+        <div style={S.formGrid} className="ltFormGrid">
+          <Field label="เครื่องมือ" full>
+            <select style={S.input} value={historyEquipId} onChange={(e) => setHistoryEquipId(e.target.value)}>
+              {sortedEquip.map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
+            </select>
+          </Field>
+          <Field label="ประเภทกิจกรรม" full plain>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+              {Object.entries(ACTIVITY_TYPE_LABEL).map(([key, label]) => (
+                <label key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!historyTypes[key]} onChange={() => toggleHistoryType(key)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </Field>
+        </div>
+        <button style={{ ...S.smallBtn, marginTop: 12 }} disabled={!historyEquip || !anyHistoryTypeChosen} onClick={exportEquipmentHistory}>
+          <FileDown size={13} /> ส่งออกประวัติ{historyEquip ? ` — ${historyEquip.code}` : ""} (CSV)
+        </button>
+      </div>
+
       <div style={S.statGrid}>
         {cards.map((c, i) => {
           const Icon = c.icon;
