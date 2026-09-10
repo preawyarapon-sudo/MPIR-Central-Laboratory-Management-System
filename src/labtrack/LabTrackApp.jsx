@@ -1551,6 +1551,16 @@ function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
             </Field>
           </>
         )}
+        {f.type === "เครื่องควบคุมความชื้น" && (
+          <>
+            <Field label="เกณฑ์ความชื้นสัมพัทธ์ (%RH) — ต่ำสุด">
+              <input type="number" step="any" style={S.input} value={f.humidityMin ?? ""} onChange={set("humidityMin")} placeholder="เช่น 40" />
+            </Field>
+            <Field label="เกณฑ์ความชื้นสัมพัทธ์ (%RH) — สูงสุด">
+              <input type="number" step="any" style={S.input} value={f.humidityMax ?? ""} onChange={set("humidityMax")} placeholder="เช่น 60" />
+            </Field>
+          </>
+        )}
         {f.type === "Cooling Bath" && (
           <>
             <Field label="เกณฑ์อุณหภูมิ (จากเทอร์โมมิเตอร์) — ต่ำสุด (°C)">
@@ -2156,12 +2166,26 @@ function computeOvenResult(equip, reading) {
 }
 /* ================= HUMIDITY CONTROL DAILY CHECK ================= */
 // Per form "บันทึกตรวจสอบเครื่องมือประจำวัน (DAILY CHECK) — เครื่องควบคุมความชื้น":
-// a single daily check — the color of the silica gel is within the accepted
-// range (/ = ผ่าน, X = ไม่ผ่าน). No numeric reading, so this reuses the same
-// OK/NG toggle mechanism as the pre-use items above, just as the only item.
+// the %RH reading shown on the unit's own display is checked once a day
+// against its acceptance range — same fixed-range-on-the-equipment pattern
+// as the Oven / Cooling Bath (humidityMin / humidityMax, set in
+// EquipmentForm), plus a quick "display working normally" pre-use item.
 const HUMIDITY_PREUSE_ITEMS = [
-  { key: "silica", label: "สีของซิลิกาเจล ผ่านเกณฑ์ที่กำหนด" },
+  { key: "display", label: "หน้าจอเครื่องแสดงผลปกติ" },
 ];
+function computeHumidityResult(equip, reading) {
+  const min = Number(equip?.humidityMin);
+  const max = Number(equip?.humidityMax);
+  const hasRange = equip?.humidityMin !== undefined && equip?.humidityMin !== "" && !isNaN(min)
+    && equip?.humidityMax !== undefined && equip?.humidityMax !== "" && !isNaN(max);
+  const read = Number(reading);
+  const hasRead = reading !== "" && reading !== undefined && !isNaN(read);
+  return {
+    min: hasRange ? min : null, max: hasRange ? max : null,
+    reading: hasRead ? read : null,
+    pass: (hasRange && hasRead) ? (read >= min && read <= max) : null,
+  };
+}
 /* ================= COOLING BATH DAILY CHECK ================= */
 // Per form "การตรวจสอบระดับน้ำ และการทำความสะอาด Cooling Bath": water level
 // check every day, plus a water-change/clean-out check (still logged as a
@@ -2294,8 +2318,16 @@ function CheckPointsMini({ c }) {
       </span>
     );
   }
-  // Humidity control checks have no numeric reading — just the OK/NG
-  // pre-use item(s) — so fall back to the overall stored result.
+  if (c.humidityResult) {
+    const r = c.humidityResult;
+    return (
+      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, fontFamily: "var(--font-mono)", color: r.pass ? "var(--ink)" : "var(--red)" }}>
+        {r.pass ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}
+        {r.reading ?? "-"}%RH
+      </span>
+    );
+  }
+  // Fallback for any daily-check shape without a dedicated mini-view above.
   if (c.result !== undefined && c.result !== null) {
     return (
       <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, color: c.result ? "var(--ink)" : "var(--red)" }}>
@@ -2311,11 +2343,12 @@ function CheckPointsMini({ c }) {
 function blankMeterCheckEntry(equipmentId) {
   return {
     id: uid(), equipmentId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
-    preUse: { ready: "", display: "", probeClean: "", tubeClean: "", silica: "", waterLevel: "", cleaned: "", stdPrepared: "" },
+    preUse: { ready: "", display: "", probeClean: "", tubeClean: "", waterLevel: "", cleaned: "", stdPrepared: "" },
     phReadings: { ph4: "", ph7: "", ph10: "" },
     ecStandard: "1413", ecReading: "",
     polarimeterReading: "",
     ovenReading: "",
+    humidityReading: "",
     sucroseWeight: "", weightAfterWater: "", preparedBy: "", brixReading: "",
     coolingBathReading: "",
     checkedBy: "", remarks: "",
@@ -2351,13 +2384,15 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
   const ovenResult = isOven ? computeOvenResult(equip, f.ovenReading) : null;
   const refractometerResult = isRefractometer ? computeRefractometerResult(equip, f.brixReading) : null;
   const coolingBathResult = isCoolingBath ? computeCoolingBathTempResult(equip, f.coolingBathReading) : null;
+  const humidityResult = isHumidity ? computeHumidityResult(equip, f.humidityReading) : null;
   const readingsComplete = isPh ? phRows.every(r => r.reading !== null)
     : isPolarimeter ? polarimeterResult.reading !== null
     : isOven ? ovenResult.reading !== null
     : isRefractometer ? refractometerResult.reading !== null
     : isCoolingBath ? coolingBathResult.reading !== null
+    : isHumidity ? humidityResult.reading !== null
     : isEc ? (ecResult.standard !== null && ecResult.reading !== null)
-    : true; // humidity control has no numeric reading
+    : true;
   const preUseChosen = meterPreUseChosen(f.preUse, preUseItems);
   const preUseOk = meterPreUsePasses(f.preUse, preUseItems);
   const result = (!readingsComplete || !preUseChosen) ? null : (!preUseOk ? false
@@ -2366,8 +2401,9 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
       : isOven ? ovenResult.pass
       : isRefractometer ? refractometerResult.pass
       : isCoolingBath ? coolingBathResult.pass
+      : isHumidity ? humidityResult.pass
       : isEc ? ecResult.pass
-      : true)); // humidity control: pre-use OK/NG is the whole result
+      : true));
   const canSave = readingsComplete && preUseChosen && f.checkedBy.trim().length > 0;
   const showApproveButton = isExisting && canApprove && !f.approved;
 
@@ -2467,6 +2503,22 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
               </div>
             </Field>
           </>
+        ) : isHumidity ? (
+          <>
+            <Field label="ค่าความชื้นสัมพัทธ์จากหน้าจอเครื่อง (%RH)"><input type="number" step="any" style={S.input} value={f.humidityReading} onChange={set("humidityReading")} /></Field>
+            <Field label="เกณฑ์ที่ยอมรับ (%RH)" plain>
+              <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                {humidityResult.min !== null ? `${humidityResult.min} – ${humidityResult.max} %RH` : "ยังไม่ได้ตั้งค่า — กรอกได้ที่หน้าเครื่องมือ"}
+              </div>
+            </Field>
+            <Field label="ผล" plain>
+              <div style={{ ...S.input, display: "flex", alignItems: "center" }}>
+                {humidityResult.pass === null ? <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                  : humidityResult.pass ? <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--green)", fontSize: 12, fontWeight: 600 }}><CheckCircle2 size={13} /> ผ่าน</span>
+                  : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
+              </div>
+            </Field>
+          </>
         ) : isCoolingBath ? (
           <>
             <Field label="ค่าจากเทอร์โมมิเตอร์ (°C)"><input type="number" step="any" style={S.input} value={f.coolingBathReading} onChange={set("coolingBathReading")} /></Field>
@@ -2532,13 +2584,13 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
         onCancel={onCancel}
         onSave={() => {
           const resetApproval = f.approved ? { approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "" } : {};
-          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, result, ...resetApproval });
+          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity ? humidityResult : undefined, result, ...resetApproval });
         }}
         disabled={!canSave}
         extra={showApproveButton && (
           <button
             style={{ ...S.primaryBtn, background: "var(--green)", boxShadow: "none" }}
-            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, result })}
+            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity ? humidityResult : undefined, result })}
           >
             <CheckCircle2 size={15} /> อนุมัติรายการนี้
           </button>
@@ -5604,6 +5656,7 @@ function dailyCheckSummaryText(c) {
   if (c.ovenResult) parts.push(`${c.ovenResult.reading ?? "-"}°C: ${c.ovenResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.refractometerResult) parts.push(`${c.refractometerResult.reading ?? "-"} °Brix: ${c.refractometerResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.coolingBathResult) parts.push(`เทอร์โมมิเตอร์ ${c.coolingBathResult.reading ?? "-"}°C: ${c.coolingBathResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
+  if (c.humidityResult) parts.push(`${c.humidityResult.reading ?? "-"} %RH: ${c.humidityResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (parts.length === 0) parts.push(c.result ? "ผ่าน" : c.result === false ? "ไม่ผ่าน" : "-");
   if (c.remarks) parts.push(`หมายเหตุ: ${c.remarks}`);
   return parts.join(" · ");
