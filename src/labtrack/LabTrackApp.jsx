@@ -592,7 +592,7 @@ const SEED_EQUIPMENT = [
   { id: "e6", code: "MPIR-058", name: "Polarimeter", type: "Polarimeter", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-07-15", quartzNo: "5578", wavelengthNm: "589.3", quartzMin: 100.09, quartzMax: 100.13, notes: "" },
   { id: "e7", code: "Oven1", name: "ตู้อบลมร้อน", type: "Oven", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-07-15", ovenMin: 104.31, ovenMax: 105.69, notes: "" },
   { id: "e8", code: "MPIR-DH1", name: "เครื่องควบคุมความชื้น", type: "เครื่องควบคุมความชื้น", location: "C1", status: "active", lastCalibration: "", nextDue: "", notes: "" },
-  { id: "e9", code: "MPIR-CB1", name: "Cooling Bath", type: "Cooling Bath", location: "C1", status: "active", lastCalibration: "", nextDue: "", notes: "" },
+  { id: "e9", code: "MPIR-CB1", name: "Cooling Bath", type: "Cooling Bath", location: "C1", status: "active", lastCalibration: "", nextDue: "", coolingBathMin: 19.80, coolingBathMax: 20.20, notes: "" },
   { id: "e10", code: "MPIR-RF1", name: "Refractometer", type: "Refractometer", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-07-15", brixMin: 19.91, brixMax: 20.09, notes: "" },
 ];
 const SEED_DAILY_CHECKS = [
@@ -1551,6 +1551,16 @@ function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
             </Field>
           </>
         )}
+        {f.type === "Cooling Bath" && (
+          <>
+            <Field label="เกณฑ์อุณหภูมิ (จากเทอร์โมมิเตอร์) — ต่ำสุด (°C)">
+              <input type="number" step="any" style={S.input} value={f.coolingBathMin ?? ""} onChange={set("coolingBathMin")} placeholder="เช่น 19.80" />
+            </Field>
+            <Field label="เกณฑ์อุณหภูมิ (จากเทอร์โมมิเตอร์) — สูงสุด (°C)">
+              <input type="number" step="any" style={S.input} value={f.coolingBathMax ?? ""} onChange={set("coolingBathMax")} placeholder="เช่น 20.20" />
+            </Field>
+          </>
+        )}
         <Field label="หมวดหมู่เครื่องมือ">
           <input
             style={S.input} list="equipGroupOptions"
@@ -2160,6 +2170,24 @@ const COOLING_BATH_PREUSE_ITEMS = [
   { key: "waterLevel", label: "ตรวจสอบระดับน้ำ" },
   { key: "cleaned", label: "เปลี่ยนน้ำและทำความสะอาดอ่าง" },
 ];
+// Per form's temperature block ("จอแสดงผล [20.20°C - 19.80°C] / ค่าจาก
+// เทอร์โมมิเตอร์ / ผล"): the bath's display reading is checked once a day
+// against an independent reference thermometer, within the bath's own
+// acceptance range — same fixed-range-on-the-equipment pattern as the
+// Oven (coolingBathMin / coolingBathMax, set in EquipmentForm).
+function computeCoolingBathTempResult(equip, reading) {
+  const min = Number(equip?.coolingBathMin);
+  const max = Number(equip?.coolingBathMax);
+  const hasRange = equip?.coolingBathMin !== undefined && equip?.coolingBathMin !== "" && !isNaN(min)
+    && equip?.coolingBathMax !== undefined && equip?.coolingBathMax !== "" && !isNaN(max);
+  const read = Number(reading);
+  const hasRead = reading !== "" && reading !== undefined && !isNaN(read);
+  return {
+    min: hasRange ? min : null, max: hasRange ? max : null,
+    reading: hasRead ? read : null,
+    pass: (hasRange && hasRead) ? (read >= min && read <= max) : null,
+  };
+}
 /* ================= REFRACTOMETER (BRIX) DAILY CHECK ================= */
 // Per form "บันทึกตรวจสอบเครื่องมือประจำวัน (DAILY CHECK) — Refractometer":
 // a 20 Brix standard solution is prepared fresh each day from sucrose +
@@ -2257,8 +2285,17 @@ function CheckPointsMini({ c }) {
       </span>
     );
   }
-  // Humidity control / Cooling Bath checks have no numeric reading — just
-  // the OK/NG pre-use item(s) — so fall back to the overall stored result.
+  if (c.coolingBathResult) {
+    const r = c.coolingBathResult;
+    return (
+      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, fontFamily: "var(--font-mono)", color: r.pass ? "var(--ink)" : "var(--red)" }}>
+        {r.pass ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}
+        {r.reading ?? "-"}°C
+      </span>
+    );
+  }
+  // Humidity control checks have no numeric reading — just the OK/NG
+  // pre-use item(s) — so fall back to the overall stored result.
   if (c.result !== undefined && c.result !== null) {
     return (
       <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, color: c.result ? "var(--ink)" : "var(--red)" }}>
@@ -2280,6 +2317,7 @@ function blankMeterCheckEntry(equipmentId) {
     polarimeterReading: "",
     ovenReading: "",
     sucroseWeight: "", weightAfterWater: "", preparedBy: "", brixReading: "",
+    coolingBathReading: "",
     checkedBy: "", remarks: "",
     approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
   };
@@ -2312,12 +2350,14 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
   const polarimeterResult = isPolarimeter ? computePolarimeterResult(equip, f.polarimeterReading) : null;
   const ovenResult = isOven ? computeOvenResult(equip, f.ovenReading) : null;
   const refractometerResult = isRefractometer ? computeRefractometerResult(equip, f.brixReading) : null;
+  const coolingBathResult = isCoolingBath ? computeCoolingBathTempResult(equip, f.coolingBathReading) : null;
   const readingsComplete = isPh ? phRows.every(r => r.reading !== null)
     : isPolarimeter ? polarimeterResult.reading !== null
     : isOven ? ovenResult.reading !== null
     : isRefractometer ? refractometerResult.reading !== null
+    : isCoolingBath ? coolingBathResult.reading !== null
     : isEc ? (ecResult.standard !== null && ecResult.reading !== null)
-    : true; // humidity control / cooling bath have no numeric reading
+    : true; // humidity control has no numeric reading
   const preUseChosen = meterPreUseChosen(f.preUse, preUseItems);
   const preUseOk = meterPreUsePasses(f.preUse, preUseItems);
   const result = (!readingsComplete || !preUseChosen) ? null : (!preUseOk ? false
@@ -2325,8 +2365,9 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
       : isPolarimeter ? polarimeterResult.pass
       : isOven ? ovenResult.pass
       : isRefractometer ? refractometerResult.pass
+      : isCoolingBath ? coolingBathResult.pass
       : isEc ? ecResult.pass
-      : true)); // humidity control / cooling bath: pre-use OK/NG is the whole result
+      : true)); // humidity control: pre-use OK/NG is the whole result
   const canSave = readingsComplete && preUseChosen && f.checkedBy.trim().length > 0;
   const showApproveButton = isExisting && canApprove && !f.approved;
 
@@ -2426,6 +2467,22 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
               </div>
             </Field>
           </>
+        ) : isCoolingBath ? (
+          <>
+            <Field label="ค่าจากเทอร์โมมิเตอร์ (°C)"><input type="number" step="any" style={S.input} value={f.coolingBathReading} onChange={set("coolingBathReading")} /></Field>
+            <Field label="เกณฑ์ที่ยอมรับ (จอแสดงผล)" plain>
+              <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                {coolingBathResult.min !== null ? `${coolingBathResult.min} – ${coolingBathResult.max} °C` : "ยังไม่ได้ตั้งค่า — กรอกได้ที่หน้าเครื่องมือ"}
+              </div>
+            </Field>
+            <Field label="ผล" plain>
+              <div style={{ ...S.input, display: "flex", alignItems: "center" }}>
+                {coolingBathResult.pass === null ? <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                  : coolingBathResult.pass ? <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--green)", fontSize: 12, fontWeight: 600 }}><CheckCircle2 size={13} /> ผ่าน</span>
+                  : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
+              </div>
+            </Field>
+          </>
         ) : isEc ? (
           <>
             <Field label="ค่ามาตรฐาน (µS/cm)"><input type="number" step="any" style={S.input} value={f.ecStandard} onChange={set("ecStandard")} /></Field>
@@ -2475,13 +2532,13 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
         onCancel={onCancel}
         onSave={() => {
           const resetApproval = f.approved ? { approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "" } : {};
-          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, result, ...resetApproval });
+          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, result, ...resetApproval });
         }}
         disabled={!canSave}
         extra={showApproveButton && (
           <button
             style={{ ...S.primaryBtn, background: "var(--green)", boxShadow: "none" }}
-            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, result })}
+            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, result })}
           >
             <CheckCircle2 size={15} /> อนุมัติรายการนี้
           </button>
@@ -5546,6 +5603,7 @@ function dailyCheckSummaryText(c) {
   if (c.polarimeterResult) parts.push(`Polarimeter ${c.polarimeterResult.reading ?? "-"}°: ${c.polarimeterResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.ovenResult) parts.push(`${c.ovenResult.reading ?? "-"}°C: ${c.ovenResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.refractometerResult) parts.push(`${c.refractometerResult.reading ?? "-"} °Brix: ${c.refractometerResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
+  if (c.coolingBathResult) parts.push(`เทอร์โมมิเตอร์ ${c.coolingBathResult.reading ?? "-"}°C: ${c.coolingBathResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (parts.length === 0) parts.push(c.result ? "ผ่าน" : c.result === false ? "ไม่ผ่าน" : "-");
   if (c.remarks) parts.push(`หมายเหตุ: ${c.remarks}`);
   return parts.join(" · ");
