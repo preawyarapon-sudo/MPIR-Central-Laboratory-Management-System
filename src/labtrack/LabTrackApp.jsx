@@ -2997,22 +2997,24 @@ function printAllEquipQR(equipmentList, mode) {
   const base = typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}` : "";
   const items = equipmentList.map(e => {
     const link = `${base}?tab=${mode}&equip=${e.id}`;
-    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(link)}`;
+    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=6&data=${encodeURIComponent(link)}`;
     return { code: e.code, name: e.name, qrSrc };
   });
   const win = window.open("", "_blank");
   if (!win) { alert("เบราว์เซอร์บล็อกป๊อปอัพ กรุณาอนุญาตป๊อปอัพสำหรับหน้านี้แล้วลองอีกครั้ง"); return; }
   const pageTitle = mode === "equipmentView" ? "QR ดูข้อมูลเครื่องมือ — ทุกเครื่องมือ" : "QR เดลี่เช็ค — ทุกเครื่องมือ";
+  const showDailyCheckLabel = mode === "dailyCheck";
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(pageTitle)}</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, "Segoe UI", Tahoma, sans-serif; margin: 0; padding: 18px; color: #1a1a1a; }
   h1 { font-size: 15px; margin: 0 0 14px; }
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  .card { border: 1px dashed #999; border-radius: 10px; padding: 12px 8px; text-align: center; page-break-inside: avoid; break-inside: avoid; }
-  .card img { width: 160px; height: 160px; max-width: 100%; }
-  .code { font-weight: 700; font-size: 13.5px; margin-top: 6px; }
-  .name { font-size: 10.5px; color: #666; margin-top: 2px; }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .card { border: 1px dashed #999; border-radius: 8px; padding: 8px 6px; text-align: center; page-break-inside: avoid; break-inside: avoid; }
+  .card img { width: 100px; height: 100px; max-width: 100%; }
+  .tag { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; color: #0B4F6C; background: #E9F1FB; border-radius: 20px; padding: 1.5px 7px; margin-bottom: 4px; }
+  .code { font-weight: 700; font-size: 11px; margin-top: 4px; }
+  .name { font-size: 9px; color: #666; margin-top: 1px; }
   @media print {
     h1 { display: none; }
     .card { border: 1px solid #bbb; }
@@ -3022,7 +3024,7 @@ function printAllEquipQR(equipmentList, mode) {
 </head><body>
 <h1>${escapeHtml(pageTitle)} — ${items.length} รายการ</h1>
 <div class="grid">
-  ${items.map(it => `<div class="card"><img src="${it.qrSrc}" alt="QR ${escapeHtml(it.code)}" /><div class="code">${escapeHtml(it.code)}</div><div class="name">${escapeHtml(it.name)}</div></div>`).join("")}
+  ${items.map(it => `<div class="card">${showDailyCheckLabel ? '<div class="tag">Daily check</div>' : ""}<img src="${it.qrSrc}" alt="QR ${escapeHtml(it.code)}" /><div class="code">${escapeHtml(it.code)}</div><div class="name">${escapeHtml(it.name)}</div></div>`).join("")}
 </div>
 <script>
   window.onload = function () {
