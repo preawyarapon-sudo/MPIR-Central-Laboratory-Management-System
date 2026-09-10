@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
+import * as XLSX from "xlsx";
 
 /* ---------- Lab Analysis Tracker (separate Firebase project) ----------
    Read-only connection into the analysis-job database so the dashboard can
@@ -5521,20 +5522,17 @@ function PurchaseRequestsImportForm({ onCancel, onImport }) {
 }
 
 
-// Builds an Excel-compatible HYPERLINK() formula for a CSV cell. Excel (and
-// Google Sheets, when importing) evaluate a cell starting with "=" as a
-// formula even inside a plain CSV file, so this is how a "link" column can
-// render as an actual clickable hyperlink instead of a raw URL string —
-// no separate .xlsx library needed. Falls back to plain text when there's
-// no URL to link (nothing worse than what the column showed before).
-function hyperlink(url, label) {
+// Builds a cell that renders as a real, clickable hyperlink in the exported
+// Excel file (a genuine cell hyperlink, set via buildSheet below — not a
+// =HYPERLINK() formula typed into a CSV cell, which Excel only evaluates
+// when the field happens to need no quoting; a formula containing its own
+// comma always gets quoted by CSV escaping and then shows as literal text
+// instead of a link). Falls back to plain text when there's no URL.
+function link(url, text) {
   const clean = (url || "").toString().trim();
-  const text = (label ?? clean ?? "").toString().trim();
-  if (!clean) return text;
-  // Quotes inside either argument would break the formula's own quoting
-  // once CSV-unescaped by Excel, so swap them for a safe lookalike.
-  const safe = (s) => s.replace(/"/g, "'");
-  return `=HYPERLINK("${safe(clean)}", "${safe(text) || safe(clean)}")`;
+  const label = (text ?? clean ?? "").toString().trim();
+  if (!clean) return label;
+  return { text: label || clean, url: clean };
 }
 const ACTIVITY_TYPE_LABEL = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ", dailyCheck: "Daily check" };
 // Flattens whichever daily-check result shape an entry has (scale weights,
@@ -5554,33 +5552,44 @@ function dailyCheckSummaryText(c) {
 }
 
 function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consumables, purchaseRequests }) {
-  function toCSV(rows, headers) {
-    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    return [headers.join(","), ...rows.map(r => r.map(esc).join(","))].join("\n");
+  // Turns a header row + body rows (where a cell can be a plain value or a
+  // { text, url } pair from link() above) into a worksheet with genuine
+  // Excel cell hyperlinks — not text tricks — on every url cell.
+  function buildSheet(headers, rows) {
+    const plain = [headers, ...rows.map(r => r.map(c => (c && typeof c === "object") ? c.text : (c ?? "")))];
+    const ws = XLSX.utils.aoa_to_sheet(plain);
+    rows.forEach((r, ri) => {
+      r.forEach((c, ci) => {
+        if (c && typeof c === "object" && c.url) {
+          const addr = XLSX.utils.encode_cell({ r: ri + 1, c: ci }); // +1: header row
+          ws[addr].l = { Target: c.url };
+        }
+      });
+    });
+    ws["!cols"] = headers.map((h, ci) => ({ wch: Math.max(12, ...plain.map(row => String(row[ci] ?? "").length)) + 2 }));
+    return ws;
   }
-  function download(filename, content) {
-    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = filename; a.click();
-    URL.revokeObjectURL(url);
+  function download(filename, sheetName, headers, rows) {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, buildSheet(headers, rows), sheetName);
+    XLSX.writeFile(wb, filename);
   }
-  const exportEquipment = () => download("equipment.csv", toCSV(
-    equipment.map(e => [e.code, e.name, e.brand || "", e.model || "", e.serialNo || "", e.type, e.location, e.status, e.lastCalibration, e.nextDue, e.notes]),
-    ["รหัส", "ชื่อ", "ยี่ห้อ", "รุ่น", "Serial No.", "ประเภท", "ตำแหน่ง", "สถานะ", "สอบเทียบล่าสุด", "กำหนดถัดไป", "หมายเหตุ"]
-  ));
-  const exportActivities = () => download("activities.csv", toCSV(
-    activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, ACTIVITY_TYPE_LABEL[a.type] || a.type, a.detail, a.by, a.poNo || "", hyperlink(a.poUrl, a.poNo || "เปิดไฟล์ PO"), hyperlink(a.certUrl, "เปิดไฟล์ Certificate")]),
-    ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ PO", "ลิงก์ Certificate"]
-  ));
-  const exportChemicals = () => download("chemicals.csv", toCSV(
-    chemicals.map(c => [c.name, c.formula || "", c.brand || "", c.quantity, c.unit, earliestExpiry(c), c.location, c.minThreshold]),
-    ["ชื่อ", "สูตรเคมี", "ยี่ห้อ", "คงเหลือ", "หน่วย", "วันหมดอายุ (ใกล้สุด)", "ตำแหน่ง", "ขั้นต่ำ"]
-  ));
-  const exportConsumables = () => download("consumables.csv", toCSV(
-    consumables.map(s => [s.name, s.quantity, s.unit, s.minThreshold]),
-    ["ชื่อ", "คงเหลือ", "หน่วย", "ขั้นต่ำ"]
-  ));
+  const exportEquipment = () => download("equipment.xlsx", "เครื่องมือ",
+    ["รหัส", "ชื่อ", "ยี่ห้อ", "รุ่น", "Serial No.", "ประเภท", "ตำแหน่ง", "สถานะ", "สอบเทียบล่าสุด", "กำหนดถัดไป", "หมายเหตุ"],
+    equipment.map(e => [e.code, e.name, e.brand || "", e.model || "", e.serialNo || "", e.type, e.location, e.status, e.lastCalibration, e.nextDue, e.notes])
+  );
+  const exportActivities = () => download("activities.xlsx", "ประวัติกิจกรรม",
+    ["รหัสเครื่องมือ", "วันที่", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ PO", "ลิงก์ Certificate"],
+    activities.map(a => [equipment.find(e => e.id === a.equipmentId)?.code || a.equipmentId, a.date, ACTIVITY_TYPE_LABEL[a.type] || a.type, a.detail, a.by, a.poNo || "", link(a.poUrl, a.poNo || "เปิดไฟล์ PO"), link(a.certUrl, "เปิดไฟล์ Certificate")])
+  );
+  const exportChemicals = () => download("chemicals.xlsx", "สารเคมี",
+    ["ชื่อ", "สูตรเคมี", "ยี่ห้อ", "คงเหลือ", "หน่วย", "วันหมดอายุ (ใกล้สุด)", "ตำแหน่ง", "ขั้นต่ำ"],
+    chemicals.map(c => [c.name, c.formula || "", c.brand || "", c.quantity, c.unit, earliestExpiry(c), c.location, c.minThreshold])
+  );
+  const exportConsumables = () => download("consumables.xlsx", "พัสดุสิ้นเปลือง",
+    ["ชื่อ", "คงเหลือ", "หน่วย", "ขั้นต่ำ"],
+    consumables.map(s => [s.name, s.quantity, s.unit, s.minThreshold])
+  );
   const exportMonthlySummary = () => {
     const map = {};
     consumables.forEach(s => {
@@ -5597,25 +5606,26 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
       });
     });
     const rows = Object.values(map).sort((a, b) => a.month.localeCompare(b.month) || a.name.localeCompare(b.name));
-    download("consumables-monthly-summary.csv", toCSV(
-      rows.map(r => [r.month, r.name, r.received, r.withdrawn, r.received - r.withdrawn, r.unit, [...r.poNos].join("; ")]),
-      ["เดือน", "ชื่อพัสดุ", "รวมรับเข้า", "รวมเบิกใช้", "สุทธิ (รับ-เบิก)", "หน่วย", "เลขที่ PO"]
-    ));
+    download("consumables-monthly-summary.xlsx", "สรุปรายเดือน",
+      ["เดือน", "ชื่อพัสดุ", "รวมรับเข้า", "รวมเบิกใช้", "สุทธิ (รับ-เบิก)", "หน่วย", "เลขที่ PO"],
+      rows.map(r => [r.month, r.name, r.received, r.withdrawn, r.received - r.withdrawn, r.unit, [...r.poNos].join("; ")])
+    );
   };
 
   const exportPurchaseRequests = () => {
     const rows = [];
     purchaseRequests.forEach(r => {
       const cats = (r.categories || []).map(c => PR_CATEGORY_LABEL[c] || c).join("; ");
-      const poCell = getPRPos(r).map(p => hyperlink(p.fileUrl, p.poNo || "เปิดไฟล์ PO")).filter(Boolean).join(" ; ");
+      const pos = getPRPos(r).filter(p => p.poNo || p.fileUrl);
+      const poCell = pos.length === 0 ? "" : pos.length === 1 ? link(pos[0].fileUrl, pos[0].poNo || "เปิดไฟล์ PO") : pos.map(p => p.poNo).join("; ");
       getPRItems(r).forEach(it => {
         rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", poCell, r.requestedBy, r.notes || ""]);
       });
     });
-    download("purchase-requests.csv", toCSV(
-      rows,
-      ["เลขที่ PR", "วันที่", "หมวด", "รายการ", "สถานะรับของ", "วันที่รับ", "เลขที่ PO", "ผู้ขอ", "หมายเหตุ"]
-    ));
+    download("purchase-requests.xlsx", "ใบขอซื้อ",
+      ["เลขที่ PR", "วันที่", "หมวด", "รายการ", "สถานะรับของ", "วันที่รับ", "เลขที่ PO", "ผู้ขอ", "หมายเหตุ"],
+      rows
+    );
   };
 
   const txCount = consumables.reduce((sum, s) => sum + (s.transactions || []).length, 0);
@@ -5648,7 +5658,7 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
       .filter(a => a.equipmentId === historyEquipId && historyTypes[a.type])
       .forEach(a => rows.push([
         a.date, ACTIVITY_TYPE_LABEL[a.type] || a.type, a.detail || "", a.by || "",
-        a.poNo || "", hyperlink(a.poUrl, a.poNo || "เปิดไฟล์ PO"), hyperlink(a.certUrl, "เปิดไฟล์ Certificate"),
+        a.poNo || "", link(a.poUrl, a.poNo || "เปิดไฟล์ PO"), link(a.certUrl, "เปิดไฟล์ Certificate"),
       ]));
     if (historyTypes.dailyCheck) {
       dailyChecks
@@ -5659,15 +5669,15 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
         ]));
     }
     rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-    download(`ประวัติ-${historyEquip.code}.csv`, toCSV(
-      rows,
-      ["วันที่", "ประเภท", "รายละเอียด / ผลตรวจ", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ PO", "ลิงก์ Certificate"]
-    ));
+    download(`ประวัติ-${historyEquip.code}.xlsx`, "ประวัติ",
+      ["วันที่", "ประเภท", "รายละเอียด / ผลตรวจ", "ผู้ดำเนินการ", "เลขที่ PO", "ลิงก์ PO", "ลิงก์ Certificate"],
+      rows
+    );
   };
 
   return (
     <div>
-      <TabHeader title="รายงาน" sub="ส่งออกข้อมูลเป็นไฟล์ CSV เพื่อใช้งานต่อ — เปิดด้วย Excel เพื่อให้ลิงก์ PO/Certificate คลิกได้โดยตรง" />
+      <TabHeader title="รายงาน" sub="ส่งออกข้อมูลเป็นไฟล์ Excel (.xlsx) — ลิงก์ PO/Certificate เป็นไฮเปอร์ลิงก์คลิกได้ทันที" />
 
       <div style={{ ...S.panel, marginBottom: 20 }}>
         <div style={S.panelHead}><ClipboardList size={16} color="var(--teal)" /><span style={S.panelTitle}>ประวัติเครื่องมือรายตัว</span></div>
@@ -5690,7 +5700,7 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
           </Field>
         </div>
         <button style={{ ...S.smallBtn, marginTop: 12 }} disabled={!historyEquip || !anyHistoryTypeChosen} onClick={exportEquipmentHistory}>
-          <FileDown size={13} /> ส่งออกประวัติ{historyEquip ? ` — ${historyEquip.code}` : ""} (CSV)
+          <FileDown size={13} /> ส่งออกประวัติ{historyEquip ? ` — ${historyEquip.code}` : ""} (Excel)
         </button>
       </div>
 
@@ -5701,7 +5711,7 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
             <div key={i} style={{ ...S.statCard, cursor: "default" }}>
               <div style={S.statTop}><Icon size={16} color="var(--teal)" /><span style={S.statLabel}>{c.title}</span></div>
               <div style={S.reportDesc}>{c.desc}</div>
-              <button style={S.smallBtn} onClick={c.action}><FileDown size={13} /> ส่งออก CSV</button>
+              <button style={S.smallBtn} onClick={c.action}><FileDown size={13} /> ส่งออก Excel</button>
             </div>
           );
         })}
