@@ -4,7 +4,7 @@ import {
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
-  LayoutGrid, ZoomIn, QrCode
+  LayoutGrid, ZoomIn, QrCode, Printer
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -2982,6 +2982,68 @@ function EquipQRLinkModal({ equip, mode = "dailyCheck", onClose }) {
   );
 }
 
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Batch version of EquipQRLinkModal: one sticker per equipment, laid out in
+// a print-friendly grid and pushed to a new tab that auto-opens the browser
+// print dialog — "Save as PDF" there is how this becomes a PDF, same as
+// every other print-to-PDF flow, no extra dependency to install. Reuses the
+// exact same link shape / QR endpoint as the single-equipment modal above,
+// so scanning a sticker behaves identically either way.
+function printAllEquipQR(equipmentList, mode) {
+  if (!equipmentList || equipmentList.length === 0) return;
+  const base = typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}` : "";
+  const items = equipmentList.map(e => {
+    const link = `${base}?tab=${mode}&equip=${e.id}`;
+    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(link)}`;
+    return { code: e.code, name: e.name, qrSrc };
+  });
+  const win = window.open("", "_blank");
+  if (!win) { alert("เบราว์เซอร์บล็อกป๊อปอัพ กรุณาอนุญาตป๊อปอัพสำหรับหน้านี้แล้วลองอีกครั้ง"); return; }
+  const pageTitle = mode === "equipmentView" ? "QR ดูข้อมูลเครื่องมือ — ทุกเครื่องมือ" : "QR เดลี่เช็ค — ทุกเครื่องมือ";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(pageTitle)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Tahoma, sans-serif; margin: 0; padding: 18px; color: #1a1a1a; }
+  h1 { font-size: 15px; margin: 0 0 14px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card { border: 1px dashed #999; border-radius: 10px; padding: 12px 8px; text-align: center; page-break-inside: avoid; break-inside: avoid; }
+  .card img { width: 160px; height: 160px; max-width: 100%; }
+  .code { font-weight: 700; font-size: 13.5px; margin-top: 6px; }
+  .name { font-size: 10.5px; color: #666; margin-top: 2px; }
+  @media print {
+    h1 { display: none; }
+    .card { border: 1px solid #bbb; }
+    @page { margin: 12mm; }
+  }
+</style>
+</head><body>
+<h1>${escapeHtml(pageTitle)} — ${items.length} รายการ</h1>
+<div class="grid">
+  ${items.map(it => `<div class="card"><img src="${it.qrSrc}" alt="QR ${escapeHtml(it.code)}" /><div class="code">${escapeHtml(it.code)}</div><div class="name">${escapeHtml(it.name)}</div></div>`).join("")}
+</div>
+<script>
+  window.onload = function () {
+    var imgs = Array.prototype.slice.call(document.images);
+    var remaining = imgs.length;
+    if (remaining === 0) { window.print(); return; }
+    imgs.forEach(function (img) {
+      if (img.complete) { done(); } else { img.onload = done; img.onerror = done; }
+    });
+    function done() {
+      remaining -= 1;
+      if (remaining <= 0) setTimeout(function () { window.print(); }, 150);
+    }
+  };
+</script>
+</body></html>`;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
 // Read-only equipment card for guest QR access (?tab=equipmentView&equip=<id>)
 // — same photo/info/history as the admin equipment card (EquipmentDetail),
 // minus every action (edit, delete, book, disable, add activity, daily
@@ -5824,6 +5886,21 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
         <button style={{ ...S.smallBtn, marginTop: 12 }} disabled={!historyEquip || !anyHistoryTypeChosen} onClick={exportEquipmentHistory}>
           <FileDown size={13} /> ส่งออกประวัติ{historyEquip ? ` — ${historyEquip.code}` : ""} (Excel)
         </button>
+      </div>
+
+      <div style={{ ...S.panel, marginBottom: 20 }}>
+        <div style={S.panelHead}><Printer size={16} color="var(--teal)" /><span style={S.panelTitle}>พิมพ์ QR โค้ดเครื่องมือ — ทุกเครื่องมือ</span></div>
+        <div style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 12px" }}>
+          สร้างชีตสติกเกอร์ QR สำหรับทุกเครื่องมือ ({equipment.length} รายการ) เปิดในแท็บใหม่พร้อมหน้าต่างพิมพ์ — เลือก "บันทึกเป็น PDF" เพื่อเซฟเป็นไฟล์ PDF หรือพิมพ์แล้วตัดไปติดที่ตัวเครื่องได้เลย
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button style={S.smallBtn} disabled={equipment.length === 0} onClick={() => printAllEquipQR(equipment, "dailyCheck")}>
+            <QrCode size={13} /> พิมพ์ QR เดลี่เช็ค (PDF)
+          </button>
+          <button style={S.smallBtn} disabled={equipment.length === 0} onClick={() => printAllEquipQR(equipment, "equipmentView")}>
+            <QrCode size={13} /> พิมพ์ QR ดูข้อมูลเครื่องมือ (PDF)
+          </button>
+        </div>
       </div>
 
       <div style={S.statGrid}>
