@@ -5530,9 +5530,9 @@ function PurchaseRequestsImportForm({ onCancel, onImport }) {
 // instead of a link). Falls back to plain text when there's no URL.
 function link(url, text) {
   const clean = (url || "").toString().trim();
-  const label = (text ?? clean ?? "").toString().trim();
-  if (!clean) return label;
-  return { text: label || clean, url: clean };
+  if (!clean) return ""; // no URL → leave the cell blank instead of a misleading placeholder
+  const label = (text ?? clean).toString().trim() || clean;
+  return { text: label, url: clean };
 }
 const ACTIVITY_TYPE_LABEL = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ", dailyCheck: "Daily check" };
 // Flattens whichever daily-check result shape an entry has (scale weights,
