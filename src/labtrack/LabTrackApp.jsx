@@ -1375,23 +1375,40 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           const days = daysUntil(e.nextDue);
           const st = statusOf(days);
           const bk = equipmentBookingSummary(e.id, bookings);
+          const isDisabled = e.status === "maintenance" || e.status === "inactive";
           return (
-            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden", height: "100%" }} onClick={() => setSelected(e.id)}>
-              {e.imageUrl ? (
-                <img src={e.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-                  style={{ width: "100%", height: 140, objectFit: "contain", background: "#EEF2F6", display: "block", flexShrink: 0 }} />
-              ) : (
-                <div style={{ width: "100%", height: 140, background: "linear-gradient(135deg, #E9F1FB, #F5F8FC)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Wrench size={34} color="#B9C7D6" />
-                </div>
-              )}
+            <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden", height: "100%", ...(isDisabled ? { border: "1px solid var(--red)" } : {}) }} onClick={() => setSelected(e.id)}>
+              <div style={{ position: "relative", flexShrink: 0 }}>
+                {e.imageUrl ? (
+                  <img src={e.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+                    style={{ width: "100%", height: 140, objectFit: "contain", background: "#EEF2F6", display: "block", ...(isDisabled ? { filter: "grayscale(1)", opacity: 0.55 } : {}) }} />
+                ) : (
+                  <div style={{ width: "100%", height: 140, background: "linear-gradient(135deg, #E9F1FB, #F5F8FC)", display: "flex", alignItems: "center", justifyContent: "center", ...(isDisabled ? { filter: "grayscale(1)", opacity: 0.55 } : {}) }}>
+                    <Wrench size={34} color="#B9C7D6" />
+                  </div>
+                )}
+                {isDisabled && (
+                  <div style={{
+                    position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                    background: "rgba(20,20,20,0.28)",
+                  }}>
+                    <span style={{
+                      display: "inline-flex", alignItems: "center", gap: 5,
+                      background: "var(--red)", color: "#fff", fontWeight: 700, fontSize: 12,
+                      borderRadius: 20, padding: "4px 12px", boxShadow: "0 2px 6px rgba(0,0,0,0.25)",
+                    }}>
+                      <XCircle size={13} /> ปิดใช้งาน
+                    </span>
+                  </div>
+                )}
+              </div>
               <div style={{ padding: "10px 14px 12px", display: "flex", flexDirection: "column", flex: 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                   <div style={S.eqCardTop}>
-                    <span style={{ ...S.beacon, background: STATUS_COLOR[st] }} />
+                    <span style={{ ...S.beacon, background: isDisabled ? "var(--red)" : STATUS_COLOR[st] }} />
                     <span style={S.eqCode}>{e.code}</span>
                   </div>
-                  {e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
+                  {!isDisabled && e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
                 </div>
                 <div style={S.eqName}>{e.name}</div>
                 {e.brand && (
@@ -1400,9 +1417,22 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
                   </div>
                 )}
                 <div style={S.eqMeta}><MapPin size={11} /> {e.location || "-"} · {e.type || "-"}</div>
-                <div style={{ ...S.eqDue, color: STATUS_COLOR[st] }}>
-                  {e.nextDue ? `กำหนดถัดไป ${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "ไม่มีกำหนดสอบเทียบ"}
-                </div>
+                {isDisabled ? (
+                  <div style={{
+                    marginTop: 8, fontSize: 11.5, color: "var(--red)", background: "#FBEAE8",
+                    borderRadius: 7, padding: "6px 8px", display: "flex", alignItems: "flex-start", gap: 5,
+                  }}>
+                    <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span>
+                      <strong>ปิดใช้งาน{e.code ? ` ${e.code}` : ""}</strong>
+                      {e.unavailableReason ? ` เนื่องจาก${e.unavailableReason}` : e.status === "maintenance" ? " (ซ่อมบำรุง)" : ""}
+                    </span>
+                  </div>
+                ) : (
+                  <div style={{ ...S.eqDue, color: STATUS_COLOR[st] }}>
+                    {e.nextDue ? `กำหนดถัดไป ${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "ไม่มีกำหนดสอบเทียบ"}
+                  </div>
+                )}
                 <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: "auto", paddingTop: 6, fontSize: 11.5, fontWeight: 600, color: bk.color }}>
                   <CalendarCheck size={12} /> {bk.text}
                 </div>
@@ -1589,6 +1619,19 @@ function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
             <option value="inactive">ปิดใช้งาน</option>
           </select>
         </Field>
+        {(f.status === "maintenance" || f.status === "inactive") && (
+          <Field label="เหตุผลที่ปิดใช้งาน" full>
+            <input
+              style={S.input}
+              value={f.unavailableReason || ""}
+              onChange={set("unavailableReason")}
+              placeholder="เช่น เครื่องพัง ไม่ใช้งานแล้ว"
+            />
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+              ข้อความนี้จะแสดงเป็นป้ายชัดเจนบนการ์ดเครื่องมือในหน้ารายการ
+            </div>
+          </Field>
+        )}
         <Field label="สอบเทียบล่าสุด">
           <input
             type="date"
