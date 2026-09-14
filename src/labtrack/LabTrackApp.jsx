@@ -4,7 +4,8 @@ import {
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
-  LayoutGrid, ZoomIn, QrCode, Printer
+  LayoutGrid, ZoomIn, QrCode, Printer, FileCheck2, BadgeCheck,
+  UploadCloud, Loader2, Sparkles
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -384,6 +385,179 @@ function alphaCompare(a, b) {
   return String(a || "").localeCompare(String(b || ""), "th", { numeric: true, sensitivity: "base" });
 }
 
+/* ---------- MPIR Calibration Record (ISO/IEC 17025) helpers ----------
+   Implements Sheet 01 (Instrument Master extra fields, on the equipment
+   record itself), Sheet 02 (Certificate Data) and Sheet 03 (Acceptance
+   Criteria) from "MPIR_Calibration_Record". Formulas below (RPN, guard
+   band, TUR, En) are a starting proposal per the workbook's own notes —
+   ("ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย
+   Technical Manager") — flag them for the Technical Manager to confirm
+   before relying on the auto PASS/FAIL decision. */
+
+// Sheet 10 lookup lists, used as <select> options across Sheets 01-03.
+const LK_TOLTYPE = ["absolute", "% of reading", "% of full scale"];
+const LK_BASIS = ["ข้อกำหนดจากผู้ผลิต (Manufacturer)", "ข้อกำหนดจากวิธีทดสอบ (Test Method)", "ข้อกำหนดของลูกค้า (Customer)"];
+const LK_RULE = [
+  { key: "simple", label: "Simple acceptance (|Error| ≤ Tolerance)" },
+  { key: "conservative", label: "Conservative (|Error| + U ≤ Tolerance)" },
+  { key: "guardband", label: "Guard band (Acceptance Limit = Tolerance − g×U)" },
+];
+const LK_ACCRED = [
+  "ได้รับการรับรอง ISO/IEC 17025 ในขอบข่ายนี้",
+  "ได้รับการรับรอง ISO/IEC 17025 แต่ไม่ครอบคลุมขอบข่ายนี้",
+  "สถาบันมาตรวิทยาแห่งชาติ (NMI)",
+];
+const LK_TRACE = [
+  "สอบกลับได้ถึงหน่วย SI ผ่านสถาบันมาตรวิทยาแห่งชาติ (NMI)",
+  "สอบกลับได้ผ่านวัสดุอ้างอิงรับรอง (CRM)",
+  "สอบกลับได้ผ่านวิธีอ้างอิงที่ยอมรับ (Reference method)",
+];
+const LK_REPORTED = ["Error", "Correction", "Reading + Reference"];
+const LK_UTYPE = ["Absolute", "Relative (%)"];
+const LK_ADJ = ["ก่อนปรับแก้ (Before adjustment)", "หลังปรับแก้ (After adjustment)", "ไม่มีการปรับแก้ (No adjustment)"];
+const LK_RECSTAT = ["Draft", "Verified", "Approved"];
+const LK_CURRENT_STATUS = [
+  "ใช้งานได้ปกติ (In use)",
+  "ใช้งานโดยต้องใช้ Correction (In use with correction)",
+  "ใช้งานแบบจำกัดช่วง (Restricted use)",
+  "งดใช้งาน (Out of service)",
+];
+// Thai Buddhist-Era year (พ.ศ.) from a YYYY-MM-DD string — used on both
+// certificate records and the acceptance table ("รอบการสอบเทียบ (พ.ศ.)").
+function beYear(dateStr) {
+  if (!dateStr) return "";
+  const y = new Date(dateStr + "T00:00:00").getFullYear();
+  return isNaN(y) ? "" : y + 543;
+}
+// RPN = Severity × Occurrence × Detectability (Sheet 01, cols 27-30), with
+// the risk band the workbook implies (low/med/high) from the 1-5×1-5×1-5
+// range. Missing any factor leaves RPN blank rather than guessing.
+function calcRPN(sev, occ, det) {
+  const s = Number(sev), o = Number(occ), d = Number(det);
+  if (!s || !o || !d) return { rpn: null, level: "" };
+  const rpn = s * o * d;
+  const level = rpn >= 64 ? "สูง (High)" : rpn >= 27 ? "ปานกลาง (Medium)" : "ต่ำ (Low)";
+  return { rpn, level };
+}
+// Numeric tolerance for a calibration point, resolving the 3 tolerance
+// types from Sheet 01 (col 18: absolute / % of reading / % of full scale)
+// against that point's own reading and the instrument's working range.
+function resolveTolerance(instrument, cert) {
+  const tol = Number(instrument?.tolerance);
+  if (!tol && tol !== 0) return null;
+  const type = instrument?.toleranceType || "absolute";
+  if (type === "% of reading") {
+    const basis = Number(cert.indication ?? cert.referenceValue);
+    return isNaN(basis) ? null : Math.abs(basis) * (tol / 100);
+  }
+  if (type === "% of full scale") {
+    const fs = Number(instrument?.workingRangeMax);
+    return isNaN(fs) ? null : Math.abs(fs) * (tol / 100);
+  }
+  return tol;
+}
+// Error actually used for the decision: prefer what the certificate itself
+// reports (Reported Error), otherwise derive Indication − Reference.
+function derivedErrorOf(cert) {
+  if (cert.reportedError !== "" && cert.reportedError != null && !isNaN(Number(cert.reportedError))) return Number(cert.reportedError);
+  const ref = Number(cert.referenceValue), ind = Number(cert.indication);
+  if (!isNaN(ref) && !isNaN(ind)) return ind - ref;
+  return null;
+}
+// Expanded uncertainty U (absolute), converting from a relative U-report
+// (% of reading) using the same reading basis as resolveTolerance.
+function derivedUOf(cert) {
+  if (cert.uAbsolute !== "" && cert.uAbsolute != null && !isNaN(Number(cert.uAbsolute))) return Number(cert.uAbsolute);
+  const u = Number(cert.reportedU);
+  if (isNaN(u)) return null;
+  if (cert.uReportedAs === "Relative (%)") {
+    const basis = Number(cert.indication ?? cert.referenceValue);
+    return isNaN(basis) ? null : Math.abs(basis) * (u / 100);
+  }
+  return u;
+}
+// Sheet 03 in full: compares one certificate row against the owning
+// instrument's approved Tolerance/Decision Rule and returns every derived
+// column (Tolerance Utilization, TUR, En, Decision, Rationale).
+function evaluateAcceptance(cert, instrument) {
+  const errorVal = derivedErrorOf(cert);
+  const U = derivedUOf(cert);
+  const tol = resolveTolerance(instrument, cert);
+  if (errorVal == null || tol == null) {
+    return { decision: "INCOMPLETE DATA", rationale: "ข้อมูล Error หรือ Tolerance ไม่ครบ", absError: errorVal != null ? Math.abs(errorVal) : null, tol, tur: null, en: null, utilizationPct: null };
+  }
+  const absError = Math.abs(errorVal);
+  const rule = instrument?.decisionRule || "simple";
+  const g = Number(instrument?.guardBandFactor) || 1;
+  let limit = tol, decision, rationale;
+  if (rule === "conservative") {
+    limit = tol - (U || 0);
+    decision = (absError + (U || 0)) <= tol ? "PASS" : "FAIL";
+    rationale = `Conservative: |Error|+U (${(absError + (U || 0)).toFixed(4)}) เทียบ Tolerance (${tol})`;
+  } else if (rule === "guardband") {
+    limit = tol - g * (U || 0);
+    decision = absError <= limit ? "PASS" : (absError <= tol ? "CONDITIONAL PASS" : "FAIL");
+    rationale = `Guard band: Acceptance Limit = ${tol} − ${g}×${(U || 0).toFixed(4)} = ${limit.toFixed(4)}`;
+  } else {
+    decision = absError <= tol ? "PASS" : "FAIL";
+    rationale = `Simple acceptance: |Error| (${absError.toFixed(4)}) เทียบ Tolerance (${tol})`;
+  }
+  // TUR (Test Uncertainty Ratio) and En (Normalized Error) are informational
+  // add-ons the workbook tracks alongside the pass/fail decision, not used
+  // to override it.
+  const tur = U ? tol / (U * 2 >= tol ? U : U) : null; // TUR = Tolerance / U(k=2)
+  const en = U ? errorVal / (2 * U) : null; // simplified: assumes reference uncertainty negligible
+  const utilizationPct = tol ? Math.round((absError / tol) * 1000) / 10 : null;
+  if (decision === "FAIL" && absError <= tol * 1.1) decision = "WARNING"; // near-miss band, still flagged for review
+  return { decision, rationale, absError, tol, limit, tur, en, utilizationPct };
+}
+
+// Calls the Anthropic API (already authenticated in this environment — no
+// key needed) with the certificate PDF as a document block, asking for one
+// JSON object per calibration point matching the Sheet 02 column schema.
+// Returns { certificateNo, provider, ..., points: [...] } or throws.
+async function extractCertificateWithAI(base64Pdf) {
+  const schemaHint = `คุณคือระบบดึงข้อมูลจากใบรับรองผลการสอบเทียบเครื่องมือ (Calibration Certificate) ให้ตอบเป็น JSON เท่านั้น ห้ามมีคำอธิบายหรือ Markdown code fence ใดๆ ทั้งสิ้น
+โครงสร้าง JSON ที่ต้องการ (ตรงตามคอลัมน์ของ Sheet "02_Certificate_Data"):
+{
+  "certificateNo": string, "provider": string, "providerAccreditationNo": string,
+  "calibrationDate": "YYYY-MM-DD", "issueDate": "YYYY-MM-DD",
+  "calibrationMethod": string, "referenceStandardUsed": string,
+  "temperatureC": number|null, "humidityRH": number|null,
+  "providerStatementOfConformity": string, "providerDecisionRule": string,
+  "limitationsNotes": string,
+  "points": [
+    {
+      "parameter": string, "rangeId": string, "calibrationPoint": number,
+      "unit": string, "referenceValue": number, "indication": number,
+      "reportedError": number|null, "reportedCorrection": number|null,
+      "reportedU": number|null, "uReportedAs": "Absolute"|"Relative (%)",
+      "coverageFactor": number, "coverageProbabilityPct": number
+    }
+  ]
+}
+กติกา: ใส่เฉพาะค่าที่อ่านได้จริงจากเอกสาร ถ้าช่องใดไม่มีในเอกสารให้ใส่ null หรือ "" ห้ามเดาตัวเลข หนึ่งแถวใน "points" ต่อหนึ่งจุดสอบเทียบ (Calibration Point) ต่อหนึ่งพารามิเตอร์`;
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4000,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Pdf } },
+          { type: "text", text: schemaHint },
+        ],
+      }],
+    }),
+  });
+  const data = await resp.json();
+  const textBlock = (data.content || []).map(b => b.type === "text" ? b.text : "").join("\n");
+  const clean = textBlock.replace(/```json|```/g, "").trim();
+  return JSON.parse(clean);
+}
+
 /* ---------- return-tracking helpers (chemicals / consumables withdrawals) ---------- */
 // A withdraw transaction can be partially returned over multiple visits —
 // `returnedQty` tracks the running total returned so far; `returned` is
@@ -637,6 +811,8 @@ const NAV = [
   // below) — still its own top-level tab/URL, and stays a normal flat
   // item in the mobile bottom bar since that layout has no room to nest.
   { key: "dailyCheck", label: "Daily check", icon: CheckCircle2, parent: "equipment" },
+  { key: "certificates", label: "ใบรับรองสอบเทียบ", icon: FileCheck2, parent: "equipment" },
+  { key: "acceptance", label: "เกณฑ์ยอมรับผล", icon: BadgeCheck, parent: "equipment" },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
@@ -717,12 +893,13 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   const [chemicals, setChemicals] = useState([]);
   const [consumables, setConsumables] = useState([]);
   const [purchaseRequests, setPurchaseRequests] = useState([]);
+  const [certificates, setCertificates] = useState([]); // Sheet 02 (+ Sheet 03 fields on the same record)
   const [toast, setToast] = useState(null);
   const [analysisJobs, setAnalysisJobs] = useState([]);
 
   useEffect(() => {
     (async () => {
-      const [eq, dc, ac, it, bk, ch, co, pr] = await Promise.all([
+      const [eq, dc, ac, it, bk, ch, co, pr, ce] = await Promise.all([
         loadList("equipment", SEED_EQUIPMENT),
         loadList("dailyChecks", SEED_DAILY_CHECKS),
         loadList("activities", SEED_ACTIVITIES),
@@ -731,8 +908,9 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
         loadList("chemicals", SEED_CHEMICALS),
         loadList("consumables", SEED_CONSUMABLES),
         loadList("purchaseRequests", []),
+        loadList("certificates", []),
       ]);
-      setEquipment(eq); setDailyChecks(dc); setActivities(ac); setItems(it); setBookings(bk); setChemicals(ch); setConsumables(co); setPurchaseRequests(pr);
+      setEquipment(eq); setDailyChecks(dc); setActivities(ac); setItems(it); setBookings(bk); setChemicals(ch); setConsumables(co); setPurchaseRequests(pr); setCertificates(ce);
       setLoading(false);
     })();
   }, []);
@@ -760,6 +938,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
     chemicals: (list) => { setChemicals(list); saveList("chemicals", list); },
     consumables: (list) => { setConsumables(list); saveList("consumables", list); },
     purchaseRequests: (list) => { setPurchaseRequests(list); saveList("purchaseRequests", list); },
+    certificates: (list) => { setCertificates(list); saveList("certificates", list); },
   };
 
   const alerts = useMemo(() => {
@@ -936,6 +1115,12 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
             <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialCheckId={equipDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+          )}
+          {!restrictToBooking && tab === "certificates" && (
+            <CertificateDataTab equipment={equipment} certificates={certificates} setCertificates={persist.certificates} notify={notify} currentDisplayName={currentDisplayName} />
+          )}
+          {!restrictToBooking && tab === "acceptance" && (
+            <AcceptanceCriteriaTab equipment={equipment} certificates={certificates} setCertificates={persist.certificates} notify={notify} currentDisplayName={currentDisplayName} />
           )}
           {tab === "equipmentView" && (
             <EquipmentGuestView
@@ -1665,6 +1850,62 @@ function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
           onChange={(url) => setF({ ...f, imageUrl: url })}
         />
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.notes} onChange={set("notes")} /></Field>
+
+        {/* ---- Sheet 01 (Instrument Master): fields for the ISO/IEC 17025
+             calibration record — tolerance, decision rule, risk score, etc.
+             All optional; leave blank for equipment that isn't part of the
+             formal calibration register (e.g. general tools/aircon). ---- */}
+        <div style={{ gridColumn: "1 / -1", marginTop: 6, paddingTop: 10, borderTop: "1px dashed var(--line)", fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)" }}>
+          ข้อมูลทะเบียนสอบเทียบ (ISO/IEC 17025) — ไม่บังคับ
+        </div>
+        <Field label="ผู้รับผิดชอบ (Custodian)"><input style={S.input} value={f.custodian || ""} onChange={set("custodian")} /></Field>
+        <Field label="เลขทรัพย์สิน (Asset No.)"><input style={S.input} value={f.assetNo || ""} onChange={set("assetNo")} /></Field>
+        <Field label="กลุ่มเครื่องมือ (A/B/C)"><input style={S.input} value={f.riskGroup || ""} onChange={set("riskGroup")} placeholder="A / B / C" /></Field>
+        <Field label="ขอบข่ายการใช้งาน"><input style={S.input} value={f.scopeOfUse || ""} onChange={set("scopeOfUse")} /></Field>
+        <Field label="วิธีทดสอบที่เกี่ยวข้อง"><input style={S.input} value={f.relatedTestMethod || ""} onChange={set("relatedTestMethod")} /></Field>
+        <Field label="พารามิเตอร์ที่วัด"><input style={S.input} value={f.measuredParameter || ""} onChange={set("measuredParameter")} /></Field>
+        <Field label="หน่วย"><input style={S.input} value={f.calUnit || ""} onChange={set("calUnit")} /></Field>
+        <Field label="ช่วงใช้งานจริง — ต่ำสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMin ?? ""} onChange={set("workingRangeMin")} /></Field>
+        <Field label="ช่วงใช้งานจริง — สูงสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMax ?? ""} onChange={set("workingRangeMax")} /></Field>
+        <Field label="ความละเอียด (Resolution)"><input style={S.input} value={f.resolution || ""} onChange={set("resolution")} /></Field>
+        <Field label="เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)"><input type="number" step="any" style={S.input} value={f.tolerance ?? ""} onChange={set("tolerance")} /></Field>
+        <Field label="ชนิดของเกณฑ์">
+          <select style={S.input} value={f.toleranceType || "absolute"} onChange={set("toleranceType")}>
+            {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </Field>
+        <Field label="แหล่งอ้างอิงของเกณฑ์">
+          <input style={S.input} list="basisOptions" value={f.basisOfCriteria || ""} onChange={set("basisOfCriteria")} />
+          <datalist id="basisOptions">{LK_BASIS.map(b => <option key={b} value={b} />)}</datalist>
+        </Field>
+        <Field label="เอกสารอ้างอิงของเกณฑ์"><input style={S.input} value={f.referenceDocument || ""} onChange={set("referenceDocument")} /></Field>
+        <Field label="Decision Rule ที่อนุมัติ">
+          <select style={S.input} value={f.decisionRule || "simple"} onChange={set("decisionRule")}>
+            {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+          </select>
+        </Field>
+        {f.decisionRule === "guardband" && (
+          <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.guardBandFactor ?? ""} onChange={set("guardBandFactor")} placeholder="เช่น 1" /></Field>
+        )}
+        <Field label="ความถี่ Daily/Intermediate Check"><input style={S.input} value={f.checkFrequency || ""} onChange={set("checkFrequency")} placeholder="เช่น ทุกวัน, ทุกสัปดาห์" /></Field>
+        <Field label="Severity (1-5)"><input type="number" min="1" max="5" style={S.input} value={f.severity ?? ""} onChange={set("severity")} /></Field>
+        <Field label="Occurrence (1-5)"><input type="number" min="1" max="5" style={S.input} value={f.occurrence ?? ""} onChange={set("occurrence")} /></Field>
+        <Field label="Detectability (1-5)"><input type="number" min="1" max="5" style={S.input} value={f.detectability ?? ""} onChange={set("detectability")} /></Field>
+        {(() => { const { rpn, level } = calcRPN(f.severity, f.occurrence, f.detectability); return (
+          <Field label="RPN / ระดับความเสี่ยง (คำนวณอัตโนมัติ)">
+            <div style={{ ...S.input, background: "#F5F8F7", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontFamily: "var(--font-mono)" }}>{rpn ?? "-"}</span><span style={{ color: "var(--muted)" }}>{level}</span>
+            </div>
+          </Field>
+        ); })()}
+        <Field label="สถานะเครื่องมือปัจจุบัน">
+          <select style={S.input} value={f.currentStatus || ""} onChange={set("currentStatus")}>
+            <option value="">- ยังไม่ระบุ -</option>
+            {LK_CURRENT_STATUS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </Field>
+        <Field label="ผู้อนุมัติให้ใช้งาน"><input style={S.input} value={f.authorizedBy || ""} onChange={set("authorizedBy")} /></Field>
+        <Field label="ลิงก์ไฟล์ใบรับรอง" full><input style={S.input} value={f.certificateFileLink || ""} onChange={set("certificateFileLink")} placeholder="https://..." /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.code || !f.name} />
     </Modal>
@@ -2663,6 +2904,285 @@ function blankScaleCheckEntry(equipmentId) {
     approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
   };
 }
+/* ================= Sheet 02: Certificate Data ================= */
+// One row per calibration point (one certificate can hold many rows across
+// several parameters/points) — mirrors "02_Certificate_Data" 1:1, plus a
+// `source` flag ("manual" | "pdf-ai") for traceability.
+function blankCertificate(instrumentId, certificateNo = "") {
+  return {
+    id: uid(), instrumentId, certificateNo, provider: "", providerAccreditationStatus: "", providerAccreditationNo: "",
+    calibrationDate: "", issueDate: "", calibrationMethod: "", referenceStandardUsed: "", traceability: "",
+    temperatureC: "", humidityRH: "",
+    parameter: "", rangeId: "", calibrationPoint: "", unit: "", reportedAs: "Error",
+    referenceValue: "", indication: "", reportedError: "", reportedCorrection: "", adjustmentStatus: "",
+    uReportedAs: "Absolute", reportedU: "", uAbsolute: "", coverageFactor: 2, coverageProbabilityPct: 95,
+    providerStatementOfConformity: "", providerDecisionRule: "", limitationsNotes: "",
+    missingItems: "", reviewedBy: "", reviewDate: "", recordStatus: "Draft", pdfLink: "",
+    evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "",
+    source: "manual",
+  };
+}
+function CertificateDataTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "" }) {
+  const [q, setQ] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [uploadFor, setUploadFor] = useState(null); // instrument to attach an uploaded PDF to
+  const [busy, setBusy] = useState(false);
+
+  const instrumentName = (id) => { const e = equipment.find(x => x.id === id); return e ? `${e.code} — ${e.name}` : id; };
+  const filtered = certificates
+    .filter(c => (c.certificateNo + instrumentName(c.instrumentId) + c.parameter + c.provider).toLowerCase().includes(q.toLowerCase()))
+    .slice()
+    .sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || ""));
+
+  function upsert(row) {
+    if (certificates.find(c => c.id === row.id)) setCertificates(certificates.map(c => c.id === row.id ? row : c));
+    else setCertificates([row, ...certificates]);
+    notify("บันทึกข้อมูลใบรับรองแล้ว");
+    setEditing(null);
+  }
+  function remove(id) {
+    setCertificates(certificates.filter(c => c.id !== id));
+    notify("ลบรายการแล้ว");
+  }
+
+  // Reads the uploaded PDF, sends it to the AI extractor, then immediately
+  // saves every returned calibration point as its own certificate row — no
+  // manual review step, per how this lab wants the import to work. Rows the
+  // model itself flags as incomplete are still saved, just marked
+  // recordStatus "Draft" (rather than silently defaulting to "Verified") so
+  // they're still easy to spot and double-check later.
+  async function handlePdfUpload(file, instrumentId) {
+    setBusy(true);
+    try {
+      const base64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(String(r.result).split(",")[1]);
+        r.onerror = () => rej(new Error("อ่านไฟล์ไม่สำเร็จ"));
+        r.readAsDataURL(file);
+      });
+      const extracted = await extractCertificateWithAI(base64);
+      const points = Array.isArray(extracted.points) ? extracted.points : [];
+      if (points.length === 0) { notify("อ่านไฟล์ไม่พบจุดสอบเทียบใดๆ — กรุณากรอกด้วยตนเอง"); setBusy(false); return; }
+      const newRows = points.map(p => {
+        const uAbs = p.uReportedAs === "Relative (%)" && p.reportedU != null
+          ? Math.abs(Number(p.indication ?? p.referenceValue) || 0) * (Number(p.reportedU) / 100)
+          : (p.reportedU ?? "");
+        const missing = [];
+        if (p.referenceValue == null) missing.push("ค่าอ้างอิง");
+        if (p.indication == null && p.reportedError == null) missing.push("ค่าที่อ่านได้/Error");
+        return {
+          ...blankCertificate(instrumentId, extracted.certificateNo || ""),
+          provider: extracted.provider || "", providerAccreditationNo: extracted.providerAccreditationNo || "",
+          calibrationDate: extracted.calibrationDate || "", issueDate: extracted.issueDate || "",
+          calibrationMethod: extracted.calibrationMethod || "", referenceStandardUsed: extracted.referenceStandardUsed || "",
+          temperatureC: extracted.temperatureC ?? "", humidityRH: extracted.humidityRH ?? "",
+          providerStatementOfConformity: extracted.providerStatementOfConformity || "", providerDecisionRule: extracted.providerDecisionRule || "",
+          limitationsNotes: extracted.limitationsNotes || "",
+          parameter: p.parameter || "", rangeId: p.rangeId || "", calibrationPoint: p.calibrationPoint ?? "",
+          unit: p.unit || "", referenceValue: p.referenceValue ?? "", indication: p.indication ?? "",
+          reportedError: p.reportedError ?? "", reportedCorrection: p.reportedCorrection ?? "",
+          uReportedAs: p.uReportedAs || "Absolute", reportedU: p.reportedU ?? "", uAbsolute: uAbs,
+          coverageFactor: p.coverageFactor ?? 2, coverageProbabilityPct: p.coverageProbabilityPct ?? 95,
+          missingItems: missing.join(", "), recordStatus: missing.length ? "Draft" : "Verified",
+          reviewedBy: currentDisplayName, reviewDate: todayISO(), source: "pdf-ai",
+        };
+      });
+      setCertificates([...newRows, ...certificates]);
+      notify(`นำเข้าอัตโนมัติ ${newRows.length} จุดสอบเทียบจาก PDF แล้ว (เลขที่ ${extracted.certificateNo || "-"})`, 3500);
+      setUploadFor(null);
+    } catch (e) {
+      console.error(e);
+      notify("อ่านค่าจาก PDF ไม่สำเร็จ — กรุณากรอกด้วยตนเอง");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>ใบรับรองสอบเทียบ (Certificate Data)</h2><p style={S.h2sub}>Sheet 02 — หนึ่งแถวต่อหนึ่งจุดสอบเทียบ รองรับอัปโหลด PDF ให้ AI ช่วยกรอกอัตโนมัติ</p></div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={S.primaryBtn} onClick={() => setUploadFor(equipment[0]?.id || "")}><UploadCloud size={15} /> อัปโหลด PDF ใบรับรอง</button>
+          <button style={S.ghostBtn} onClick={() => setEditing(blankCertificate(equipment[0]?.id || ""))}><Plus size={15} /> กรอกด้วยตนเอง</button>
+        </div>
+      </div>
+      <div style={S.toolbar}>
+        <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเลขที่ใบรับรอง / เครื่องมือ / พารามิเตอร์" value={q} onChange={e => setQ(e.target.value)} /></div>
+      </div>
+      <div style={S.tableWrap}>
+        <table style={S.table}>
+          <thead><tr>
+            {["เครื่องมือ", "เลขที่ใบรับรอง", "หน่วยงานสอบเทียบ", "วันที่สอบเทียบ", "พารามิเตอร์ / จุด", "Error", "U (k=2)", "สถานะ", "ที่มา", ""].map(h => <th key={h} style={S.th}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {filtered.map(c => (
+              <tr key={c.id} style={S.tr}>
+                <td style={S.td}>{instrumentName(c.instrumentId)}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{c.certificateNo || "-"}</td>
+                <td style={S.td}>{c.provider || "-"}</td>
+                <td style={S.td}>{fmtDate(c.calibrationDate)}</td>
+                <td style={S.td}>{c.parameter} {c.calibrationPoint !== "" ? `@ ${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : ""}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{c.reportedError !== "" ? c.reportedError : "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{c.reportedU !== "" ? c.reportedU : "-"}</td>
+                <td style={S.td}><span style={{ ...S.tag, borderColor: c.recordStatus === "Approved" ? "var(--green)" : c.recordStatus === "Verified" ? "var(--teal)" : "var(--amber)", color: c.recordStatus === "Approved" ? "var(--green)" : c.recordStatus === "Verified" ? "var(--teal)" : "var(--amber)" }}>{c.recordStatus}</span></td>
+                <td style={S.td}>{c.source === "pdf-ai" ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal-dark)" }}><Sparkles size={12} /> AI</span> : "กรอกเอง"}</td>
+                <td style={S.td}>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button style={S.iconBtnSm} onClick={() => setEditing(c)}><Pencil size={13} /></button>
+                    <button style={S.iconBtnSm} onClick={() => remove(c.id)}><Trash2 size={13} /></button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && <tr><td style={S.td} colSpan={10}><div style={S.emptyState}>ยังไม่มีข้อมูลใบรับรอง</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {editing && <CertificateForm row={editing} equipment={equipment} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {uploadFor !== null && (
+        <Modal onClose={() => !busy && setUploadFor(null)} title="อัปโหลด PDF ใบรับรองสอบเทียบ">
+          <Field label="เครื่องมือที่ใบรับรองนี้เป็นของ">
+            <select style={S.input} value={uploadFor} onChange={e => setUploadFor(e.target.value)}>
+              {equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
+            </select>
+          </Field>
+          <Field label="ไฟล์ PDF ใบรับรอง" full>
+            <input type="file" accept="application/pdf" disabled={busy}
+              onChange={e => e.target.files[0] && handlePdfUpload(e.target.files[0], uploadFor)} />
+          </Field>
+          {busy && <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 12.5, marginTop: 10 }}><Loader2 size={15} className="ltSpin" /> กำลังอ่านค่าจากใบรับรองด้วย AI และบันทึกอัตโนมัติ...</div>}
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>ระบบจะบันทึกทุกจุดสอบเทียบที่อ่านได้ทันทีโดยไม่หยุดให้ตรวจสอบก่อน — แถวที่ข้อมูลไม่ครบจะถูกทำเครื่องหมายสถานะ "Draft" ให้สังเกตได้ง่ายภายหลัง</div>
+          <ModalFooter onCancel={() => !busy && setUploadFor(null)} onSave={() => setUploadFor(null)} disabled={busy} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function CertificateForm({ row, equipment, onCancel, onSave }) {
+  const [f, setF] = useState(row);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <Modal onClose={onCancel} title="ข้อมูลใบรับรองสอบเทียบ" wide>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="เครื่องมือ">
+          <select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>
+            {equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
+          </select>
+        </Field>
+        <Field label="เลขที่ใบรับรอง"><input style={S.input} value={f.certificateNo} onChange={set("certificateNo")} /></Field>
+        <Field label="หน่วยงานสอบเทียบ"><input style={S.input} value={f.provider} onChange={set("provider")} /></Field>
+        <Field label="สถานะการรับรอง 17025 ของผู้สอบเทียบ">
+          <input style={S.input} list="lkAccred" value={f.providerAccreditationStatus} onChange={set("providerAccreditationStatus")} />
+          <datalist id="lkAccred">{LK_ACCRED.map(a => <option key={a} value={a} />)}</datalist>
+        </Field>
+        <Field label="วันที่สอบเทียบ"><input type="date" style={S.input} value={f.calibrationDate} onChange={set("calibrationDate")} /></Field>
+        <Field label="วันที่ออกใบรับรอง"><input type="date" style={S.input} value={f.issueDate} onChange={set("issueDate")} /></Field>
+        <Field label="วิธีการสอบเทียบ"><input style={S.input} value={f.calibrationMethod} onChange={set("calibrationMethod")} /></Field>
+        <Field label="มาตรฐานอ้างอิงที่ใช้"><input style={S.input} value={f.referenceStandardUsed} onChange={set("referenceStandardUsed")} /></Field>
+        <Field label="ความสอบกลับได้ทางมาตรวิทยา">
+          <input style={S.input} list="lkTrace" value={f.traceability} onChange={set("traceability")} />
+          <datalist id="lkTrace">{LK_TRACE.map(a => <option key={a} value={a} />)}</datalist>
+        </Field>
+        <Field label="อุณหภูมิขณะสอบเทียบ (°C)"><input type="number" step="any" style={S.input} value={f.temperatureC} onChange={set("temperatureC")} /></Field>
+        <Field label="ความชื้นสัมพัทธ์ (%RH)"><input type="number" step="any" style={S.input} value={f.humidityRH} onChange={set("humidityRH")} /></Field>
+        <div style={{ gridColumn: "1 / -1", fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)", marginTop: 4 }}>จุดสอบเทียบ (Calibration Point)</div>
+        <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} /></Field>
+        <Field label="ช่วง / Range ID"><input style={S.input} value={f.rangeId} onChange={set("rangeId")} /></Field>
+        <Field label="จุดสอบเทียบ (Nominal)"><input type="number" step="any" style={S.input} value={f.calibrationPoint} onChange={set("calibrationPoint")} /></Field>
+        <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} /></Field>
+        <Field label="ค่าอ้างอิง (Reference Value)"><input type="number" step="any" style={S.input} value={f.referenceValue} onChange={set("referenceValue")} /></Field>
+        <Field label="ค่าที่เครื่องมืออ่านได้ (Indication)"><input type="number" step="any" style={S.input} value={f.indication} onChange={set("indication")} /></Field>
+        <Field label="Error ที่รายงานในใบรับรอง"><input type="number" step="any" style={S.input} value={f.reportedError} onChange={set("reportedError")} /></Field>
+        <Field label="Correction ที่รายงานในใบรับรอง"><input type="number" step="any" style={S.input} value={f.reportedCorrection} onChange={set("reportedCorrection")} /></Field>
+        <Field label="สถานะการปรับแก้">
+          <select style={S.input} value={f.adjustmentStatus} onChange={set("adjustmentStatus")}>
+            <option value="">- ยังไม่ระบุ -</option>
+            {LK_ADJ.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </Field>
+        <Field label="รูปแบบ U ที่รายงาน">
+          <select style={S.input} value={f.uReportedAs} onChange={set("uReportedAs")}>{LK_UTYPE.map(u => <option key={u} value={u}>{u}</option>)}</select>
+        </Field>
+        <Field label="ค่า U ที่รายงาน"><input type="number" step="any" style={S.input} value={f.reportedU} onChange={set("reportedU")} /></Field>
+        <Field label="Coverage factor k"><input type="number" step="any" style={S.input} value={f.coverageFactor} onChange={set("coverageFactor")} /></Field>
+        <Field label="Coverage probability (%)"><input type="number" step="any" style={S.input} value={f.coverageProbabilityPct} onChange={set("coverageProbabilityPct")} /></Field>
+        <Field label="Statement of Conformity จากผู้สอบเทียบ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.providerStatementOfConformity} onChange={set("providerStatementOfConformity")} /></Field>
+        <Field label="Decision Rule ของผู้สอบเทียบ" full><input style={S.input} value={f.providerDecisionRule} onChange={set("providerDecisionRule")} /></Field>
+        <Field label="ข้อจำกัด / หมายเหตุในใบรับรอง" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.limitationsNotes} onChange={set("limitationsNotes")} /></Field>
+        <Field label="รายการที่ขาด (Missing Items)"><input style={S.input} value={f.missingItems} onChange={set("missingItems")} /></Field>
+        <Field label="สถานะ Record">
+          <select style={S.input} value={f.recordStatus} onChange={set("recordStatus")}>{LK_RECSTAT.map(s => <option key={s} value={s}>{s}</option>)}</select>
+        </Field>
+        <Field label="ผู้ทบทวน"><input style={S.input} value={f.reviewedBy} onChange={set("reviewedBy")} /></Field>
+        <Field label="วันที่ทบทวน"><input type="date" style={S.input} value={f.reviewDate} onChange={set("reviewDate")} /></Field>
+        <Field label="ลิงก์ไฟล์ PDF ใบรับรอง" full><input style={S.input} value={f.pdfLink} onChange={set("pdfLink")} placeholder="https://..." /></Field>
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.instrumentId || !f.certificateNo} />
+    </Modal>
+  );
+}
+
+/* ================= Sheet 03: Acceptance Criteria (calculated) =================
+   Read-only comparison of each certificate row against its instrument's
+   approved Tolerance/Decision Rule (Sheet 01) — nothing here is typed in
+   except the evaluator/approver sign-off, matching the workbook's own
+   "เขียว = คำนวณอัตโนมัติ ห้ามพิมพ์ทับ" convention. */
+function AcceptanceCriteriaTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "" }) {
+  const [q, setQ] = useState("");
+  const byId = useMemo(() => Object.fromEntries(equipment.map(e => [e.id, e])), [equipment]);
+  const rows = useMemo(() => certificates.map(c => ({ c, instrument: byId[c.instrumentId], ev: evaluateAcceptance(c, byId[c.instrumentId]) })), [certificates, byId]);
+  const filtered = rows.filter(({ c, instrument }) =>
+    ((instrument?.code || "") + (instrument?.name || "") + c.certificateNo + c.parameter).toLowerCase().includes(q.toLowerCase())
+  );
+  const DECISION_COLOR = { PASS: "var(--green)", "CONDITIONAL PASS": "var(--teal)", WARNING: "var(--amber)", FAIL: "var(--red)", "INCOMPLETE DATA": "var(--muted)" };
+
+  function setSignoff(certId, patch) {
+    setCertificates(certificates.map(c => c.id === certId ? { ...c, ...patch } : c));
+    notify("บันทึกการประเมินแล้ว");
+  }
+
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>เกณฑ์การยอมรับผลการสอบเทียบ (Acceptance Criteria)</h2><p style={S.h2sub}>Sheet 03 — คำนวณอัตโนมัติจากทะเบียนเครื่องมือ (Sheet 01) เทียบกับใบรับรอง (Sheet 02); ห้ามสรุปว่า "ผ่าน" จาก Statement of Conformity ของผู้สอบเทียบเพียงอย่างเดียว</p></div>
+      </div>
+      <div style={S.toolbar}>
+        <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหารหัสเครื่องมือ / เลขที่ใบรับรอง / พารามิเตอร์" value={q} onChange={e => setQ(e.target.value)} /></div>
+      </div>
+      <div style={S.tableWrap}>
+        <table style={S.table}>
+          <thead><tr>
+            {["เครื่องมือ", "พารามิเตอร์ / จุด", "|Error|", "Tolerance ที่ใช้", "Utilization %", "TUR", "ผลการตัดสิน", "เหตุผล", "ผู้ประเมิน / อนุมัติ"].map(h => <th key={h} style={S.th}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {filtered.map(({ c, instrument, ev }) => (
+              <tr key={c.id} style={S.tr}>
+                <td style={S.td}>{instrument ? `${instrument.code} — ${instrument.name}` : "-"}</td>
+                <td style={S.td}>{c.parameter} {c.calibrationPoint !== "" ? `@ ${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : ""}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{ev.absError != null ? ev.absError.toFixed(4) : "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{ev.tol != null ? ev.tol.toFixed(4) : "ยังไม่ตั้งค่าใน Sheet 01"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{ev.utilizationPct != null ? `${ev.utilizationPct}%` : "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{ev.tur != null ? ev.tur.toFixed(2) : "-"}</td>
+                <td style={S.td}><span style={{ ...S.tag, borderColor: DECISION_COLOR[ev.decision], color: DECISION_COLOR[ev.decision] }}>{ev.decision}</span></td>
+                <td style={{ ...S.td, fontSize: 11.5, color: "var(--muted)", maxWidth: 220 }}>{ev.rationale}</td>
+                <td style={S.td}>
+                  <input style={{ ...S.input, marginBottom: 4, fontSize: 11.5, padding: "5px 8px" }} placeholder="ผู้ประเมิน" value={c.evaluatedBy || ""}
+                    onChange={e => setSignoff(c.id, { evaluatedBy: e.target.value, evaluationDate: c.evaluationDate || todayISO() })} />
+                  <input style={{ ...S.input, fontSize: 11.5, padding: "5px 8px" }} placeholder="ผู้อนุมัติ (Technical Manager)" value={c.approvedBy || ""}
+                    onChange={e => setSignoff(c.id, { approvedBy: e.target.value, approvalDate: c.approvalDate || todayISO() })} />
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && <tr><td style={S.td} colSpan={9}><div style={S.emptyState}>ยังไม่มีข้อมูลใบรับรองให้ประเมิน — ไปที่หน้า "ใบรับรองสอบเทียบ" ก่อน</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // Unified "Daily check" tab — one dropdown covering every equipment type
 // that has a dedicated daily-check design: เครื่องชั่ง (weight check),
 // pH Meter / EC Meter (buffer / standard-solution check), Polarimeter
@@ -7524,6 +8044,8 @@ function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictT
 }
 
 const CSS = `
+.ltSpin { animation: ltspin 0.9s linear infinite; }
+@keyframes ltspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 * { box-sizing: border-box; }
 :root {
