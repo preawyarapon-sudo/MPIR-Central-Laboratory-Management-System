@@ -5762,6 +5762,701 @@ function link(url, text) {
   return { text: label, url: clean };
 }
 const ACTIVITY_TYPE_LABEL = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ", dailyCheck: "Daily check" };
+
+/* ================= MPIR Calibration Record export (RDI-LF-070) =================
+   Generates an .xlsx workbook matching the structure of "MPIR Calibration
+   Record and Acceptance Evaluation Form" (11 sheets) so the lab can hand off
+   or archive a document in the exact format their QM team already reviews.
+   LabTrackApp does not (yet) collect certificate data, uncertainty budgets,
+   trend analysis, CAR/NC actions, or approval records - those sheets are
+   exported with the correct bilingual headers only, ready for the lab to
+   fill in by hand. Sheets that DO have a matching data source in the app
+   (01_Instrument_Master from "เครื่องมือ", 04_Daily_Intermediate_Check from
+   "Daily check") are pre-filled from live app data. */
+const MPIR_DOC = {
+  "title": "MPIR Central Laboratory, Mitr Phol Innovation and Research Center  |  แบบบันทึกและประเมินเกณฑ์การสอบเทียบเครื่องมือวัด (Calibration Record and Acceptance Evaluation Form)",
+  "sheets": [
+    {
+      "name": "01_Instrument_Master",
+      "subtitle": "ทะเบียนเครื่องมือวัด / Instrument Master Register   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): ทะเบียนกลางของเครื่องมือทุกรายการ พร้อมเกณฑ์ความคลาดเคลื่อนสูงสุดที่ยอมรับได้ (MPE/Tolerance) แหล่งอ้างอิงของเกณฑ์ Decision Rule ที่อนุมัติ ความถี่สอบเทียบ และคะแนนความเสี่ยง — เป็นแหล่งอ้างอิงหลักของทุก Sheet",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+      "headers": [
+        "รหัสเครื่องมือ\nInstrument ID",
+        "ชื่อเครื่องมือ\nInstrument Name",
+        "ประเภทเครื่องมือ\nInstrument Type",
+        "ยี่ห้อ\nBrand",
+        "รุ่น\nModel",
+        "หมายเลขเครื่อง\nSerial No.",
+        "เลขทรัพย์สิน\nAsset No.",
+        "สถานที่ติดตั้ง\nLocation",
+        "ผู้รับผิดชอบ\nCustodian",
+        "กลุ่มเครื่องมือ\nGroup (A/B/C)",
+        "ขอบข่ายการใช้งาน\nScope of Use",
+        "วิธีทดสอบที่เกี่ยวข้อง\nRelated Test Method",
+        "พารามิเตอร์ที่วัด\nMeasured Parameter",
+        "หน่วย\nUnit",
+        "ช่วงใช้งานจริง ต่ำสุด\nWorking Range Min",
+        "ช่วงใช้งานจริง สูงสุด\nWorking Range Max",
+        "ความละเอียด (d)\nResolution",
+        "เกณฑ์ความคลาดเคลื่อนสูงสุด\nTolerance / MPE",
+        "ชนิดของเกณฑ์\nTolerance Type",
+        "แหล่งอ้างอิงของเกณฑ์\nBasis of Criteria",
+        "เอกสารอ้างอิงของเกณฑ์\nReference Document",
+        "Decision Rule ที่อนุมัติ\nApproved Decision Rule",
+        "ความถี่สอบเทียบ (เดือน)\nCalibration Interval",
+        "ความถี่ Daily / Intermediate Check\nCheck Frequency",
+        "วันที่สอบเทียบล่าสุด (auto)\nLast Calibration Date",
+        "วันครบกำหนดถัดไป\nNext Due Date",
+        "วันคงเหลือ\nDays Remaining",
+        "Severity (1-5)\nSeverity",
+        "Occurrence (1-5)\nOccurrence",
+        "Detectability (1-5)\nDetectability",
+        "RPN\nRisk Priority Number",
+        "ระดับความเสี่ยง\nRisk Level",
+        "ความถี่ที่แนะนำตามความเสี่ยง\nRisk-based Frequency",
+        "สถานะเครื่องมือปัจจุบัน\nCurrent Status",
+        "ผู้อนุมัติให้ใช้งาน\nAuthorized By",
+        "ลิงก์ไฟล์ใบรับรอง\nCertificate File Link",
+        "หมายเหตุ\nRemarks",
+        "คีย์ค้นหา (รหัสเครื่องมือ + พารามิเตอร์)\nLookup Key",
+        "วันที่สอบเทียบล่าสุด กรณีไม่มีใบรับรองในระบบ\nManual Last Calibration"
+      ]
+    },
+    {
+      "name": "02_Certificate_Data",
+      "subtitle": "ตารางถ่ายโอนข้อมูลจากใบรับรองการสอบเทียบ / Calibration Certificate Data Transfer   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): บันทึกข้อมูลจากใบรับรองการสอบเทียบรายจุดสอบเทียบ (หนึ่งแถวต่อหนึ่ง Calibration Point) รองรับใบรับรองที่รายงานผลต่างรูปแบบกัน และตรวจสอบความครบถ้วนของใบรับรองโดยอัตโนมัติ",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | โครงสร้างคอลัมน์ของ Sheet นี้ใช้เป็น JSON schema สำหรับการดึงข้อมูลจากไฟล์ PDF ใบรับรองใน web app ได้โดยตรง",
+      "headers": [
+        "รหัสรายการ\nRecord ID",
+        "รหัสเครื่องมือ\nInstrument ID",
+        "เลขที่ใบรับรอง\nCertificate No.",
+        "หน่วยงานสอบเทียบ\nCalibration Provider",
+        "สถานะการรับรอง 17025 ของผู้สอบเทียบ\nProvider Accreditation Status",
+        "เลขที่การรับรองของผู้สอบเทียบ\nProvider Accreditation No.",
+        "วันที่สอบเทียบ\nCalibration Date",
+        "วันที่ออกใบรับรอง\nIssue Date",
+        "วิธีการสอบเทียบ\nCalibration Method",
+        "มาตรฐานอ้างอิงที่ใช้\nReference Standard Used",
+        "ความสอบกลับได้ทางมาตรวิทยา\nMetrological Traceability",
+        "อุณหภูมิขณะสอบเทียบ\nTemperature (°C)",
+        "ความชื้นสัมพัทธ์\nHumidity (%RH)",
+        "พารามิเตอร์\nParameter",
+        "ช่วง / Range ที่รายงาน\nRange ID",
+        "จุดสอบเทียบ (Nominal)\nCalibration Point",
+        "หน่วย\nUnit",
+        "รูปแบบที่ใบรับรองรายงาน\nReported As",
+        "ค่าอ้างอิง\nReference Value",
+        "ค่าที่เครื่องมืออ่านได้\nIndication",
+        "Error ที่รายงานในใบรับรอง\nReported Error",
+        "Correction ที่รายงานในใบรับรอง\nReported Correction",
+        "สถานะการปรับแก้\nAdjustment Status",
+        "Error ที่ใช้งาน\nDerived Error",
+        "Correction ที่ใช้งาน\nDerived Correction",
+        "Relative Error\nRelative Error (%)",
+        "รูปแบบ U ที่รายงาน\nU Reported As",
+        "ค่า U ที่รายงาน\nReported U",
+        "U (absolute)\nExpanded Uncertainty (abs)",
+        "Coverage factor k\nCoverage Factor",
+        "Coverage probability\nCoverage Probability (%)",
+        "u_cal = U/k\nStandard Uncertainty",
+        "Statement of Conformity จากผู้สอบเทียบ\nProvider Statement of Conformity",
+        "Decision Rule ของผู้สอบเทียบ\nProvider Decision Rule",
+        "ข้อจำกัด / หมายเหตุในใบรับรอง\nLimitations / Notes on Certificate",
+        "ผลการตรวจสอบความครบถ้วน\nCompleteness Check",
+        "รายการที่ขาด\nMissing Items",
+        "ผู้ทบทวน\nReviewed By",
+        "วันที่ทบทวน\nReview Date",
+        "สถานะ Record\nRecord Status",
+        "ลิงก์ไฟล์ PDF ใบรับรอง\nCertificate PDF Link",
+        "รอบการสอบเทียบ (พ.ศ.)\nCalibration Year (BE)"
+      ]
+    },
+    {
+      "name": "03_Acceptance_Criteria",
+      "subtitle": "เกณฑ์การยอมรับผลการสอบเทียบและการตัดสิน / Acceptance Criteria and Decision   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): เปรียบเทียบผลจากใบรับรอง (Sheet 02) กับเกณฑ์ที่ห้องปฏิบัติการกำหนด (Sheet 01) ตาม Decision Rule ที่เลือก แล้วกำหนดสถานะ PASS / CONDITIONAL PASS / WARNING / FAIL / REVIEW REQUIRED / INCOMPLETE DATA",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | ห้ามสรุปว่าเครื่องมือ \"ผ่าน\" จากข้อความ Statement of Conformity ในใบรับรองเพียงอย่างเดียว",
+      "headers": [
+        "ลำดับ\nIndex",
+        "รหัสเครื่องมือ\nInstrument ID",
+        "เลขที่ใบรับรอง\nCertificate No.",
+        "พารามิเตอร์\nParameter",
+        "จุดสอบเทียบ\nCalibration Point",
+        "หน่วย\nUnit",
+        "Error\nError",
+        "|Error|\nAbsolute Error",
+        "U (k=2)\nExpanded Uncertainty",
+        "u_cal\nStandard Uncertainty",
+        "U ของค่าอ้างอิง (สำหรับ En)\nU of Reference (for En)",
+        "Tolerance / MPE ที่ใช้\nApplied Tolerance",
+        "ชนิดของเกณฑ์\nTolerance Type",
+        "แหล่งอ้างอิงของเกณฑ์\nBasis of Criteria",
+        "Decision Rule ที่ใช้\nApplied Decision Rule",
+        "Guard band factor (g)\nGuard Band Factor",
+        "Guard band (w = g × U)\nGuard Band",
+        "เกณฑ์ยอมรับที่ใช้จริง\nAcceptance Limit",
+        "Tolerance Utilization\nTolerance Utilization (%)",
+        "TUR\nTest Uncertainty Ratio",
+        "En\nNormalized Error",
+        "ชดเชยด้วย Correction ได้หรือไม่\nCorrection Applicable",
+        "ผลการตัดสิน\nDecision",
+        "เหตุผล / เงื่อนไข\nRationale / Condition",
+        "ต้องใช้ Correction หรือไม่\nCorrection Required",
+        "ผู้ประเมิน\nEvaluated By",
+        "วันที่ประเมิน\nEvaluation Date",
+        "ผู้อนุมัติเกณฑ์ (Technical Manager)\nApproved By",
+        "วันที่อนุมัติ\nApproval Date",
+        "รอบการสอบเทียบ (พ.ศ.)\nCalibration Year (BE)"
+      ]
+    },
+    {
+      "name": "04_Daily_Intermediate_Check",
+      "subtitle": "บันทึกผล Daily Check / Intermediate Check / Performance Check / Daily, Intermediate and Performance Check Record   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): บันทึกผลการตรวจสอบระหว่างรอบการสอบเทียบ โดยเกณฑ์เตือน (Warning Limit) และเกณฑ์ดำเนินการ (Action Limit) คำนวณจาก Tolerance ที่อนุมัติใน Sheet 01 และ Correction จากใบรับรองใน Sheet 02",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance | การกำหนดเกณฑ์แบบอื่นต้องได้รับอนุมัติจาก Technical Manager และบันทึกใน Sheet 09",
+      "headers": [
+        "วันที่ตรวจสอบ\nCheck Date",
+        "รหัสเครื่องมือ\nInstrument ID",
+        "พารามิเตอร์\nParameter",
+        "ประเภทการตรวจสอบ\nCheck Type",
+        "รายการตรวจสอบ\nCheck Item",
+        "Check Standard ที่ใช้\nCheck Standard",
+        "รหัส Check Standard\nCheck Standard ID",
+        "ค่าอ้างอิง\nReference Value",
+        "U ของ Check Standard\nU of Check Standard",
+        "หน่วย\nUnit",
+        "ค่าอ่านครั้งที่ 1\nReading 1",
+        "ค่าอ่านครั้งที่ 2\nReading 2",
+        "ค่าอ่านครั้งที่ 3\nReading 3",
+        "ค่าอ่านครั้งที่ 4\nReading 4",
+        "ค่าอ่านครั้งที่ 5\nReading 5",
+        "ค่าเฉลี่ย\nMean",
+        "ส่วนเบี่ยงเบนมาตรฐาน\nStandard Deviation",
+        "%RSD\nRelative SD",
+        "Correction ที่ใช้\nApplied Correction",
+        "ค่าเฉลี่ยหลังแก้ค่า\nCorrected Mean",
+        "Bias\nBias",
+        "Relative Bias\nRelative Bias (%)",
+        "Tolerance ที่ใช้\nApplied Tolerance",
+        "Lower Warning Limit\nLWL",
+        "Upper Warning Limit\nUWL",
+        "Lower Action Limit\nLAL",
+        "Upper Action Limit\nUAL",
+        "ผลการประเมิน\nResult",
+        "ผู้ตรวจสอบ\nChecked By",
+        "ผู้ทบทวน\nReviewed By",
+        "การดำเนินการเมื่อไม่ผ่าน\nAction on Failure",
+        "เลขที่ CAR / NC\nCAR / NC No.",
+        "หมายเหตุ\nRemarks",
+        "ปีที่บันทึก (พ.ศ.)\nRecord Year (BE)"
+      ]
+    },
+    {
+      "name": "05_Uncertainty_Input",
+      "subtitle": "ข้อมูลนำเข้าสำหรับการประเมินความไม่แน่นอนของการวัด / Measurement Uncertainty Input   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): รวบรวมองค์ประกอบความไม่แน่นอน (Uncertainty components) แยกตาม Budget ID เพื่อคำนวณ Combined standard uncertainty และ Expanded uncertainty ตาม Measurement Model ของแต่ละวิธีทดสอบ",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | คำเตือน: ค่าความไม่แน่นอนจากใบรับรองการสอบเทียบไม่ควรนำมาใช้แทนค่าความไม่แน่นอนของวิธีทดสอบทั้งหมดโดยตรง แต่ควรใช้เป็นองค์ประกอบหนึ่งใน Uncertainty Budget ตาม Measurement Model",
+      "headers": [
+        "รหัส Uncertainty Budget\nBudget ID",
+        "รหัสเครื่องมือ\nInstrument ID",
+        "วิธีทดสอบ\nTest Method",
+        "พารามิเตอร์\nParameter",
+        "ชื่อองค์ประกอบความไม่แน่นอน\nUncertainty Component",
+        "สัญลักษณ์\nSymbol",
+        "ค่าที่ใช้\nValue",
+        "หน่วย\nUnit",
+        "การแจกแจงความน่าจะเป็น\nDistribution",
+        "Divisor\nDivisor",
+        "Standard uncertainty u(xi)\nStandard Uncertainty",
+        "Sensitivity coefficient (c)\nSensitivity Coefficient",
+        "Contribution |c|·u(xi)\nContribution",
+        "Contribution²\nSquared Contribution",
+        "Degrees of freedom\nDegrees of Freedom",
+        "% Contribution\nPercent Contribution",
+        "แหล่งข้อมูล\nData Source",
+        "วันที่ทบทวน\nReview Date",
+        "ผู้อนุมัติ\nApproved By",
+        "รหัส Budget ID",
+        "uc (Combined standard uncertainty)",
+        "k",
+        "U (Expanded uncertainty)",
+        "U สัมพัทธ์ (%) ต่อค่าที่วัดได้",
+        "ค่าที่วัดได้ (สำหรับ % สัมพัทธ์)",
+        "ผู้อนุมัติ"
+      ]
+    },
+    {
+      "name": "06_Trend_Analysis",
+      "subtitle": "การติดตามแนวโน้มการเปลี่ยนแปลงของเครื่องมือ / Trend and Drift Analysis   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): เปรียบเทียบผลการสอบเทียบข้ามรอบ เพื่อประเมินอัตราการเลื่อน (Drift) คาดการณ์เวลาที่เครื่องมือจะหลุดเกณฑ์ และใช้เป็นหลักฐานประกอบการทบทวนความถี่การสอบเทียบ",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+      "headers": [
+        "รหัสเครื่องมือ\nInstrument ID",
+        "พารามิเตอร์\nParameter",
+        "จุดสอบเทียบ\nCalibration Point",
+        "ปีที่สอบเทียบ (พ.ศ.)\nCalibration Year",
+        "วันที่สอบเทียบ\nCalibration Date",
+        "Error\nError",
+        "Correction\nCorrection",
+        "U (k=2)\nExpanded Uncertainty",
+        "Tolerance ที่ใช้\nApplied Tolerance",
+        "Tolerance Utilization\nTolerance Utilization (%)",
+        "Drift จากรอบก่อนหน้า\nDrift from Previous",
+        "จำนวนปีระหว่างรอบ\nYears between Rounds",
+        "อัตราการเลื่อนต่อปี\nDrift Rate per Year",
+        "Error คาดการณ์รอบถัดไป\nProjected Error",
+        "จำนวนปีที่คาดว่าจะหลุดเกณฑ์\nYears to Out-of-Tolerance",
+        "สัญญาณแนวโน้ม\nTrend Flag",
+        "ข้อเสนอการปรับความถี่สอบเทียบ\nProposed Interval Adjustment",
+        "ผู้ทบทวน\nReviewed By"
+      ]
+    },
+    {
+      "name": "07_Equipment_Status",
+      "subtitle": "สรุปสถานะเครื่องมือ / Equipment Status Summary   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): สรุปสถานะรายเครื่องมือจากผลการสอบเทียบ (Sheet 03) ผลการตรวจสอบระหว่างรอบ (Sheet 04) และคะแนนความเสี่ยง (Sheet 01) ใช้เป็นข้อมูลสำหรับติดฉลากสถานะเครื่องมือและการทบทวนระบบ",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | คอลัมน์ \"สถานะการใช้งาน\" เป็นการตัดสินใจของห้องปฏิบัติการ ไม่ใช่ผลคำนวณ ต้องมีผู้อนุมัติกำกับทุกครั้ง",
+      "headers": [
+        "รหัสเครื่องมือ\nInstrument ID",
+        "พารามิเตอร์\nParameter",
+        "ชื่อเครื่องมือ\nInstrument Name",
+        "กลุ่ม\nGroup",
+        "วันที่สอบเทียบล่าสุด\nLast Calibration",
+        "วันครบกำหนดถัดไป\nNext Due Date",
+        "วันคงเหลือ\nDays Remaining",
+        "สถานะรอบสอบเทียบ\nCalibration Cycle Status",
+        "ผลการสอบเทียบโดยรวม\nOverall Calibration Decision",
+        "Tolerance Utilization สูงสุด\nMax Tolerance Utilization",
+        "จำนวนจุดที่ FAIL หรือ CONDITIONAL\nNo. of Failing Points",
+        "จำนวน Check ที่ไม่ผ่านใน 90 วัน\nFailed Checks (90 days)",
+        "RPN\nRisk Priority Number",
+        "สถานะการใช้งาน\nUsage Status",
+        "ข้อความบนป้ายสถานะ\nStatus Label Text",
+        "ผู้อนุมัติ\nApproved By",
+        "วันที่อนุมัติ\nApproval Date",
+        "หมายเหตุ / เงื่อนไขการใช้งาน\nRemarks / Conditions of Use",
+        "รอบล่าสุดที่ใช้สรุป (พ.ศ.)\nLatest Round Summarised"
+      ]
+    },
+    {
+      "name": "08_Action_and_Impact",
+      "subtitle": "การดำเนินการและการประเมินผลกระทบ / Action and Impact Evaluation   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): บันทึกการดำเนินการเมื่อผลการสอบเทียบหรือผลการตรวจสอบระหว่างรอบไม่เป็นไปตามเกณฑ์ รวมถึงการประเมินผลกระทบย้อนหลังต่อผลการทดสอบที่รายงานไปแล้ว ตาม ISO/IEC 17025:2017 ข้อ 7.10 และ 8.7",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+      "headers": [
+        "เลขที่รายการ\nAction ID",
+        "วันที่พบ\nDate Identified",
+        "รหัสเครื่องมือ\nInstrument ID",
+        "แหล่งที่พบปัญหา\nSource of Finding",
+        "ลักษณะปัญหา\nDescription of Nonconformity",
+        "สถานะที่ประเมินได้\nAssessed Decision",
+        "ช่วงเวลาที่อาจได้รับผลกระทบ ตั้งแต่\nImpact Period From",
+        "ถึงวันที่\nImpact Period To",
+        "วิธีทดสอบที่ได้รับผลกระทบ\nAffected Test Methods",
+        "จำนวนรายงานที่อาจได้รับผลกระทบ\nNo. of Reports Affected",
+        "การประเมินผลกระทบย้อนหลัง\nRetrospective Impact Evaluation",
+        "ผลกระทบต่อผลการทดสอบ\nImpact on Test Results",
+        "ต้องแจ้งลูกค้าหรือไม่\nCustomer Notification Required",
+        "การแก้ไขทันที (Correction)\nImmediate Correction",
+        "การแก้ไขเชิงป้องกัน (Corrective Action)\nCorrective Action",
+        "เลขที่ CAR\nCAR No.",
+        "ผู้รับผิดชอบ\nResponsible Person",
+        "กำหนดแล้วเสร็จ\nTarget Date",
+        "สถานะการดำเนินการ\nAction Status",
+        "การติดตามประสิทธิผล\nVerification of Effectiveness",
+        "ผู้อนุมัติปิดเรื่อง\nClosed By",
+        "วันที่ปิดเรื่อง\nClosing Date"
+      ]
+    },
+    {
+      "name": "09_Approval_Record",
+      "subtitle": "บันทึกการทบทวนและอนุมัติ / Review and Approval Record   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "purpose": "วัตถุประสงค์ (Purpose): บันทึกการอนุมัติเกณฑ์การยอมรับ Decision Rule การใช้ Correction ความถี่การตรวจสอบ และการอนุมัติให้ใช้งานเครื่องมือ เพื่อใช้เป็นหลักฐานสำหรับการตรวจประเมินภายในและการตรวจประเมินจากหน่วยรับรอง",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+      "headers": [
+        "เลขที่การอนุมัติ\nApproval ID",
+        "วันที่\nDate",
+        "รหัสเครื่องมือ\nInstrument ID",
+        "เลขที่ใบรับรองอ้างอิง\nReference Certificate No.",
+        "เรื่องที่ขออนุมัติ\nSubject of Approval",
+        "สาระสำคัญของเรื่องที่ขออนุมัติ\nSummary of Request",
+        "เอกสาร / หลักฐานอ้างอิง\nSupporting Documents",
+        "ผู้จัดทำ\nPrepared By",
+        "ตำแหน่ง\nPosition",
+        "วันที่จัดทำ\nPrepared Date",
+        "ผู้ทบทวน (Technical Manager)\nReviewed By",
+        "วันที่ทบทวน\nReview Date",
+        "ผู้อนุมัติ (Quality Manager / Lab Manager)\nApproved By",
+        "วันที่อนุมัติ\nApproval Date",
+        "ผลการอนุมัติ\nApproval Outcome",
+        "เงื่อนไขที่กำหนด\nConditions Imposed",
+        "วันที่มีผลบังคับใช้\nEffective Date",
+        "วันที่ทบทวนครั้งถัดไป\nNext Review Date"
+      ]
+    }
+  ],
+  "lookup": {
+    "title": "MPIR Central Laboratory, Mitr Phol Innovation and Research Center  |  แบบบันทึกและประเมินเกณฑ์การสอบเทียบเครื่องมือวัด (Calibration Record and Acceptance Evaluation Form)",
+    "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+    "headers": [
+      "กลุ่มเครื่องมือ\n(LK_GROUP)",
+      "ชนิดของเกณฑ์\n(LK_TOLTYPE)",
+      "แหล่งอ้างอิงของเกณฑ์\n(LK_BASIS)",
+      "Decision Rule\n(LK_RULE)",
+      "สถานะการรับรองของผู้สอบเทียบ\n(LK_ACCRED)",
+      "ความสอบกลับได้ทางมาตรวิทยา\n(LK_TRACE)",
+      "รูปแบบที่ใบรับรองรายงาน\n(LK_REPORTED)",
+      "รูปแบบ U ที่รายงาน\n(LK_UTYPE)",
+      "สถานะการปรับแก้\n(LK_ADJ)",
+      "สถานะ Record\n(LK_RECSTAT)",
+      "ผลการตัดสิน\n(LK_DEC)",
+      "ประเภทการตรวจสอบ\n(LK_CHKTYPE)",
+      "การแจกแจงความน่าจะเป็น\n(LK_DIST)",
+      "สถานะการใช้งาน\n(LK_USAGE)",
+      "ชดเชยด้วย Correction ได้หรือไม่\n(LK_YESNO)",
+      "แหล่งที่พบปัญหา\n(LK_SOURCE)",
+      "ผลกระทบต่อผลการทดสอบ\n(LK_IMPACT)",
+      "เรื่องที่ขออนุมัติ\n(LK_SUBJ)",
+      "ผลการอนุมัติ\n(LK_OUTCOME)",
+      "สถานะการดำเนินการ\n(LK_ACTSTAT)"
+    ],
+    "rows": [
+      [
+        "A",
+        "absolute",
+        "ข้อกำหนดจากผู้ผลิต (Manufacturer)",
+        "Simple acceptance (|Error| ≤ Tolerance)",
+        "ได้รับการรับรอง ISO/IEC 17025 ในขอบข่ายนี้",
+        "สอบกลับได้ถึงหน่วย SI ผ่านสถาบันมาตรวิทยาแห่งชาติ (NMI)",
+        "Error",
+        "Absolute",
+        "ก่อนปรับแก้ (Before adjustment)",
+        "Draft",
+        "PASS",
+        "Daily Check",
+        "Normal (k=1)",
+        "ใช้งานได้ปกติ (In use)",
+        "ใช้ได้ (Yes)",
+        "ผลการสอบเทียบประจำปี",
+        "ไม่มีผลกระทบ",
+        "อนุมัติเกณฑ์การยอมรับ (Acceptance criteria)",
+        "อนุมัติ",
+        "เปิดเรื่อง"
+      ],
+      [
+        "B",
+        "% of reading",
+        "ข้อกำหนดจากวิธีทดสอบ (Test Method)",
+        "Conservative (|Error| + U ≤ Tolerance)",
+        "ได้รับการรับรอง ISO/IEC 17025 แต่ไม่ครอบคลุมขอบข่ายนี้",
+        "สอบกลับได้ผ่านวัสดุอ้างอิงรับรอง (CRM)",
+        "Correction",
+        "Relative (%)",
+        "หลังปรับแก้ (After adjustment)",
+        "Verified",
+        "CONDITIONAL PASS",
+        "Intermediate Check",
+        "Normal (k=2)",
+        "ใช้งานโดยต้องใช้ Correction (In use with correction)",
+        "ใช้ไม่ได้ (No)",
+        "Daily Check",
+        "มีผลกระทบแต่ยังอยู่ในเกณฑ์ยอมรับ",
+        "อนุมัติ Decision Rule",
+        "อนุมัติแบบมีเงื่อนไข",
+        "อยู่ระหว่างดำเนินการ"
+      ],
+      [
+        "C",
+        "% of full scale",
+        "ข้อกำหนดของลูกค้า (Customer)",
+        "Guard band (Acceptance Limit = Tolerance − g×U)",
+        "สถาบันมาตรวิทยาแห่งชาติ (NMI)",
+        "สอบกลับได้ผ่านวิธีอ้างอิงที่ยอมรับ (Reference method)",
+        "Reading + Reference",
+        "รอข้อมูล",
+        "ไม่มีการปรับแก้ (No adjustment)",
+        "Approved",
+        "WARNING",
+        "Performance Check ก่อนใช้งาน",
+        "Normal (k=3)",
+        "ใช้งานแบบจำกัดช่วง (Restricted use)",
+        "รอประเมิน",
+        "Intermediate Check",
+        "มีผลกระทบต้องออกรายงานฉบับแก้ไข",
+        "อนุมัติการใช้ Correction",
+        "ไม่อนุมัติ",
+        "รอการทวนสอบ"
+      ],
+      [
+        null,
+        null,
+        "ข้อกำหนดตามกฎหมายหรือมาตรฐาน (Regulation / Standard)",
+        "Decision rule ตามข้อกำหนดของลูกค้า (ต้องบันทึกใน Sheet 09)",
+        "ผู้ผลิตเครื่องมือ (Manufacturer service)",
+        "ไม่สามารถสอบกลับได้ ต้องประเมินความเหมาะสม",
+        "Before & After Adjustment",
+        null,
+        null,
+        "Superseded",
+        "FAIL",
+        "System Suitability Test",
+        "Rectangular",
+        "หยุดใช้งานชั่วคราว (Quarantine)",
+        null,
+        "Performance Check",
+        "ต้องประเมินเพิ่มเติม",
+        "อนุมัติให้ใช้งานเครื่องมือหลังการสอบเทียบ",
+        "ให้ทบทวนใหม่",
+        "ปิดเรื่องแล้ว"
+      ],
+      [
+        null,
+        null,
+        "กำหนดโดยห้องปฏิบัติการ (Lab-defined)",
+        null,
+        "ไม่ได้รับการรับรอง",
+        "รอข้อมูล",
+        "รอข้อมูล",
+        null,
+        null,
+        null,
+        "REVIEW REQUIRED",
+        "Verification หลังการซ่อมหรือเคลื่อนย้าย",
+        "Triangular",
+        "ปลดระวาง (Out of service)",
+        null,
+        "ข้อร้องเรียนของลูกค้า",
+        null,
+        "อนุมัติเกณฑ์และความถี่ Daily / Intermediate Check",
+        null,
+        null
+      ],
+      [
+        null,
+        null,
+        null,
+        null,
+        "รอข้อมูล",
+        null,
+        null,
+        null,
+        null,
+        null,
+        "INCOMPLETE DATA",
+        null,
+        "U-shaped",
+        null,
+        null,
+        "การตรวจติดตามภายใน",
+        null,
+        "อนุมัติ Uncertainty Budget",
+        null,
+        null
+      ],
+      [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "การสังเกตของผู้ใช้งาน",
+        null,
+        "อนุมัติการหยุดใช้งานเครื่องมือ",
+        null,
+        null
+      ],
+      [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "อนุมัติการปรับความถี่การสอบเทียบ",
+        null,
+        null
+      ]
+    ]
+  }
+};
+
+// A header cell looks like "รหัสเครื่องมือ\nInstrument ID" - the English half
+// (after the newline) is used as the lookup key so a data row can be built
+// by name instead of by fragile column position.
+function mpirKey(header) {
+  const parts = String(header).split("\n");
+  return (parts[1] || parts[0]).trim();
+}
+function mpirRowFromMap(headers, map) {
+  return headers.map(h => {
+    const v = map[mpirKey(h)];
+    return v === undefined || v === null ? "" : v;
+  });
+}
+// Thai Buddhist-Era year (พ.ศ.) from a "YYYY-MM-DD" date, matching the
+// template's "Record Year (BE)" / "Calibration Year (BE)" columns.
+function mpirBEYear(dateStr) {
+  if (!dateStr) return "";
+  const y = Number(String(dateStr).slice(0, 4));
+  return isNaN(y) ? "" : y + 543;
+}
+
+// Builds one worksheet: the shared title row, this sheet's subtitle/purpose/
+// legend rows (all merged across every column), then the bilingual header
+// row, then data rows.
+function buildMPIRSheet(headers, rows, sheetMeta) {
+  const { subtitle, purpose, legend } = sheetMeta;
+  const width = headers.length;
+  const pad = (line) => [line, ...Array(width - 1).fill("")];
+  const aoa = [
+    pad(MPIR_DOC.title),
+    pad(subtitle),
+    pad(purpose),
+    pad(legend),
+    headers,
+    ...rows,
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!merges"] = [0, 1, 2, 3].map(r => ({ s: { r, c: 0 }, e: { r, c: width - 1 } }));
+  ws["!cols"] = headers.map(() => ({ wch: 22 }));
+  ws["!rows"] = [{ hpt: 18 }, { hpt: 18 }, { hpt: 18 }, { hpt: 18 }, { hpt: 30 }];
+  return ws;
+}
+
+// ---- Sheet 01: Instrument Master - filled from the app's equipment list ----
+function mpirInstrumentMasterRows(equipment) {
+  return equipment.map(e => mpirRowFromMap(MPIR_DOC.sheets[0].headers, {
+    "Instrument ID": e.code || "",
+    "Instrument Name": e.name || "",
+    "Instrument Type": e.type || "",
+    "Brand": e.brand || "",
+    "Model": e.model || "",
+    "Serial No.": e.serialNo || "",
+    "Location": e.location || "",
+    "Calibration Interval": e.intervalMonths || "",
+    "Last Calibration Date": e.lastCalibration || "",
+    "Next Due Date": e.nextDue || "",
+    "Remarks": e.notes || "",
+    "Lookup Key": `${e.code || ""}|${e.type || ""}`,
+  }));
+}
+
+// ---- Sheet 04: Daily / Intermediate Check - filled from the app's dailyChecks log ----
+// Each saved check can carry several result shapes (weight groups, pH points,
+// EC, Polarimeter, Oven, Refractometer, Cooling Bath, Humidity, or a plain
+// pass/fail). Every individual check *point* becomes its own row, matching
+// the template's "one row per check point" layout.
+function mpirDailyCheckPoints(c) {
+  if (c.weightResults) return c.weightResults.map(r => ({ item: r.label, standard: r.standard, unit: "g", reading: r.reading, pass: r.pass }));
+  if (c.phResults) return c.phResults.map(r => ({ item: r.label, standard: r.standard, unit: "pH", reading: r.reading, pass: r.pass }));
+  if (c.ecResult) return [{ item: "EC", standard: c.ecResult.standard, unit: "µS/cm", reading: c.ecResult.reading, pass: c.ecResult.pass }];
+  if (c.polarimeterResult) return [{ item: "Polarimeter", standard: c.polarimeterResult.standard, unit: "°", reading: c.polarimeterResult.reading, pass: c.polarimeterResult.pass }];
+  if (c.ovenResult) return [{ item: "Oven temperature", standard: c.ovenResult.standard, unit: "°C", reading: c.ovenResult.reading, pass: c.ovenResult.pass }];
+  if (c.refractometerResult) return [{ item: "Refractometer (Brix)", standard: c.refractometerResult.standard, unit: "°Brix", reading: c.refractometerResult.reading, pass: c.refractometerResult.pass }];
+  if (c.coolingBathResult) return [{ item: "Cooling Bath temperature", standard: c.coolingBathResult.standard, unit: "°C", reading: c.coolingBathResult.reading, pass: c.coolingBathResult.pass }];
+  if (c.humidityResult) return [{ item: "Humidity control", standard: c.humidityResult.standard, unit: "%RH", reading: c.humidityResult.reading, pass: c.humidityResult.pass }];
+  return [{ item: "ตรวจสอบทั่วไป", standard: "", unit: "", reading: "", pass: c.result }];
+}
+function mpirDailyCheckRows(dailyChecks, equipment) {
+  const headers = MPIR_DOC.sheets[3].headers; // 04_Daily_Intermediate_Check
+  const rows = [];
+  dailyChecks.forEach(c => {
+    const equip = equipment.find(e => e.id === c.equipmentId);
+    mpirDailyCheckPoints(c).forEach(pt => {
+      rows.push(mpirRowFromMap(headers, {
+        "Check Date": c.date || "",
+        "Instrument ID": equip?.code || c.equipmentId || "",
+        "Parameter": equip?.type || "",
+        "Check Type": "Daily Check",
+        "Check Item": pt.item,
+        "Reference Value": pt.standard ?? "",
+        "Unit": pt.unit || "",
+        "Reading 1": pt.reading ?? "",
+        "Mean": pt.reading ?? "",
+        "Result": pt.pass === true ? "PASS" : pt.pass === false ? "FAIL" : "",
+        "Checked By": c.checkedBy || c.by || "",
+        "Reviewed By": c.reviewedBy || "",
+        "Remarks": c.remarks || "",
+        "Record Year (BE)": mpirBEYear(c.date),
+      }));
+    });
+  });
+  return rows;
+}
+
+// ---- Sheet 10: Lookup List - copied as-is (static reference data, same in every export) ----
+function buildMPIRLookupSheet() {
+  const { headers, rows, legend } = MPIR_DOC.lookup;
+  const width = headers.length;
+  const pad = (line) => [line, ...Array(width - 1).fill("")];
+  const aoa = [pad(MPIR_DOC.title), pad(legend), headers, ...rows.map(r => headers.map((_, i) => r[i] ?? ""))];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!merges"] = [0, 1].map(r => ({ s: { r, c: 0 }, e: { r, c: width - 1 } }));
+  ws["!cols"] = headers.map(() => ({ wch: 22 }));
+  return ws;
+}
+
+// ---- Sheet 11: User Guide - short note on what this particular export covers ----
+function buildMPIRUserGuideSheet(generatedAt) {
+  const aoa = [
+    [MPIR_DOC.title],
+    ["คู่มือการใช้งานไฟล์นี้ / Notes on this export"],
+    [`สร้างจาก LabTrackApp เมื่อ ${generatedAt}`],
+    [""],
+    ["Sheet ที่กรอกข้อมูลอัตโนมัติจากแอป / Auto-filled from the app:"],
+    ["  • 01_Instrument_Master — จากรายการ \"เครื่องมือ\" ในแอป"],
+    ["  • 04_Daily_Intermediate_Check — จากบันทึก \"Daily check\" ในแอป"],
+    [""],
+    ["Sheet ที่ต้องกรอกด้วยตนเอง (แอปยังไม่ได้เก็บข้อมูลส่วนนี้) / Fill in manually — not yet tracked in the app:"],
+    ["  • 02_Certificate_Data, 03_Acceptance_Criteria, 05_Uncertainty_Input,"],
+    ["    06_Trend_Analysis, 07_Equipment_Status, 08_Action_and_Impact, 09_Approval_Record"],
+    [""],
+    ["โปรดตรวจทานข้อมูลที่กรอกอัตโนมัติ และให้ Technical Manager อนุมัติเกณฑ์ก่อนใช้เป็นเอกสารทางการ"],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 90 }];
+  return ws;
+}
+
+function exportMPIRWorkbook(equipment, dailyChecks) {
+  const wb = XLSX.utils.book_new();
+  const rowsBySheet = {
+    "01_Instrument_Master": () => mpirInstrumentMasterRows(equipment),
+    "04_Daily_Intermediate_Check": () => mpirDailyCheckRows(dailyChecks, equipment),
+  };
+  MPIR_DOC.sheets.forEach(sheet => {
+    const rows = (rowsBySheet[sheet.name] ? rowsBySheet[sheet.name]() : []);
+    const ws = buildMPIRSheet(sheet.headers, rows, sheet);
+    XLSX.utils.book_append_sheet(wb, ws, sheet.name);
+  });
+  XLSX.utils.book_append_sheet(wb, buildMPIRLookupSheet(), "10_Lookup_List");
+  XLSX.utils.book_append_sheet(wb, buildMPIRUserGuideSheet(new Date().toLocaleString("th-TH")), "11_User_Guide");
+  XLSX.writeFile(wb, `MPIR_Calibration_Record_${todayISO()}.xlsx`);
+}
+
 // Flattens whichever daily-check result shape an entry has (scale weights,
 // pH points, EC, Polarimeter, Oven, Refractometer, or a plain OK/NG check
 // like Humidity control / Cooling Bath) into one readable line for reports.
@@ -5859,6 +6554,12 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
 
   const txCount = consumables.reduce((sum, s) => sum + (s.transactions || []).length, 0);
 
+  // MPIR Calibration Record (RDI-LF-070) — single workbook, all 11 sheets,
+  // matching the lab's official calibration-record template. Kept as its
+  // own panel (not a generic list-export card) since it produces one
+  // multi-sheet document rather than one flat table.
+  const exportMPIR = () => exportMPIRWorkbook(equipment, dailyChecks);
+
   const cards = [
     { title: "เครื่องมือทั้งหมด", desc: `${equipment.length} รายการ พร้อมกำหนดสอบเทียบ`, action: exportEquipment, icon: Wrench },
     { title: "ประวัติกิจกรรม (ทุกเครื่องมือ)", desc: `${activities.length} รายการ สอบเทียบ/ซ่อม/แจ้งซ่อม`, action: exportActivities, icon: CalendarClock },
@@ -5946,6 +6647,18 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
             <QrCode size={13} /> พิมพ์ QR ดูข้อมูลเครื่องมือ (PDF)
           </button>
         </div>
+      </div>
+
+      <div style={{ ...S.panel, marginBottom: 20 }}>
+        <div style={S.panelHead}><ClipboardList size={16} color="var(--teal)" /><span style={S.panelTitle}>MPIR Calibration Record (RDI-LF-070)</span></div>
+        <div style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 12px" }}>
+          ส่งออกไฟล์ Excel ตามฟอร์แมตแบบบันทึกและประเมินเกณฑ์การสอบเทียบเครื่องมือวัดของ MPIR ทั้ง 11 Sheet ในไฟล์เดียว —
+          Sheet "01_Instrument_Master" ({equipment.length} รายการ) และ "04_Daily_Intermediate_Check" ({dailyChecks.length} รายการ) กรอกข้อมูลอัตโนมัติจากแอปนี้
+          ส่วน Sheet ที่เหลือ (ใบรับรอง, Uncertainty, Trend, สถานะเครื่องมือ, CAR/NC, การอนุมัติ) ยังไม่มีข้อมูลในแอป จึงส่งออกเฉพาะหัวตารางให้กรอกต่อด้วยมือ
+        </div>
+        <button style={S.smallBtn} onClick={exportMPIR}>
+          <FileDown size={13} /> ส่งออก MPIR Calibration Record (Excel, 11 Sheet)
+        </button>
       </div>
 
       <div style={S.statGrid}>
