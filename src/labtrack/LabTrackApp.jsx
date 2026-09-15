@@ -568,12 +568,24 @@ async function pdfPagesToImages(file, onProgress) {
   for (let n = 1; n <= pdf.numPages; n++) {
     if (onProgress) onProgress(n, pdf.numPages);
     const page = await pdf.getPage(n);
-    const viewport = page.getViewport({ scale: 2 });
+    // Target ~1600px on the long edge: enough to resolve 4-decimal table
+    // digits on an A4 scan, while keeping each request small. Scale 2 on a
+    // 300dpi scan produced multi-megabyte bodies, which is one of the ways
+    // a request can die as a bare "Failed to fetch".
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(2, Math.max(1, 1600 / Math.max(base.width, base.height)));
+    const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-    images.push(canvas.toDataURL("image/jpeg", 0.82).split(",")[1]);
+    let data = canvas.toDataURL("image/jpeg", 0.78).split(",")[1];
+    // Hard ceiling well under the API's per-image limit; step quality down
+    // rather than fail outright on an unusually dense page.
+    for (let q = 0.6; data.length > 3_500_000 && q >= 0.4; q -= 0.1) {
+      data = canvas.toDataURL("image/jpeg", q).split(",")[1];
+    }
+    images.push(data);
   }
   return images;
 }
@@ -598,22 +610,46 @@ const CERT_PAGE_PROMPT = `คุณคือระบบดึงข้อมู
 - ตารางที่จัดกลุ่มตามความยาวคลื่น ให้ใส่ความยาวคลื่นลงในช่อง "ช่วง"
 - ถ้าหน้านี้เป็นใบรับรองคนละฉบับกับหน้าก่อน ให้ใส่เลขที่ใบรับรองของหน้านี้`;
 
-async function extractCertificatePage(base64Jpeg) {
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64Jpeg } },
-          { type: "text", text: CERT_PAGE_PROMPT },
-        ],
-      }],
-    }),
-  });
+async function extractCertificatePage(base64Jpeg, apiKey = "") {
+  // When this app runs inside Claude's artifact sandbox the request is
+  // proxied and needs no key. When it runs anywhere else (a normal web
+  // host, localhost, an embedded WebView) the browser talks to Anthropic
+  // directly, which requires both a key and the opt-in CORS header —
+  // without them the call dies as a bare "Failed to fetch" with nothing
+  // in the response to explain why.
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) {
+    headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+    headers["anthropic-dangerous-direct-browser-access"] = "true";
+  }
+  let resp;
+  try {
+    resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64Jpeg } },
+            { type: "text", text: CERT_PAGE_PROMPT },
+          ],
+        }],
+      }),
+    });
+  } catch (e) {
+    // fetch() only rejects for network-level failures — DNS, CORS, or the
+    // request never leaving the browser. Spell out what that means here,
+    // since "Failed to fetch" on its own tells the user nothing.
+    throw new Error(
+      `เรียก API ไม่ได้ (${e.message}) — เบราว์เซอร์ติดต่อ api.anthropic.com ไม่ได้ `
+      + `สาเหตุที่พบบ่อยคือแอปไม่ได้รันในสภาพแวดล้อมที่ต่อ API ให้อัตโนมัติ `
+      + `ให้ใส่ API key ในช่องด้านล่าง หรือใช้วิธี "วางข้อมูลที่ดึงมาแล้ว" แทน`
+    );
+  }
   if (!resp.ok) {
     let detail = "";
     try { detail = (await resp.json())?.error?.message || ""; } catch (e) { /* non-JSON error body */ }
@@ -637,7 +673,7 @@ const numOrNullRaw = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : 
 // is the normal case here, not an edge case). Header fields carry forward
 // from a certificate's first page onto its continuation pages, which only
 // repeat the certificate number.
-async function extractCertificatesFromPdf(file, onProgress) {
+async function extractCertificatesFromPdf(file, onProgress, apiKey = "") {
   const images = await pdfPagesToImages(file, onProgress);
   const certs = new Map();
   const pageErrors = [];
@@ -646,7 +682,7 @@ async function extractCertificatesFromPdf(file, onProgress) {
     if (onProgress) onProgress(i + 1, images.length, "reading");
     let page;
     try {
-      page = await extractCertificatePage(images[i]);
+      page = await extractCertificatePage(images[i], apiKey);
     } catch (e) {
       pageErrors.push(`หน้า ${i + 1}: ${e.message}`);
       continue;
@@ -683,6 +719,59 @@ async function extractCertificatesFromPdf(file, onProgress) {
     });
   }
   return { certificates: [...certs.values()], pageErrors, pageCount: images.length };
+}
+
+// Offline fallback for when the browser can't reach the API at all. The
+// user pastes the same compact JSON shape the page reader produces (they
+// can get it by handing the PDF to Claude in a chat), and it's parsed and
+// filed through exactly the same path — so a certificate imported this way
+// is indistinguishable from one read automatically, and no separate
+// half-supported code path exists.
+function parsePastedCertificateJson(text) {
+  const raw = String(text).trim().replace(/```json|```/g, "").trim();
+  if (!raw) throw new Error("ยังไม่ได้วางข้อมูล");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error("รูปแบบ JSON ไม่ถูกต้อง: " + e.message);
+  }
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  const out = list.map(page => {
+    const points = (page.points || []).map(p => {
+      // Accept both the compact array form and a plain object form, so a
+      // hand-written paste doesn't have to match the positional order.
+      if (Array.isArray(p)) {
+        const [parameter, rangeId, point, unit, ref, reading, error, correction, u, k] = p;
+        return {
+          parameter: parameter || "", rangeId: rangeId == null ? "" : String(rangeId),
+          calibrationPoint: numOrNullRaw(point), unit: unit || "",
+          referenceValue: numOrNullRaw(ref), indication: numOrNullRaw(reading),
+          reportedError: numOrNullRaw(error), reportedCorrection: numOrNullRaw(correction),
+          reportedU: numOrNullRaw(u), coverageFactor: numOrNullRaw(k) ?? 2,
+        };
+      }
+      return {
+        parameter: p.parameter || "", rangeId: p.rangeId == null ? "" : String(p.rangeId),
+        calibrationPoint: numOrNullRaw(p.calibrationPoint), unit: p.unit || "",
+        referenceValue: numOrNullRaw(p.referenceValue), indication: numOrNullRaw(p.indication),
+        reportedError: numOrNullRaw(p.reportedError), reportedCorrection: numOrNullRaw(p.reportedCorrection),
+        reportedU: numOrNullRaw(p.reportedU), coverageFactor: numOrNullRaw(p.coverageFactor) ?? 2,
+      };
+    });
+    return {
+      certificateNo: page.cert || page.certificateNo || "",
+      provider: page.provider || "", providerAccreditationNo: page.accredNo || "",
+      calibrationDate: page.calDate || page.calibrationDate || "",
+      issueDate: page.issueDate || "", calibrationMethod: page.method || "",
+      referenceStandardUsed: page.refStd || "", traceability: page.trace || "",
+      temperatureC: page.tempC ?? "", humidityRH: page.rh ?? "",
+      limitationsNotes: page.notes || "", points,
+    };
+  });
+  const total = out.reduce((n, c) => n + c.points.length, 0);
+  if (total === 0) throw new Error("ไม่พบจุดสอบเทียบใน JSON ที่วาง (ช่อง \"points\" ว่าง)");
+  return out;
 }
 
 // Sheet 10 lookups needed by Sheets 04-09.
@@ -3212,6 +3301,10 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");  // per-page status while importing
   const [errorMsg, setErrorMsg] = useState("");  // real failure reason, shown in the dialog
+  const [pasteText, setPasteText] = useState("");
+  const [showPaste, setShowPaste] = useState(false);
+  // Only needed when the app isn't running somewhere that proxies the API.
+  const [apiKey, setApiKey] = useState("");
 
   const instrumentName = (id) => { const e = equipment.find(x => x.id === id); return e ? `${e.code} — ${e.name}` : id; };
   const filtered = certificates
@@ -3230,6 +3323,61 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     notify("ลบรายการแล้ว");
   }
 
+  // Shared by both import paths (PDF reader and pasted JSON) so the two can
+  // never drift apart in how they flag incomplete rows.
+  function buildRowsFromExtracted(found, instrumentId) {
+    const rows = [];
+    found.forEach(cert => {
+      cert.points.forEach(p => {
+        const missing = [];
+        if (p.referenceValue == null) missing.push("ค่าอ้างอิง");
+        if (p.indication == null && p.reportedError == null && p.reportedCorrection == null) missing.push("ค่าที่อ่านได้/Error/Correction");
+        if (p.reportedU == null) missing.push("U");
+        rows.push({
+          ...blankCertificate(instrumentId, cert.certificateNo || ""),
+          provider: cert.provider || "", providerAccreditationNo: cert.providerAccreditationNo || "",
+          calibrationDate: cert.calibrationDate || "", issueDate: cert.issueDate || "",
+          calibrationMethod: cert.calibrationMethod || "", referenceStandardUsed: cert.referenceStandardUsed || "",
+          traceability: cert.traceability || "",
+          temperatureC: cert.temperatureC ?? "", humidityRH: cert.humidityRH ?? "",
+          limitationsNotes: cert.limitationsNotes || "",
+          parameter: p.parameter || "", rangeId: p.rangeId || "", calibrationPoint: p.calibrationPoint ?? "",
+          unit: p.unit || "", referenceValue: p.referenceValue ?? "", indication: p.indication ?? "",
+          reportedError: p.reportedError ?? "", reportedCorrection: p.reportedCorrection ?? "",
+          reportedAs: p.reportedError != null ? "Error" : (p.reportedCorrection != null ? "Correction" : "Reading + Reference"),
+          uReportedAs: "Absolute", reportedU: p.reportedU ?? "", uAbsolute: p.reportedU ?? "",
+          coverageFactor: p.coverageFactor ?? 2, coverageProbabilityPct: 95,
+          missingItems: missing.join(", "),
+          recordStatus: missing.length ? "Draft" : "Verified",
+          reviewedBy: currentDisplayName, reviewDate: todayISO(), source: "pdf-ai",
+          pdfSourcePage: p.sourcePage,
+        });
+      });
+    });
+    return rows;
+  }
+
+  // Offline path: user pastes JSON produced elsewhere, saved through the
+  // same builder as the automatic reader.
+  function handlePasteImport(instrumentId) {
+    try {
+      const found = parsePastedCertificateJson(pasteText);
+      const newRows = buildRowsFromExtracted(found, instrumentId);
+      setCertificates([...newRows, ...certificates]);
+      const draftCount = newRows.filter(r => r.recordStatus === "Draft").length;
+      notify(
+        `นำเข้า ${newRows.length} จุดสอบเทียบจาก ${found.length} ใบรับรอง (${found.map(c => c.certificateNo || "-").join(", ")})`
+        + (draftCount ? ` — ${draftCount} แถวข้อมูลไม่ครบ ขึ้นสถานะ Draft` : ""),
+        7000
+      );
+      setPasteText("");
+      setUploadFor(null);
+      setErrorMsg("");
+    } catch (e) {
+      setErrorMsg(e.message);
+    }
+  }
+
   // Reads the uploaded PDF page by page and saves every calibration point
   // it finds straight away, with no review step — that's how this lab wants
   // the import to work. Two things are deliberately NOT hidden from the
@@ -3243,7 +3391,8 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     try {
       const { certificates: found, pageErrors, pageCount } = await extractCertificatesFromPdf(
         file,
-        (n, total, phase) => setProgress(phase === "reading" ? `กำลังอ่านหน้า ${n} จาก ${total}...` : `กำลังแปลงหน้า ${n} จาก ${total}...`)
+        (n, total, phase) => setProgress(phase === "reading" ? `กำลังอ่านหน้า ${n} จาก ${total}...` : `กำลังแปลงหน้า ${n} จาก ${total}...`),
+        apiKey
       );
       const totalPoints = found.reduce((sum, c) => sum + c.points.length, 0);
       if (totalPoints === 0) {
@@ -3252,36 +3401,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           : `อ่าน ${pageCount} หน้าแล้วแต่ไม่พบตารางผลสอบเทียบ — กรุณากรอกด้วยตนเอง`, 6000);
         return;
       }
-      const newRows = [];
-      found.forEach(cert => {
-        cert.points.forEach(p => {
-          const missing = [];
-          if (p.referenceValue == null) missing.push("ค่าอ้างอิง");
-          if (p.indication == null && p.reportedError == null && p.reportedCorrection == null) missing.push("ค่าที่อ่านได้/Error/Correction");
-          if (p.reportedU == null) missing.push("U");
-          newRows.push({
-            ...blankCertificate(instrumentId, cert.certificateNo || ""),
-            provider: cert.provider || "", providerAccreditationNo: cert.providerAccreditationNo || "",
-            calibrationDate: cert.calibrationDate || "", issueDate: cert.issueDate || "",
-            calibrationMethod: cert.calibrationMethod || "", referenceStandardUsed: cert.referenceStandardUsed || "",
-            traceability: cert.traceability || "",
-            temperatureC: cert.temperatureC ?? "", humidityRH: cert.humidityRH ?? "",
-            limitationsNotes: cert.limitationsNotes || "",
-            parameter: p.parameter || "", rangeId: p.rangeId || "", calibrationPoint: p.calibrationPoint ?? "",
-            unit: p.unit || "", referenceValue: p.referenceValue ?? "", indication: p.indication ?? "",
-            reportedError: p.reportedError ?? "", reportedCorrection: p.reportedCorrection ?? "",
-            // These certificates report an absolute uncertainty in the same
-            // unit as the reading, with its own k on every row.
-            reportedAs: p.reportedError != null ? "Error" : (p.reportedCorrection != null ? "Correction" : "Reading + Reference"),
-            uReportedAs: "Absolute", reportedU: p.reportedU ?? "", uAbsolute: p.reportedU ?? "",
-            coverageFactor: p.coverageFactor ?? 2, coverageProbabilityPct: 95,
-            missingItems: missing.join(", "),
-            recordStatus: missing.length ? "Draft" : "Verified",
-            reviewedBy: currentDisplayName, reviewDate: todayISO(), source: "pdf-ai",
-            pdfSourcePage: p.sourcePage,
-          });
-        });
-      });
+      const newRows = buildRowsFromExtracted(found, instrumentId);
       setCertificates([...newRows, ...certificates]);
       const certLabel = found.map(c => c.certificateNo || "-").join(", ");
       const draftCount = newRows.filter(r => r.recordStatus === "Draft").length;
@@ -3372,6 +3492,39 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.65 }}>
             รองรับใบรับรองที่เป็นภาพสแกน และไฟล์เดียวที่มีหลายใบรับรอง (เช่น AT102/26 + AT105/26 ในไฟล์เดียว) โดยจะอ่านทีละหน้า<br />
             ระบบบันทึกทุกจุดที่อ่านได้ทันทีโดยไม่หยุดให้ตรวจสอบก่อน — แถวที่ข้อมูลไม่ครบจะขึ้นสถานะ "Draft" พร้อมระบุช่องที่ขาดไว้ในคอลัมน์ "รายการที่ขาด"
+          </div>
+
+          <Field label="Anthropic API key (ใส่เฉพาะกรณีขึ้น Failed to fetch)" full>
+            <input style={S.input} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+              placeholder="sk-ant-... — เว้นว่างได้ถ้าแอปรันในที่ที่ต่อ API ให้อยู่แล้ว" autoComplete="off" />
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+              คีย์ใช้เฉพาะในเบราว์เซอร์นี้ ไม่ได้ถูกบันทึกลงระบบ และจะหายเมื่อปิดหน้าต่าง
+            </div>
+          </Field>
+
+          <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
+            <button style={{ ...S.smallBtn, marginBottom: showPaste ? 8 : 0 }} onClick={() => setShowPaste(v => !v)}>
+              {showPaste ? "ซ่อน" : "หรือ วางข้อมูลที่ดึงมาแล้ว (ไม่ต้องใช้ API)"}
+            </button>
+            {showPaste && (
+              <>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
+                  ส่งไฟล์ PDF ให้ Claude ในหน้าแชต ขอให้ตอบกลับเป็น JSON ตามรูปแบบนี้ แล้วนำมาวางที่นี่ — นำเข้าผ่านเส้นทางเดียวกับการอ่านอัตโนมัติทุกประการ
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, marginTop: 5, color: "var(--ink)" }}>
+                    {'{"cert":"AT102/26","provider":"...","calDate":"2026-07-15","points":[["พารามิเตอร์","ช่วง",จุด,"หน่วย",ค่าอ้างอิง,ค่าที่อ่านได้,Error,Correction,U,k]]}'}
+                  </div>
+                </div>
+                <textarea
+                  style={{ ...S.input, minHeight: 130, fontFamily: "var(--font-mono)", fontSize: 11.5 }}
+                  value={pasteText} onChange={e => setPasteText(e.target.value)}
+                  placeholder='วาง JSON ที่นี่ (รองรับทั้งใบเดียวและหลายใบในรูปแบบ array)'
+                />
+                <button style={{ ...S.primaryBtn, marginTop: 8 }} disabled={!pasteText.trim()}
+                  onClick={() => handlePasteImport(uploadFor)}>
+                  <Sparkles size={14} /> นำเข้าจากข้อมูลที่วาง
+                </button>
+              </>
+            )}
           </div>
           <ModalFooter onCancel={() => !busy && setUploadFor(null)} onSave={() => setUploadFor(null)} disabled={busy} />
         </Modal>
