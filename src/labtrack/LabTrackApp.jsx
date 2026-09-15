@@ -473,6 +473,12 @@ function derivedErrorOf(cert) {
   if (reported != null) return reported;
   const ref = numOrNull(cert.referenceValue), ind = numOrNull(cert.indication);
   if (ref != null && ind != null) return ind - ref;
+  // Many certificates (the Analytical Technology ones this lab receives
+  // among them) report only a Correction column. Correction is the value
+  // ADDED to the reading to recover the reference, so Error = −Correction.
+  // Without this, every such certificate evaluated as "INCOMPLETE DATA".
+  const corr = numOrNull(cert.reportedCorrection);
+  if (corr != null) return -corr;
   return null;
 }
 // Expanded uncertainty U (absolute), converting from a relative U-report
@@ -530,46 +536,153 @@ function evaluateAcceptance(cert, instrument) {
 // key needed) with the certificate PDF as a document block, asking for one
 // JSON object per calibration point matching the Sheet 02 column schema.
 // Returns { certificateNo, provider, ..., points: [...] } or throws.
-async function extractCertificateWithAI(base64Pdf) {
-  const schemaHint = `คุณคือระบบดึงข้อมูลจากใบรับรองผลการสอบเทียบเครื่องมือ (Calibration Certificate) ให้ตอบเป็น JSON เท่านั้น ห้ามมีคำอธิบายหรือ Markdown code fence ใดๆ ทั้งสิ้น
-โครงสร้าง JSON ที่ต้องการ (ตรงตามคอลัมน์ของ Sheet "02_Certificate_Data"):
-{
-  "certificateNo": string, "provider": string, "providerAccreditationNo": string,
-  "calibrationDate": "YYYY-MM-DD", "issueDate": "YYYY-MM-DD",
-  "calibrationMethod": string, "referenceStandardUsed": string,
-  "temperatureC": number|null, "humidityRH": number|null,
-  "providerStatementOfConformity": string, "providerDecisionRule": string,
-  "limitationsNotes": string,
-  "points": [
-    {
-      "parameter": string, "rangeId": string, "calibrationPoint": number,
-      "unit": string, "referenceValue": number, "indication": number,
-      "reportedError": number|null, "reportedCorrection": number|null,
-      "reportedU": number|null, "uReportedAs": "Absolute"|"Relative (%)",
-      "coverageFactor": number, "coverageProbabilityPct": number
-    }
-  ]
+// Loads pdf.js on demand so a certificate PDF can be rasterised in the
+// browser. Sending the raw PDF as a `document` block was the first attempt
+// and it failed: these certificates are *scanned* (the page content is one
+// flat image, with no text layer at all), and the in-artifact API proxy
+// does not accept document blocks anyway. Rendering each page to a JPEG and
+// sending it as an `image` block works for scans and stays within what the
+// proxy supports.
+async function loadPdfJs() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("โหลดไลบรารีอ่าน PDF (pdf.js) ไม่สำเร็จ — ตรวจสอบการเชื่อมต่ออินเทอร์เน็ต"));
+    document.head.appendChild(s);
+  });
+  if (!window.pdfjsLib) throw new Error("โหลดไลบรารีอ่าน PDF (pdf.js) ไม่สำเร็จ");
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  return window.pdfjsLib;
 }
-กติกา: ใส่เฉพาะค่าที่อ่านได้จริงจากเอกสาร ถ้าช่องใดไม่มีในเอกสารให้ใส่ null หรือ "" ห้ามเดาตัวเลข หนึ่งแถวใน "points" ต่อหนึ่งจุดสอบเทียบ (Calibration Point) ต่อหนึ่งพารามิเตอร์`;
+
+// Renders every page to a base64 JPEG. Scale 2 keeps the small table digits
+// legible after scanning; quality 0.82 keeps each page well under the API's
+// per-image size limit.
+async function pdfPagesToImages(file, onProgress) {
+  const pdfjsLib = await loadPdfJs();
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const images = [];
+  for (let n = 1; n <= pdf.numPages; n++) {
+    if (onProgress) onProgress(n, pdf.numPages);
+    const page = await pdf.getPage(n);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    images.push(canvas.toDataURL("image/jpeg", 0.82).split(",")[1]);
+  }
+  return images;
+}
+
+// One API call per page. Pages are read individually (rather than the whole
+// PDF at once) for two reasons: max_tokens is 1000 in this environment, and
+// a single certificate page can hold 20 calibration points — a verbose
+// object per point would blow that budget. Hence the compact positional
+// "points" array, which costs roughly a third of the tokens.
+const CERT_PAGE_PROMPT = `คุณคือระบบดึงข้อมูลจากใบรับรองผลการสอบเทียบ (Certificate of Calibration) จากภาพสแกน
+ตอบเป็น JSON บรรทัดเดียวเท่านั้น ห้ามมีคำอธิบาย ห้ามมี markdown code fence
+
+{"cert":"เลขที่ใบรับรอง","provider":"ชื่อบริษัทผู้สอบเทียบ","accredNo":"เลขที่การรับรอง","calDate":"YYYY-MM-DD","issueDate":"YYYY-MM-DD","method":"วิธีสอบเทียบ","refStd":"มาตรฐานอ้างอิงที่ใช้","trace":"ข้อความ traceability","tempC":ตัวเลข,"rh":ตัวเลข,"notes":"ข้อจำกัด/หมายเหตุ","points":[[พารามิเตอร์,ช่วง,จุดสอบเทียบ,หน่วย,ค่าอ้างอิง,ค่าที่เครื่องอ่านได้,Error,Correction,U,k]]}
+
+กติกาสำคัญ:
+- หน้านี้อาจไม่มีข้อมูลบางช่อง ให้ใส่ null หรือ "" ห้ามเดา ห้ามคำนวณเอง
+- ถ้าหน้านี้ไม่มีตารางผลการสอบเทียบเลย ให้ "points" เป็น []
+- แต่ละแถวใน points = หนึ่งจุดสอบเทียบ ใช้ลำดับ 10 ช่องตามด้านบนเสมอ
+- ถ้าใบรับรองรายงานเฉพาะ Correction ไม่มี Error ให้ใส่ Correction และใส่ Error เป็น null
+- คอลัมน์ "Certified Values of Reference Material" คือค่าอ้างอิง, "UUC Reading" คือค่าที่เครื่องอ่านได้
+- ถ้ามีหลายตารางในหน้าเดียว (เช่น HG Set / DG Set / Photometric) ให้ใส่ชื่อตารางลงในช่องพารามิเตอร์ของทุกแถวในตารางนั้น
+- ตารางที่จัดกลุ่มตามความยาวคลื่น ให้ใส่ความยาวคลื่นลงในช่อง "ช่วง"
+- ถ้าหน้านี้เป็นใบรับรองคนละฉบับกับหน้าก่อน ให้ใส่เลขที่ใบรับรองของหน้านี้`;
+
+async function extractCertificatePage(base64Jpeg) {
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 4000,
+      max_tokens: 1000,
       messages: [{
         role: "user",
         content: [
-          { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Pdf } },
-          { type: "text", text: schemaHint },
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64Jpeg } },
+          { type: "text", text: CERT_PAGE_PROMPT },
         ],
       }],
     }),
   });
+  if (!resp.ok) {
+    let detail = "";
+    try { detail = (await resp.json())?.error?.message || ""; } catch (e) { /* non-JSON error body */ }
+    throw new Error(`เรียก API ไม่สำเร็จ (HTTP ${resp.status})${detail ? ": " + detail : ""}`);
+  }
   const data = await resp.json();
-  const textBlock = (data.content || []).map(b => b.type === "text" ? b.text : "").join("\n");
-  const clean = textBlock.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+  if (data.error) throw new Error(data.error.message || "API ตอบกลับเป็นข้อผิดพลาด");
+  const text = (data.content || []).map(b => (b.type === "text" ? b.text : "")).join("\n");
+  // The model is told to emit bare JSON, but strip fences and grab the outer
+  // object defensively — one malformed page shouldn't lose the whole file.
+  const clean = text.replace(/```json|```/g, "").trim();
+  const firstBrace = clean.indexOf("{"), lastBrace = clean.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1) throw new Error("อ่านค่าจากหน้านี้ไม่ได้ (รูปแบบคำตอบไม่ถูกต้อง)");
+  return JSON.parse(clean.slice(firstBrace, lastBrace + 1));
+}
+
+const numOrNullRaw = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
+
+// Reads a whole PDF and returns one entry per *certificate* found in it —
+// a single scanned file often holds several (the AT102/26 + AT105/26 file
+// is the normal case here, not an edge case). Header fields carry forward
+// from a certificate's first page onto its continuation pages, which only
+// repeat the certificate number.
+async function extractCertificatesFromPdf(file, onProgress) {
+  const images = await pdfPagesToImages(file, onProgress);
+  const certs = new Map();
+  const pageErrors = [];
+  let lastCertNo = "";
+  for (let i = 0; i < images.length; i++) {
+    if (onProgress) onProgress(i + 1, images.length, "reading");
+    let page;
+    try {
+      page = await extractCertificatePage(images[i]);
+    } catch (e) {
+      pageErrors.push(`หน้า ${i + 1}: ${e.message}`);
+      continue;
+    }
+    const certNo = (page.cert || "").trim() || lastCertNo;
+    if (!certNo && !(page.points || []).length) continue; // blank / label-only page
+    lastCertNo = certNo;
+    if (!certs.has(certNo)) {
+      certs.set(certNo, {
+        certificateNo: certNo, provider: "", providerAccreditationNo: "", calibrationDate: "", issueDate: "",
+        calibrationMethod: "", referenceStandardUsed: "", traceability: "", temperatureC: "", humidityRH: "",
+        limitationsNotes: "", points: [],
+      });
+    }
+    const c = certs.get(certNo);
+    // First non-empty value wins — continuation pages leave header cells blank.
+    const carry = {
+      provider: page.provider, providerAccreditationNo: page.accredNo, calibrationDate: page.calDate,
+      issueDate: page.issueDate, calibrationMethod: page.method, referenceStandardUsed: page.refStd,
+      traceability: page.trace, temperatureC: page.tempC, humidityRH: page.rh, limitationsNotes: page.notes,
+    };
+    Object.entries(carry).forEach(([k, v]) => { if (!c[k] && v != null && v !== "") c[k] = v; });
+    (page.points || []).forEach(p => {
+      if (!Array.isArray(p)) return;
+      const [parameter, rangeId, point, unit, ref, reading, error, correction, u, k] = p;
+      c.points.push({
+        parameter: parameter || "", rangeId: rangeId == null ? "" : String(rangeId),
+        calibrationPoint: numOrNullRaw(point), unit: unit || "",
+        referenceValue: numOrNullRaw(ref), indication: numOrNullRaw(reading),
+        reportedError: numOrNullRaw(error), reportedCorrection: numOrNullRaw(correction),
+        reportedU: numOrNullRaw(u), coverageFactor: numOrNullRaw(k) ?? 2,
+        sourcePage: i + 1,
+      });
+    });
+  }
+  return { certificates: [...certs.values()], pageErrors, pageCount: images.length };
 }
 
 // Sheet 10 lookups needed by Sheets 04-09.
@@ -3097,6 +3210,8 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   const [editing, setEditing] = useState(null);
   const [uploadFor, setUploadFor] = useState(null); // instrument to attach an uploaded PDF to
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");  // per-page status while importing
+  const [errorMsg, setErrorMsg] = useState("");  // real failure reason, shown in the dialog
 
   const instrumentName = (id) => { const e = equipment.find(x => x.id === id); return e ? `${e.code} — ${e.name}` : id; };
   const filtered = certificates
@@ -3115,56 +3230,77 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     notify("ลบรายการแล้ว");
   }
 
-  // Reads the uploaded PDF, sends it to the AI extractor, then immediately
-  // saves every returned calibration point as its own certificate row — no
-  // manual review step, per how this lab wants the import to work. Rows the
-  // model itself flags as incomplete are still saved, just marked
-  // recordStatus "Draft" (rather than silently defaulting to "Verified") so
-  // they're still easy to spot and double-check later.
+  // Reads the uploaded PDF page by page and saves every calibration point
+  // it finds straight away, with no review step — that's how this lab wants
+  // the import to work. Two things are deliberately NOT hidden from the
+  // user: any page the reader failed on, and any row with a missing value.
+  // Failed pages are reported in the toast; incomplete rows are saved with
+  // recordStatus "Draft" and their gaps listed in `missingItems`, so a bad
+  // scan can never quietly become a row that reads as verified.
   async function handlePdfUpload(file, instrumentId) {
     setBusy(true);
+    setProgress("กำลังเปิดไฟล์...");
     try {
-      const base64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(String(r.result).split(",")[1]);
-        r.onerror = () => rej(new Error("อ่านไฟล์ไม่สำเร็จ"));
-        r.readAsDataURL(file);
-      });
-      const extracted = await extractCertificateWithAI(base64);
-      const points = Array.isArray(extracted.points) ? extracted.points : [];
-      if (points.length === 0) { notify("อ่านไฟล์ไม่พบจุดสอบเทียบใดๆ — กรุณากรอกด้วยตนเอง"); setBusy(false); return; }
-      const newRows = points.map(p => {
-        const uAbs = p.uReportedAs === "Relative (%)" && p.reportedU != null
-          ? Math.abs(Number(p.indication ?? p.referenceValue) || 0) * (Number(p.reportedU) / 100)
-          : (p.reportedU ?? "");
-        const missing = [];
-        if (p.referenceValue == null) missing.push("ค่าอ้างอิง");
-        if (p.indication == null && p.reportedError == null) missing.push("ค่าที่อ่านได้/Error");
-        return {
-          ...blankCertificate(instrumentId, extracted.certificateNo || ""),
-          provider: extracted.provider || "", providerAccreditationNo: extracted.providerAccreditationNo || "",
-          calibrationDate: extracted.calibrationDate || "", issueDate: extracted.issueDate || "",
-          calibrationMethod: extracted.calibrationMethod || "", referenceStandardUsed: extracted.referenceStandardUsed || "",
-          temperatureC: extracted.temperatureC ?? "", humidityRH: extracted.humidityRH ?? "",
-          providerStatementOfConformity: extracted.providerStatementOfConformity || "", providerDecisionRule: extracted.providerDecisionRule || "",
-          limitationsNotes: extracted.limitationsNotes || "",
-          parameter: p.parameter || "", rangeId: p.rangeId || "", calibrationPoint: p.calibrationPoint ?? "",
-          unit: p.unit || "", referenceValue: p.referenceValue ?? "", indication: p.indication ?? "",
-          reportedError: p.reportedError ?? "", reportedCorrection: p.reportedCorrection ?? "",
-          uReportedAs: p.uReportedAs || "Absolute", reportedU: p.reportedU ?? "", uAbsolute: uAbs,
-          coverageFactor: p.coverageFactor ?? 2, coverageProbabilityPct: p.coverageProbabilityPct ?? 95,
-          missingItems: missing.join(", "), recordStatus: missing.length ? "Draft" : "Verified",
-          reviewedBy: currentDisplayName, reviewDate: todayISO(), source: "pdf-ai",
-        };
+      const { certificates: found, pageErrors, pageCount } = await extractCertificatesFromPdf(
+        file,
+        (n, total, phase) => setProgress(phase === "reading" ? `กำลังอ่านหน้า ${n} จาก ${total}...` : `กำลังแปลงหน้า ${n} จาก ${total}...`)
+      );
+      const totalPoints = found.reduce((sum, c) => sum + c.points.length, 0);
+      if (totalPoints === 0) {
+        notify(pageErrors.length
+          ? `อ่านไฟล์ไม่สำเร็จ — ${pageErrors[0]}`
+          : `อ่าน ${pageCount} หน้าแล้วแต่ไม่พบตารางผลสอบเทียบ — กรุณากรอกด้วยตนเอง`, 6000);
+        return;
+      }
+      const newRows = [];
+      found.forEach(cert => {
+        cert.points.forEach(p => {
+          const missing = [];
+          if (p.referenceValue == null) missing.push("ค่าอ้างอิง");
+          if (p.indication == null && p.reportedError == null && p.reportedCorrection == null) missing.push("ค่าที่อ่านได้/Error/Correction");
+          if (p.reportedU == null) missing.push("U");
+          newRows.push({
+            ...blankCertificate(instrumentId, cert.certificateNo || ""),
+            provider: cert.provider || "", providerAccreditationNo: cert.providerAccreditationNo || "",
+            calibrationDate: cert.calibrationDate || "", issueDate: cert.issueDate || "",
+            calibrationMethod: cert.calibrationMethod || "", referenceStandardUsed: cert.referenceStandardUsed || "",
+            traceability: cert.traceability || "",
+            temperatureC: cert.temperatureC ?? "", humidityRH: cert.humidityRH ?? "",
+            limitationsNotes: cert.limitationsNotes || "",
+            parameter: p.parameter || "", rangeId: p.rangeId || "", calibrationPoint: p.calibrationPoint ?? "",
+            unit: p.unit || "", referenceValue: p.referenceValue ?? "", indication: p.indication ?? "",
+            reportedError: p.reportedError ?? "", reportedCorrection: p.reportedCorrection ?? "",
+            // These certificates report an absolute uncertainty in the same
+            // unit as the reading, with its own k on every row.
+            reportedAs: p.reportedError != null ? "Error" : (p.reportedCorrection != null ? "Correction" : "Reading + Reference"),
+            uReportedAs: "Absolute", reportedU: p.reportedU ?? "", uAbsolute: p.reportedU ?? "",
+            coverageFactor: p.coverageFactor ?? 2, coverageProbabilityPct: 95,
+            missingItems: missing.join(", "),
+            recordStatus: missing.length ? "Draft" : "Verified",
+            reviewedBy: currentDisplayName, reviewDate: todayISO(), source: "pdf-ai",
+            pdfSourcePage: p.sourcePage,
+          });
+        });
       });
       setCertificates([...newRows, ...certificates]);
-      notify(`นำเข้าอัตโนมัติ ${newRows.length} จุดสอบเทียบจาก PDF แล้ว (เลขที่ ${extracted.certificateNo || "-"})`, 3500);
+      const certLabel = found.map(c => c.certificateNo || "-").join(", ");
+      const draftCount = newRows.filter(r => r.recordStatus === "Draft").length;
+      notify(
+        `นำเข้า ${newRows.length} จุดสอบเทียบจาก ${found.length} ใบรับรอง (${certLabel})`
+        + (draftCount ? ` — ${draftCount} แถวข้อมูลไม่ครบ ขึ้นสถานะ Draft` : "")
+        + (pageErrors.length ? ` — อ่านไม่ได้ ${pageErrors.length} หน้า` : ""),
+        7000
+      );
       setUploadFor(null);
     } catch (e) {
       console.error(e);
-      notify("อ่านค่าจาก PDF ไม่สำเร็จ — กรุณากรอกด้วยตนเอง");
+      // Show the real reason rather than a generic failure — the useful
+      // cases (pdf.js blocked, API rejected the request, corrupt file) are
+      // all distinguishable and all actionable.
+      setErrorMsg(e.message || String(e));
     } finally {
       setBusy(false);
+      setProgress("");
     }
   }
 
@@ -3211,7 +3347,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
       </div>
       {editing && <CertificateForm row={editing} equipment={equipment} onCancel={() => setEditing(null)} onSave={upsert} />}
       {uploadFor !== null && (
-        <Modal onClose={() => !busy && setUploadFor(null)} title="อัปโหลด PDF ใบรับรองสอบเทียบ">
+        <Modal onClose={() => !busy && (setUploadFor(null), setErrorMsg(""))} title="อัปโหลด PDF ใบรับรองสอบเทียบ">
           <Field label="เครื่องมือที่ใบรับรองนี้เป็นของ">
             <select style={S.input} value={uploadFor} onChange={e => setUploadFor(e.target.value)}>
               {equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
@@ -3219,10 +3355,24 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           </Field>
           <Field label="ไฟล์ PDF ใบรับรอง" full>
             <input type="file" accept="application/pdf" disabled={busy}
-              onChange={e => e.target.files[0] && handlePdfUpload(e.target.files[0], uploadFor)} />
+              onChange={e => { setErrorMsg(""); if (e.target.files[0]) handlePdfUpload(e.target.files[0], uploadFor); }} />
           </Field>
-          {busy && <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 12.5, marginTop: 10 }}><Loader2 size={15} className="ltSpin" /> กำลังอ่านค่าจากใบรับรองด้วย AI และบันทึกอัตโนมัติ...</div>}
-          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>ระบบจะบันทึกทุกจุดสอบเทียบที่อ่านได้ทันทีโดยไม่หยุดให้ตรวจสอบก่อน — แถวที่ข้อมูลไม่ครบจะถูกทำเครื่องหมายสถานะ "Draft" ให้สังเกตได้ง่ายภายหลัง</div>
+          {busy && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 12.5, marginTop: 10 }}>
+              <Loader2 size={15} className="ltSpin" /> {progress || "กำลังอ่านค่าจากใบรับรอง..."}
+            </div>
+          )}
+          {errorMsg && (
+            <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, background: "#FDF1F1", border: "1px solid var(--red)", fontSize: 12.5, color: "var(--red)" }}>
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>อ่าน PDF ไม่สำเร็จ</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, wordBreak: "break-word" }}>{errorMsg}</div>
+              <div style={{ color: "var(--muted)", marginTop: 5 }}>กรอกด้วยตนเองได้จากปุ่ม "กรอกด้วยตนเอง" ในหน้านี้</div>
+            </div>
+          )}
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.65 }}>
+            รองรับใบรับรองที่เป็นภาพสแกน และไฟล์เดียวที่มีหลายใบรับรอง (เช่น AT102/26 + AT105/26 ในไฟล์เดียว) โดยจะอ่านทีละหน้า<br />
+            ระบบบันทึกทุกจุดที่อ่านได้ทันทีโดยไม่หยุดให้ตรวจสอบก่อน — แถวที่ข้อมูลไม่ครบจะขึ้นสถานะ "Draft" พร้อมระบุช่องที่ขาดไว้ในคอลัมน์ "รายการที่ขาด"
+          </div>
           <ModalFooter onCancel={() => !busy && setUploadFor(null)} onSave={() => setUploadFor(null)} disabled={busy} />
         </Modal>
       )}
