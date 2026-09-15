@@ -653,6 +653,18 @@ async function extractCertificatePage(base64Jpeg, apiKey = "") {
   if (!resp.ok) {
     let detail = "";
     try { detail = (await resp.json())?.error?.message || ""; } catch (e) { /* non-JSON error body */ }
+    // 401 on a direct browser call is almost always the same mix-up: people
+    // paste in a claude.ai session value or a Claude Code/Desktop token,
+    // when what this needs is a Console API key. Naming that here saves a
+    // second round-trip of "still doesn't work."
+    if (resp.status === 401) {
+      throw new Error(
+        `API key ไม่ถูกต้อง (HTTP 401${detail ? ": " + detail : ""}) — ต้องเป็น API key จาก console.anthropic.com `
+        + `(ขึ้นต้นด้วย sk-ant-api03-...) เท่านั้น ไม่ใช่รหัสผ่านหรือ session ของ claude.ai `
+        + `และบัญชี Console ต้องเปิดใช้ billing แยกต่างหากจากแอป Claude ก่อนคีย์จะใช้งานได้ — `
+        + `ถ้าไม่สะดวกตั้งค่านี้ ใช้ "วางข้อมูลที่ดึงมาแล้ว" ด้านล่างแทนได้เลย ไม่ต้องมีคีย์`
+      );
+    }
     throw new Error(`เรียก API ไม่สำเร็จ (HTTP ${resp.status})${detail ? ": " + detail : ""}`);
   }
   const data = await resp.json();
@@ -772,6 +784,107 @@ function parsePastedCertificateJson(text) {
   const total = out.reduce((n, c) => n + c.points.length, 0);
   if (total === 0) throw new Error("ไม่พบจุดสอบเทียบใน JSON ที่วาง (ช่อง \"points\" ว่าง)");
   return out;
+}
+
+// Text-only import: no PDF rendering, no API call, no cost — the user
+// converts the scanned certificate to a Word doc (OCR), copies the header
+// block and each results table as plain text, and pastes it here. Tuned to
+// the Analytical Technology Co.,Ltd. certificate layout seen in this lab's
+// own AT102/26 (this is the only real template on hand to calibrate the
+// parser against) but written to tolerate the variation OCR-to-Word
+// commonly introduces: tabs vs runs of spaces, a colon that may or may not
+// survive, and merged table cells that only keep their value on the first
+// row of the group.
+const MONTHS_EN = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
+function parseCertDateText(s) {
+  if (!s) return "";
+  const m = String(s).trim().match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if (m) {
+    const mm = MONTHS_EN[m[2].toLowerCase()];
+    if (mm) return `${m[3]}-${String(mm).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  }
+  const iso = String(s).trim().match(/(\d{4})-(\d{2})-(\d{2})/);
+  return iso ? iso[0] : "";
+}
+// Pulls every "Label : value" style header field this certificate template
+// uses. Each pattern is tried against the whole text (not line-by-line) so
+// OCR line-wrapping doesn't break a match.
+function parseCertHeaderText(text) {
+  const grab = (re) => { const m = text.match(re); return m ? m[1].trim() : ""; };
+  return {
+    certificateNo: grab(/Certificate\s*No\.?\s*:?\s*([A-Za-z0-9/._-]+)/i),
+    provider: grab(/^\s*([A-Za-z][A-Za-z .,&()]*(?:Co\.?,?\s*Ltd\.?|Company Limited))/im),
+    providerAccreditationNo: grab(/CALIBRATION\s+(\d{3,5})/i),
+    calibrationDate: parseCertDateText(grab(/Date of Calibration\s*:?\s*([^\n]+)/i)),
+    issueDate: parseCertDateText(grab(/Date of Issue\s*:?\s*([^\n]+)/i)),
+    calibrationMethod: grab(/(?:\d\.\s*)?Method of Calibration\s*:?\s*([^\n]+)/i),
+    referenceStandardUsed: grab(/Reference Standard\s*:?\s*([^\n]+)/i),
+    traceability: grab(/(?:\d\.\s*)?Traceability\s*:?\s*([^\n]+)/i),
+    temperatureC: (() => { const m = text.match(/Ambient Temperature\s*:?\s*\(?\s*(-?\d+(?:\.\d+)?)/i); return m ? Number(m[1]) : ""; })(),
+    humidityRH: (() => { const m = text.match(/Relative Humidity\s*:?\s*\(?\s*(-?\d+(?:\.\d+)?)/i); return m ? Number(m[1]) : ""; })(),
+    limitationsNotes: grab(/(Remark[\s\S]{0,400}?)(?:- End of Certificate -|$)/i),
+  };
+}
+// Every numeric token on a line, in order — separator-agnostic, so it reads
+// the same whether Word kept the table as tabs, as multiple spaces, or the
+// user's paste collapsed it to single spaces.
+// Returns both the parsed numbers (for math) and their original text (so a
+// label like "420.0" keeps its printed trailing zero instead of becoming
+// the number 420 and losing it — String(420.0) === "420" in JS).
+function numericTokens(line) {
+  const raw = line.match(/-?\d+(?:\.\d+)?/g) || [];
+  return { nums: raw.map(Number), raw };
+}
+function parsePastedCertificateText(text) {
+  const raw = String(text).replace(/\r\n?/g, "\n");
+  if (!raw.trim()) throw new Error("ยังไม่ได้วางข้อความ");
+  const header = parseCertHeaderText(raw);
+  const lines = raw.split("\n");
+  const points = [];
+  let parameter = null; // null = not inside any results table yet
+  let rangeId = "";
+  const footerRe = /^(remark|- end of certificate -|this certificate may not be reproduced)/i;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (footerRe.test(line)) { parameter = null; continue; }
+    if (/Wavelength Accuracy/i.test(line)) {
+      parameter = `Wavelength Accuracy (${/DG/i.test(line) ? "DG Set" : /HG/i.test(line) ? "HG Set" : ""})`.trim();
+      rangeId = "";
+      continue;
+    }
+    if (/Photometric Accuracy/i.test(line)) { parameter = "Photometric Accuracy"; rangeId = ""; continue; }
+    if (parameter == null) continue; // header block / captions above the first table — never treated as data
+    let { nums } = numericTokens(line);
+    if (parameter === "Photometric Accuracy") {
+      // 6 numbers = a new wavelength group (wavelength + 5 data cols); 5 =
+      // a continuation row of the same group, wavelength cell left blank
+      // by the merge when the table was copied out of Word.
+      if (nums.length === 6) { rangeId = numericTokens(line).raw[0]; nums = nums.slice(1); }
+      else if (nums.length !== 5) continue;
+      const [ref, reading, correction, u, k] = nums;
+      points.push({ parameter, rangeId, calibrationPoint: ref, unit: "A", referenceValue: ref, indication: reading, reportedError: null, reportedCorrection: correction, reportedU: u, coverageFactor: k ?? 2 });
+    } else if (parameter.startsWith("Wavelength Accuracy")) {
+      // No merged column here — every row is self-contained: certified
+      // value, UUC reading, correction, uncertainty, k.
+      if (nums.length !== 5) continue;
+      const [ref, reading, correction, u, k] = nums;
+      points.push({ parameter, rangeId: "", calibrationPoint: ref, unit: "nm", referenceValue: ref, indication: reading, reportedError: null, reportedCorrection: correction, reportedU: u, coverageFactor: k ?? 2 });
+    }
+  }
+  if (points.length === 0) {
+    throw new Error(
+      "ไม่พบแถวผลการสอบเทียบในข้อความที่วาง — ตรวจว่าได้วางทั้งบรรทัดหัวตาราง (เช่น \"Wavelength Accuracy...\" หรือ \"Photometric Accuracy\") และแถวตัวเลขมาด้วย "
+      + "ถ้ารูปแบบใบรับรองต่างจาก AT102/26 (เช่นมาจากผู้สอบเทียบรายอื่น) ส่งตัวอย่างข้อความที่วางมาให้ดู จะปรับตัวอ่านให้รองรับเพิ่ม"
+    );
+  }
+  return [{
+    certificateNo: header.certificateNo, provider: header.provider, providerAccreditationNo: header.providerAccreditationNo,
+    calibrationDate: header.calibrationDate, issueDate: header.issueDate, calibrationMethod: header.calibrationMethod,
+    referenceStandardUsed: header.referenceStandardUsed, traceability: header.traceability,
+    temperatureC: header.temperatureC, humidityRH: header.humidityRH, limitationsNotes: header.limitationsNotes,
+    points,
+  }];
 }
 
 // Sheet 10 lookups needed by Sheets 04-09.
@@ -3303,6 +3416,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   const [errorMsg, setErrorMsg] = useState("");  // real failure reason, shown in the dialog
   const [pasteText, setPasteText] = useState("");
   const [showPaste, setShowPaste] = useState(false);
+  const [pasteMode, setPasteMode] = useState("text"); // "text" (paste from Word, free) | "json" (paste from a chat, free) — both skip the API
   // Only needed when the app isn't running somewhere that proxies the API.
   const [apiKey, setApiKey] = useState("");
 
@@ -3361,7 +3475,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   // same builder as the automatic reader.
   function handlePasteImport(instrumentId) {
     try {
-      const found = parsePastedCertificateJson(pasteText);
+      const found = pasteMode === "text" ? parsePastedCertificateText(pasteText) : parsePastedCertificateJson(pasteText);
       const newRows = buildRowsFromExtracted(found, instrumentId);
       setCertificates([...newRows, ...certificates]);
       const draftCount = newRows.filter(r => r.recordStatus === "Draft").length;
@@ -3496,28 +3610,45 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
 
           <Field label="Anthropic API key (ใส่เฉพาะกรณีขึ้น Failed to fetch)" full>
             <input style={S.input} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-              placeholder="sk-ant-... — เว้นว่างได้ถ้าแอปรันในที่ที่ต่อ API ให้อยู่แล้ว" autoComplete="off" />
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-              คีย์ใช้เฉพาะในเบราว์เซอร์นี้ ไม่ได้ถูกบันทึกลงระบบ และจะหายเมื่อปิดหน้าต่าง
+              placeholder="sk-ant-api03-... — เว้นว่างได้ถ้าแอปรันในที่ที่ต่อ API ให้อยู่แล้ว" autoComplete="off" />
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.6 }}>
+              ต้องเป็น API key จาก <b>console.anthropic.com</b> (ขึ้นต้นด้วย sk-ant-api03-...) เท่านั้น — คนละอย่างกับรหัสผ่าน
+              หรือ session ของแอป Claude / claude.ai และบัญชี Console ต้องผูก billing ไว้แล้วคีย์จึงจะเรียกได้
+              คีย์ใช้เฉพาะในเบราว์เซอร์นี้ ไม่ได้บันทึกลงระบบ และจะหายเมื่อปิดหน้าต่าง
+              — ถ้าไม่สะดวกตั้งค่านี้ ใช้ช่อง "วางข้อมูลที่ดึงมาแล้ว" ด้านล่างแทนได้ ไม่ต้องมีคีย์เลย
             </div>
           </Field>
 
           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
             <button style={{ ...S.smallBtn, marginBottom: showPaste ? 8 : 0 }} onClick={() => setShowPaste(v => !v)}>
-              {showPaste ? "ซ่อน" : "หรือ วางข้อมูลที่ดึงมาแล้ว (ไม่ต้องใช้ API)"}
+              {showPaste ? "ซ่อน" : "หรือ วางข้อความ/ข้อมูลที่ดึงมาแล้ว (ไม่ต้องใช้ API ไม่มีค่าใช้จ่าย)"}
             </button>
             {showPaste && (
               <>
-                <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
-                  ส่งไฟล์ PDF ให้ Claude ในหน้าแชต ขอให้ตอบกลับเป็น JSON ตามรูปแบบนี้ แล้วนำมาวางที่นี่ — นำเข้าผ่านเส้นทางเดียวกับการอ่านอัตโนมัติทุกประการ
-                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, marginTop: 5, color: "var(--ink)" }}>
-                    {'{"cert":"AT102/26","provider":"...","calDate":"2026-07-15","points":[["พารามิเตอร์","ช่วง",จุด,"หน่วย",ค่าอ้างอิง,ค่าที่อ่านได้,Error,Correction,U,k]]}'}
-                  </div>
+                <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+                    <input type="radio" checked={pasteMode === "text"} onChange={() => setPasteMode("text")} /> วางข้อความจาก Word (แปลงจาก PDF สแกนด้วย OCR)
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+                    <input type="radio" checked={pasteMode === "json"} onChange={() => setPasteMode("json")} /> วาง JSON (จากที่ขอให้ Claude ช่วยดึงในแชต)
+                  </label>
                 </div>
+                {pasteMode === "text" ? (
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
+                    แปลงไฟล์ PDF สแกนเป็น Word (เมนู OCR ของ Word หรือ Google Docs ก็ได้) แล้วคัดลอกทั้งบล็อกข้อมูลหัวใบรับรองและตารางผลการสอบเทียบ (รวมบรรทัดชื่อตาราง เช่น "Wavelength Accuracy by Using...") มาวางที่นี่ทั้งหมด — ปรับให้เข้ากับรูปแบบใบรับรอง Analytical Technology Co.,Ltd. ที่ใช้อยู่
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
+                    ส่งไฟล์ PDF ให้ Claude ในหน้าแชต ขอให้ตอบกลับเป็น JSON ตามรูปแบบนี้ แล้วนำมาวางที่นี่
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, marginTop: 5, color: "var(--ink)" }}>
+                      {'{"cert":"AT102/26","provider":"...","calDate":"2026-07-15","points":[["พารามิเตอร์","ช่วง",จุด,"หน่วย",ค่าอ้างอิง,ค่าที่อ่านได้,Error,Correction,U,k]]}'}
+                    </div>
+                  </div>
+                )}
                 <textarea
-                  style={{ ...S.input, minHeight: 130, fontFamily: "var(--font-mono)", fontSize: 11.5 }}
+                  style={{ ...S.input, minHeight: 160, fontFamily: "var(--font-mono)", fontSize: 11.5 }}
                   value={pasteText} onChange={e => setPasteText(e.target.value)}
-                  placeholder='วาง JSON ที่นี่ (รองรับทั้งใบเดียวและหลายใบในรูปแบบ array)'
+                  placeholder={pasteMode === "text" ? "วางข้อความทั้งก้อนที่คัดลอกจาก Word ที่นี่" : "วาง JSON ที่นี่ (รองรับทั้งใบเดียวและหลายใบในรูปแบบ array)"}
                 />
                 <button style={{ ...S.primaryBtn, marginTop: 8 }} disabled={!pasteText.trim()}
                   onClick={() => handlePasteImport(uploadFor)}>
