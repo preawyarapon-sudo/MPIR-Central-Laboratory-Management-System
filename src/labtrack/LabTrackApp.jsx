@@ -5,7 +5,8 @@ import {
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
   LayoutGrid, ZoomIn, QrCode, Printer, FileCheck2, BadgeCheck,
-  UploadCloud, Loader2, Sparkles
+  UploadCloud, Loader2, Sparkles, ClipboardCheck, Gauge, TrendingUp,
+  ShieldCheck, FileWarning, Stamp
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -443,36 +444,47 @@ function calcRPN(sev, occ, det) {
 // types from Sheet 01 (col 18: absolute / % of reading / % of full scale)
 // against that point's own reading and the instrument's working range.
 function resolveTolerance(instrument, cert) {
-  const tol = Number(instrument?.tolerance);
-  if (!tol && tol !== 0) return null;
+  const tol = numOrNull(instrument?.tolerance);
+  if (tol == null) return null;
   const type = instrument?.toleranceType || "absolute";
   if (type === "% of reading") {
-    const basis = Number(cert.indication ?? cert.referenceValue);
-    return isNaN(basis) ? null : Math.abs(basis) * (tol / 100);
+    const basis = numOrNull(cert.indication) ?? numOrNull(cert.referenceValue);
+    return basis == null ? null : Math.abs(basis) * (tol / 100);
   }
   if (type === "% of full scale") {
-    const fs = Number(instrument?.workingRangeMax);
-    return isNaN(fs) ? null : Math.abs(fs) * (tol / 100);
+    const fs = numOrNull(instrument?.workingRangeMax);
+    return fs == null ? null : Math.abs(fs) * (tol / 100);
   }
   return tol;
 }
 // Error actually used for the decision: prefer what the certificate itself
 // reports (Reported Error), otherwise derive Indication − Reference.
+// A blank field must stay *missing*, never become 0 — Number("") is 0, so
+// without this guard an entirely empty row would compute Error = 0 and be
+// reported as PASS. numOrNull() is used everywhere a certificate value is
+// read for exactly that reason.
+function numOrNull(v) {
+  if (v === "" || v == null) return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
 function derivedErrorOf(cert) {
-  if (cert.reportedError !== "" && cert.reportedError != null && !isNaN(Number(cert.reportedError))) return Number(cert.reportedError);
-  const ref = Number(cert.referenceValue), ind = Number(cert.indication);
-  if (!isNaN(ref) && !isNaN(ind)) return ind - ref;
+  const reported = numOrNull(cert.reportedError);
+  if (reported != null) return reported;
+  const ref = numOrNull(cert.referenceValue), ind = numOrNull(cert.indication);
+  if (ref != null && ind != null) return ind - ref;
   return null;
 }
 // Expanded uncertainty U (absolute), converting from a relative U-report
 // (% of reading) using the same reading basis as resolveTolerance.
 function derivedUOf(cert) {
-  if (cert.uAbsolute !== "" && cert.uAbsolute != null && !isNaN(Number(cert.uAbsolute))) return Number(cert.uAbsolute);
-  const u = Number(cert.reportedU);
-  if (isNaN(u)) return null;
+  const abs = numOrNull(cert.uAbsolute);
+  if (abs != null) return abs;
+  const u = numOrNull(cert.reportedU);
+  if (u == null) return null;
   if (cert.uReportedAs === "Relative (%)") {
-    const basis = Number(cert.indication ?? cert.referenceValue);
-    return isNaN(basis) ? null : Math.abs(basis) * (u / 100);
+    const basis = numOrNull(cert.indication) ?? numOrNull(cert.referenceValue);
+    return basis == null ? null : Math.abs(basis) * (u / 100);
   }
   return u;
 }
@@ -505,7 +517,9 @@ function evaluateAcceptance(cert, instrument) {
   // TUR (Test Uncertainty Ratio) and En (Normalized Error) are informational
   // add-ons the workbook tracks alongside the pass/fail decision, not used
   // to override it.
-  const tur = U ? tol / (U * 2 >= tol ? U : U) : null; // TUR = Tolerance / U(k=2)
+  // TUR = Tolerance / U(k=2). U here is already the expanded uncertainty at
+  // the certificate's own coverage factor, so no further scaling is applied.
+  const tur = U ? tol / U : null;
   const en = U ? errorVal / (2 * U) : null; // simplified: assumes reference uncertainty negligible
   const utilizationPct = tol ? Math.round((absError / tol) * 1000) / 10 : null;
   if (decision === "FAIL" && absError <= tol * 1.1) decision = "WARNING"; // near-miss band, still flagged for review
@@ -556,6 +570,123 @@ async function extractCertificateWithAI(base64Pdf) {
   const textBlock = (data.content || []).map(b => b.type === "text" ? b.text : "").join("\n");
   const clean = textBlock.replace(/```json|```/g, "").trim();
   return JSON.parse(clean);
+}
+
+// Sheet 10 lookups needed by Sheets 04-09.
+const LK_CHKTYPE = ["Daily Check", "Intermediate Check", "Performance Check ก่อนใช้งาน"];
+const LK_DIST = ["Normal (k=1)", "Normal (k=2)", "Normal (k=3)", "Rectangular", "Triangular"];
+const LK_USAGE = ["ใช้งานได้ปกติ (In use)", "ใช้งานโดยต้องใช้ Correction (In use with correction)", "ใช้งานแบบจำกัดช่วง (Restricted use)", "รอประเมิน"];
+const LK_SOURCE = ["ผลการสอบเทียบประจำปี", "Daily Check", "Intermediate Check"];
+const LK_IMPACT = ["ไม่มีผลกระทบ", "มีผลกระทบแต่ยังอยู่ในเกณฑ์ยอมรับ", "มีผลกระทบต้องออกรายงานฉบับแก้ไข"];
+const LK_SUBJ = ["อนุมัติเกณฑ์การยอมรับ (Acceptance criteria)", "อนุมัติ Decision Rule", "อนุมัติการใช้ Correction"];
+const LK_OUTCOME = ["อนุมัติ", "อนุมัติแบบมีเงื่อนไข", "ไม่อนุมัติ"];
+const LK_ACTSTAT = ["เปิดเรื่อง", "อยู่ระหว่างดำเนินการ", "รอการทวนสอบ", "ปิดเรื่อง"];
+const LK_YESNO = ["ใช่", "ไม่ใช่"];
+
+// Sheet 04: mean/SD/%RSD from up to 5 readings, then Warning/Action limits
+// per the workbook's own formula note — "Warning Limit = ค่าอ้างอิง ±
+// (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance".
+function calcIntermediateCheck(entry, instrument) {
+  const readings = [entry.reading1, entry.reading2, entry.reading3, entry.reading4, entry.reading5]
+    .map(Number).filter(n => !isNaN(n));
+  const mean = readings.length ? readings.reduce((a, b) => a + b, 0) / readings.length : null;
+  const sd = readings.length > 1
+    ? Math.sqrt(readings.reduce((s, r) => s + (r - mean) ** 2, 0) / (readings.length - 1))
+    : null;
+  const rsdPct = (sd != null && mean) ? (sd / Math.abs(mean)) * 100 : null;
+  const correction = Number(entry.appliedCorrection) || 0;
+  const correctedMean = mean != null ? mean + correction : null;
+  const ref = numOrNull(entry.referenceValue);
+  const bias = (correctedMean != null && ref != null) ? correctedMean - ref : null;
+  const relativeBiasPct = (bias != null && ref) ? (bias / Math.abs(ref)) * 100 : null;
+  const tol = resolveTolerance(instrument, { indication: correctedMean, referenceValue: ref });
+  if (ref == null || tol == null) return { mean, sd, rsdPct, correctedMean, bias, relativeBiasPct, tol: null, lwl: null, uwl: null, lal: null, ual: null, result: bias == null ? "-" : "ข้อมูลไม่ครบ" };
+  const lwl = ref - (2 / 3) * tol, uwl = ref + (2 / 3) * tol, lal = ref - tol, ual = ref + tol;
+  let result = "PASS";
+  if (correctedMean < lal || correctedMean > ual) result = "FAIL";
+  else if (correctedMean < lwl || correctedMean > uwl) result = "WARNING";
+  return { mean, sd, rsdPct, correctedMean, bias, relativeBiasPct, tol, lwl, uwl, lal, ual, result };
+}
+// Sheet 05 per-row standard uncertainty + contribution; combining rows with
+// the same budgetId (done by the caller) gives uc, U and %contribution.
+function calcUncertaintyRow(row) {
+  const value = Number(row.value), divisor = Number(row.divisor);
+  const u = (!isNaN(value) && divisor) ? value / divisor : null;
+  const c = row.sensitivityCoefficient === "" || row.sensitivityCoefficient == null ? 1 : Number(row.sensitivityCoefficient);
+  const contribution = u != null ? Math.abs(c) * u : null;
+  return { u, contribution, contributionSq: contribution != null ? contribution ** 2 : null };
+}
+function combineUncertaintyBudget(rows) {
+  const withCalc = rows.map(r => ({ ...r, ...calcUncertaintyRow(r) }));
+  const sumSq = withCalc.reduce((s, r) => s + (r.contributionSq || 0), 0);
+  const uc = Math.sqrt(sumSq);
+  const k = Number(rows[0]?.combinedK) || 2;
+  const U = uc * k;
+  return { rows: withCalc.map(r => ({ ...r, pctContribution: sumSq ? Math.round((r.contributionSq / sumSq) * 1000) / 10 : null })), uc, k, U };
+}
+// Sheet 06: one calibration history "line" (same instrument+parameter+point
+// across years) → per-round drift, drift rate/year, and a naive linear
+// projection of when it would cross its own Tolerance.
+function computeTrendRows(certificates, equipment) {
+  const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
+  const groups = {};
+  certificates.forEach(c => {
+    const key = `${c.instrumentId}|${c.parameter}|${c.calibrationPoint}`;
+    (groups[key] = groups[key] || []).push(c);
+  });
+  const out = [];
+  Object.values(groups).forEach(list => {
+    const sorted = list.slice().sort((a, b) => (a.calibrationDate || "").localeCompare(b.calibrationDate || ""));
+    sorted.forEach((c, i) => {
+      const instrument = byId[c.instrumentId];
+      const error = derivedErrorOf(c);
+      const tol = resolveTolerance(instrument, c);
+      const prev = sorted[i - 1];
+      let drift = null, yearsBetween = null, driftRate = null, projected = null, yearsToOOT = null, flag = "ข้อมูลไม่พอ (จุดแรก)";
+      if (prev) {
+        const prevError = derivedErrorOf(prev);
+        if (error != null && prevError != null) drift = error - prevError;
+        const d1 = new Date((prev.calibrationDate || "") + "T00:00:00"), d2 = new Date((c.calibrationDate || "") + "T00:00:00");
+        if (!isNaN(d1) && !isNaN(d2)) yearsBetween = (d2 - d1) / (365.25 * 86400000);
+        if (drift != null && yearsBetween) driftRate = drift / yearsBetween;
+        if (error != null && driftRate != null && yearsBetween) projected = error + driftRate * yearsBetween;
+        if (tol != null && driftRate) yearsToOOT = Math.max(0, (tol - Math.abs(error ?? 0)) / Math.abs(driftRate));
+        flag = driftRate == null ? "ไม่สามารถคำนวณได้" : Math.abs(driftRate) < (tol || Infinity) * 0.02 ? "คงที่ (Stable)" : (driftRate > 0 ? "เพิ่มขึ้น (Increasing)" : "ลดลง (Decreasing)");
+      }
+      out.push({ cert: c, instrument, error, tol, drift, yearsBetween, driftRate, projected, yearsToOOT, flag, calibYearBE: beYear(c.calibrationDate) });
+    });
+  });
+  return out.sort((a, b) => (b.cert.calibrationDate || "").localeCompare(a.cert.calibrationDate || ""));
+}
+// Sheet 07: one row per instrument, rolling up its latest calibration round
+// (Sheet 03 decisions) and Intermediate Check failures in the last 90 days.
+function computeEquipmentStatusRows(equipment, certificates, intermediateChecks) {
+  const DECISION_RANK = { "PASS": 0, "CONDITIONAL PASS": 1, "WARNING": 2, "FAIL": 3, "INCOMPLETE DATA": 1 };
+  const now = Date.now();
+  return equipment.map(e => {
+    const certs = certificates.filter(c => c.instrumentId === e.id);
+    const latestDate = certs.reduce((max, c) => (c.calibrationDate || "") > max ? (c.calibrationDate || "") : max, "");
+    const latestCerts = certs.filter(c => c.calibrationDate === latestDate && latestDate);
+    const evals = latestCerts.map(c => evaluateAcceptance(c, e));
+    const overall = evals.reduce((worst, ev) => (DECISION_RANK[ev.decision] || 0) > (DECISION_RANK[worst] || 0) ? ev.decision : worst, evals[0]?.decision || "-");
+    const maxUtilization = evals.reduce((m, ev) => Math.max(m, ev.utilizationPct || 0), 0);
+    const failingCount = evals.filter(ev => ev.decision === "FAIL" || ev.decision === "WARNING").length;
+    const failedChecks90 = intermediateChecks.filter(ic => ic.instrumentId === e.id && ic.result === "FAIL" && ic.checkDate && (now - new Date(ic.checkDate + "T00:00:00")) <= 90 * 86400000).length;
+    const days = daysUntil(e.nextDue);
+    const { rpn } = calcRPN(e.severity, e.occurrence, e.detectability);
+    return { e, days, cycleStatus: statusOf(days), overall, maxUtilization, failingCount, failedChecks90, rpn, calibYearBE: beYear(latestDate) };
+  });
+}
+
+// Sheet 04: Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance), Action Limit =
+// ค่าอ้างอิง ± Tolerance (the workbook's own default rule — a different
+// rule needs Technical Manager approval, logged in Sheet 09).
+function warningActionLimits(instrument, referenceValue) {
+  const tol = resolveTolerance(instrument, { indication: referenceValue, referenceValue });
+  const ref = Number(referenceValue);
+  if (tol == null || isNaN(ref)) return null;
+  const w = tol * (2 / 3);
+  return { lwl: ref - w, uwl: ref + w, lal: ref - tol, ual: ref + tol };
 }
 
 /* ---------- return-tracking helpers (chemicals / consumables withdrawals) ---------- */
@@ -813,6 +944,12 @@ const NAV = [
   { key: "dailyCheck", label: "Daily check", icon: CheckCircle2, parent: "equipment" },
   { key: "certificates", label: "ใบรับรองสอบเทียบ", icon: FileCheck2, parent: "equipment" },
   { key: "acceptance", label: "เกณฑ์ยอมรับผล", icon: BadgeCheck, parent: "equipment" },
+  { key: "intermediateCheck", label: "ตรวจสอบระหว่างรอบ", icon: ClipboardCheck, parent: "equipment" },
+  { key: "uncertainty", label: "Uncertainty Budget", icon: Gauge, parent: "equipment" },
+  { key: "trend", label: "แนวโน้ม (Trend)", icon: TrendingUp, parent: "equipment" },
+  { key: "equipStatus", label: "สรุปสถานะเครื่องมือ", icon: ShieldCheck, parent: "equipment" },
+  { key: "actionImpact", label: "การดำเนินการ/ผลกระทบ", icon: FileWarning, parent: "equipment" },
+  { key: "approvalRecord", label: "บันทึกการอนุมัติ", icon: Stamp, parent: "equipment" },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
@@ -894,12 +1031,16 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   const [consumables, setConsumables] = useState([]);
   const [purchaseRequests, setPurchaseRequests] = useState([]);
   const [certificates, setCertificates] = useState([]); // Sheet 02 (+ Sheet 03 fields on the same record)
+  const [intermediateChecks, setIntermediateChecks] = useState([]); // Sheet 04 (general form; existing DailyCheckTab covers the per-type checks separately)
+  const [uncertaintyBudgets, setUncertaintyBudgets] = useState([]); // Sheet 05
+  const [actionImpacts, setActionImpacts] = useState([]); // Sheet 08
+  const [approvalRecords, setApprovalRecords] = useState([]); // Sheet 09
   const [toast, setToast] = useState(null);
   const [analysisJobs, setAnalysisJobs] = useState([]);
 
   useEffect(() => {
     (async () => {
-      const [eq, dc, ac, it, bk, ch, co, pr, ce] = await Promise.all([
+      const [eq, dc, ac, it, bk, ch, co, pr, ce, ic, ub, ai, ar] = await Promise.all([
         loadList("equipment", SEED_EQUIPMENT),
         loadList("dailyChecks", SEED_DAILY_CHECKS),
         loadList("activities", SEED_ACTIVITIES),
@@ -909,8 +1050,13 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
         loadList("consumables", SEED_CONSUMABLES),
         loadList("purchaseRequests", []),
         loadList("certificates", []),
+        loadList("intermediateChecks", []),
+        loadList("uncertaintyBudgets", []),
+        loadList("actionImpacts", []),
+        loadList("approvalRecords", []),
       ]);
       setEquipment(eq); setDailyChecks(dc); setActivities(ac); setItems(it); setBookings(bk); setChemicals(ch); setConsumables(co); setPurchaseRequests(pr); setCertificates(ce);
+      setIntermediateChecks(ic); setUncertaintyBudgets(ub); setActionImpacts(ai); setApprovalRecords(ar);
       setLoading(false);
     })();
   }, []);
@@ -939,6 +1085,10 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
     consumables: (list) => { setConsumables(list); saveList("consumables", list); },
     purchaseRequests: (list) => { setPurchaseRequests(list); saveList("purchaseRequests", list); },
     certificates: (list) => { setCertificates(list); saveList("certificates", list); },
+    intermediateChecks: (list) => { setIntermediateChecks(list); saveList("intermediateChecks", list); },
+    uncertaintyBudgets: (list) => { setUncertaintyBudgets(list); saveList("uncertaintyBudgets", list); },
+    actionImpacts: (list) => { setActionImpacts(list); saveList("actionImpacts", list); },
+    approvalRecords: (list) => { setApprovalRecords(list); saveList("approvalRecords", list); },
   };
 
   const alerts = useMemo(() => {
@@ -1122,6 +1272,24 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
           {!restrictToBooking && tab === "acceptance" && (
             <AcceptanceCriteriaTab equipment={equipment} certificates={certificates} setCertificates={persist.certificates} notify={notify} currentDisplayName={currentDisplayName} />
           )}
+          {!restrictToBooking && tab === "intermediateCheck" && (
+            <IntermediateCheckTab equipment={equipment} certificates={certificates} checks={intermediateChecks} setChecks={persist.intermediateChecks} notify={notify} currentDisplayName={currentDisplayName} />
+          )}
+          {!restrictToBooking && tab === "uncertainty" && (
+            <UncertaintyBudgetTab equipment={equipment} budgets={uncertaintyBudgets} setBudgets={persist.uncertaintyBudgets} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "trend" && (
+            <TrendAnalysisTab equipment={equipment} certificates={certificates} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "equipStatus" && (
+            <EquipmentStatusTab equipment={equipment} certificates={certificates} intermediateChecks={intermediateChecks} setEquipment={persist.equipment} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "actionImpact" && (
+            <ActionImpactTab equipment={equipment} actionImpacts={actionImpacts} setActionImpacts={persist.actionImpacts} notify={notify} />
+          )}
+          {!restrictToBooking && tab === "approvalRecord" && (
+            <ApprovalRecordTab equipment={equipment} approvalRecords={approvalRecords} setApprovalRecords={persist.approvalRecords} notify={notify} />
+          )}
           {tab === "equipmentView" && (
             <EquipmentGuestView
               equip={equipment.find(e => e.id === equipDeepLinkId)}
@@ -1160,7 +1328,9 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} />
           )}
           {!restrictToBooking && tab === "reports" && (
-            <ReportsTab equipment={equipment} activities={activities} dailyChecks={dailyChecks} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests} />
+            <ReportsTab equipment={equipment} activities={activities} dailyChecks={dailyChecks} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests}
+              certificates={certificates} intermediateChecks={intermediateChecks} uncertaintyBudgets={uncertaintyBudgets}
+              actionImpacts={actionImpacts} approvalRecords={approvalRecords} />
           )}
         </main>
       </div>
@@ -3183,6 +3353,452 @@ function AcceptanceCriteriaTab({ equipment, certificates, setCertificates, notif
   );
 }
 
+/* ================= Sheet 04: Intermediate / Performance Check (general) =================
+   Sits alongside the existing type-specific "Daily check" tab — this one
+   follows "04_Daily_Intermediate_Check" column-for-column for any
+   instrument/parameter, with Warning/Action limits computed automatically. */
+function blankIntermediateCheck(instrumentId) {
+  return {
+    id: uid(), checkDate: todayISO(), instrumentId, parameter: "", checkType: "Daily Check",
+    checkItem: "", checkStandard: "", checkStandardId: "", referenceValue: "", uOfCheckStandard: "", unit: "",
+    reading1: "", reading2: "", reading3: "", reading4: "", reading5: "",
+    appliedCorrection: "", checkedBy: "", reviewedBy: "", actionOnFailure: "", carNo: "", remarks: "",
+  };
+}
+function IntermediateCheckTab({ equipment, checks, setChecks, notify, currentDisplayName = "" }) {
+  const [editing, setEditing] = useState(null);
+  const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
+  const sorted = checks.slice().sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""));
+  function upsert(row) {
+    if (checks.find(c => c.id === row.id)) setChecks(checks.map(c => c.id === row.id ? row : c));
+    else setChecks([row, ...checks]);
+    notify("บันทึกผลตรวจสอบแล้ว");
+    setEditing(null);
+  }
+  function remove(id) { setChecks(checks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Daily / Intermediate / Performance Check)</h2><p style={S.h2sub}>Sheet 04 — Warning/Action Limit คำนวณจาก Tolerance ที่อนุมัติใน Sheet 01</p></div>
+        <button style={S.primaryBtn} onClick={() => setEditing(blankIntermediateCheck(equipment[0]?.id || ""))}><Plus size={15} /> บันทึกผลตรวจสอบ</button>
+      </div>
+      <div style={S.tableWrap}>
+        <table style={S.table}>
+          <thead><tr>{["วันที่", "เครื่องมือ", "พารามิเตอร์", "ประเภท", "ค่าเฉลี่ยหลังแก้ค่า", "Bias", "LWL/UWL", "LAL/UAL", "ผล", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {sorted.map(row => {
+              const instrument = byId[row.instrumentId];
+              const calc = calcIntermediateCheck(row, instrument);
+              const color = calc.result === "PASS" ? "var(--green)" : calc.result === "WARNING" ? "var(--amber)" : calc.result === "FAIL" ? "var(--red)" : "var(--muted)";
+              return (
+                <tr key={row.id} style={S.tr}>
+                  <td style={S.td}>{fmtDate(row.checkDate)}</td>
+                  <td style={S.td}>{instrument ? `${instrument.code} — ${instrument.name}` : "-"}</td>
+                  <td style={S.td}>{row.parameter}</td>
+                  <td style={S.td}>{row.checkType}</td>
+                  <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{calc.correctedMean != null ? calc.correctedMean.toFixed(4) : "-"}</td>
+                  <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{calc.bias != null ? calc.bias.toFixed(4) : "-"}</td>
+                  <td style={{ ...S.td, fontFamily: "var(--font-mono)", fontSize: 11 }}>{calc.lwl != null ? `${calc.lwl.toFixed(3)} / ${calc.uwl.toFixed(3)}` : "-"}</td>
+                  <td style={{ ...S.td, fontFamily: "var(--font-mono)", fontSize: 11 }}>{calc.lal != null ? `${calc.lal.toFixed(3)} / ${calc.ual.toFixed(3)}` : "-"}</td>
+                  <td style={S.td}><span style={{ ...S.tag, borderColor: color, color }}>{calc.result}</span></td>
+                  <td style={S.td}><div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(row)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(row.id)}><Trash2 size={13} /></button></div></td>
+                </tr>
+              );
+            })}
+            {sorted.length === 0 && <tr><td style={S.td} colSpan={10}><div style={S.emptyState}>ยังไม่มีบันทึกการตรวจสอบระหว่างรอบ</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {editing && <IntermediateCheckForm row={editing} equipment={equipment} currentDisplayName={currentDisplayName} onCancel={() => setEditing(null)} onSave={upsert} />}
+    </div>
+  );
+}
+function IntermediateCheckForm({ row, equipment, currentDisplayName, onCancel, onSave }) {
+  const [f, setF] = useState(row.checkedBy ? row : { ...row, checkedBy: row.checkedBy || currentDisplayName });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const instrument = equipment.find(e => e.id === f.instrumentId);
+  const calc = calcIntermediateCheck(f, instrument);
+  return (
+    <Modal onClose={onCancel} title="บันทึกผลตรวจสอบระหว่างรอบ" wide>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="วันที่ตรวจสอบ"><input type="date" style={S.input} value={f.checkDate} onChange={set("checkDate")} /></Field>
+        <Field label="เครื่องมือ">
+          <select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>{equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}</select>
+        </Field>
+        <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} /></Field>
+        <Field label="ประเภทการตรวจสอบ"><select style={S.input} value={f.checkType} onChange={set("checkType")}>{LK_CHKTYPE.map(t => <option key={t} value={t}>{t}</option>)}</select></Field>
+        <Field label="รายการตรวจสอบ"><input style={S.input} value={f.checkItem} onChange={set("checkItem")} /></Field>
+        <Field label="Check Standard ที่ใช้"><input style={S.input} value={f.checkStandard} onChange={set("checkStandard")} /></Field>
+        <Field label="รหัส Check Standard"><input style={S.input} value={f.checkStandardId} onChange={set("checkStandardId")} /></Field>
+        <Field label="ค่าอ้างอิง"><input type="number" step="any" style={S.input} value={f.referenceValue} onChange={set("referenceValue")} /></Field>
+        <Field label="U ของ Check Standard"><input type="number" step="any" style={S.input} value={f.uOfCheckStandard} onChange={set("uOfCheckStandard")} /></Field>
+        <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} /></Field>
+        {[1, 2, 3, 4, 5].map(n => (
+          <Field key={n} label={`ค่าอ่านครั้งที่ ${n}`}><input type="number" step="any" style={S.input} value={f[`reading${n}`]} onChange={set(`reading${n}`)} /></Field>
+        ))}
+        <Field label="Correction ที่ใช้"><input type="number" step="any" style={S.input} value={f.appliedCorrection} onChange={set("appliedCorrection")} /></Field>
+        <div style={{ gridColumn: "1 / -1", background: "#F5F8F7", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, display: "flex", flexWrap: "wrap", gap: 16 }}>
+          <span>Mean: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.mean != null ? calc.mean.toFixed(4) : "-"}</b></span>
+          <span>%RSD: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.rsdPct != null ? calc.rsdPct.toFixed(2) : "-"}</b></span>
+          <span>Corrected Mean: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.correctedMean != null ? calc.correctedMean.toFixed(4) : "-"}</b></span>
+          <span>Bias: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.bias != null ? calc.bias.toFixed(4) : "-"}</b></span>
+          <span>LWL/UWL: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.lwl != null ? `${calc.lwl.toFixed(3)} / ${calc.uwl.toFixed(3)}` : "-"}</b></span>
+          <span>LAL/UAL: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.lal != null ? `${calc.lal.toFixed(3)} / ${calc.ual.toFixed(3)}` : "-"}</b></span>
+          <span>ผล: <b>{calc.result}</b></span>
+        </div>
+        <Field label="ผู้ตรวจสอบ"><input style={S.input} value={f.checkedBy} onChange={set("checkedBy")} /></Field>
+        <Field label="ผู้ทบทวน"><input style={S.input} value={f.reviewedBy} onChange={set("reviewedBy")} /></Field>
+        <Field label="การดำเนินการเมื่อไม่ผ่าน"><input style={S.input} value={f.actionOnFailure} onChange={set("actionOnFailure")} /></Field>
+        <Field label="เลขที่ CAR / NC"><input style={S.input} value={f.carNo} onChange={set("carNo")} /></Field>
+        <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.remarks} onChange={set("remarks")} /></Field>
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.instrumentId} />
+    </Modal>
+  );
+}
+
+/* ================= Sheet 05: Uncertainty Budget =================
+   Rows share a Budget ID; standard uncertainty/contribution are computed
+   per row, uc/U are computed per group (see combineUncertaintyBudget). */
+function blankUncertaintyRow(instrumentId, budgetId = "") {
+  return {
+    id: uid(), budgetId: budgetId || `UB-${Date.now().toString(36).toUpperCase()}`, instrumentId, testMethod: "", parameter: "",
+    componentName: "", symbol: "", value: "", unit: "", distribution: "Normal (k=2)", divisor: 2,
+    sensitivityCoefficient: 1, degreesOfFreedom: "", dataSource: "", reviewDate: "", approvedBy: "", combinedK: 2, measuredValue: "",
+  };
+}
+function UncertaintyBudgetTab({ equipment, budgets, setBudgets, notify }) {
+  const [editing, setEditing] = useState(null);
+  const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
+  const groups = useMemo(() => {
+    const g = {};
+    budgets.forEach(b => { (g[b.budgetId] = g[b.budgetId] || []).push(b); });
+    return g;
+  }, [budgets]);
+  function upsert(row) {
+    if (budgets.find(b => b.id === row.id)) setBudgets(budgets.map(b => b.id === row.id ? row : b));
+    else setBudgets([row, ...budgets]);
+    notify("บันทึก Uncertainty component แล้ว");
+    setEditing(null);
+  }
+  function remove(id) { setBudgets(budgets.filter(b => b.id !== id)); notify("ลบรายการแล้ว"); }
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>Uncertainty Budget</h2><p style={S.h2sub}>Sheet 05 — องค์ประกอบความไม่แน่นอนแยกตาม Budget ID; uc และ U คำนวณรวมต่อกลุ่มอัตโนมัติ</p></div>
+        <button style={S.primaryBtn} onClick={() => setEditing(blankUncertaintyRow(equipment[0]?.id || ""))}><Plus size={15} /> เพิ่มองค์ประกอบ</button>
+      </div>
+      {Object.keys(groups).length === 0 && <div style={S.tableWrap}><div style={{ ...S.emptyState, padding: 24 }}>ยังไม่มี Uncertainty Budget</div></div>}
+      {Object.entries(groups).map(([budgetId, rows]) => {
+        const instrument = byId[rows[0]?.instrumentId];
+        const { rows: calcRows, uc, k, U } = combineUncertaintyBudget(rows);
+        const relPct = rows[0]?.measuredValue ? (U / Math.abs(Number(rows[0].measuredValue))) * 100 : null;
+        return (
+          <div key={budgetId} style={{ ...S.tableWrap, marginBottom: 16 }}>
+            <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div><b style={{ fontFamily: "var(--font-mono)" }}>{budgetId}</b> — {instrument ? `${instrument.code} — ${instrument.name}` : "-"} <span style={{ color: "var(--muted)", fontSize: 12 }}>({rows[0]?.parameter}, {rows[0]?.testMethod})</span></div>
+              <div style={{ fontSize: 12.5, display: "flex", gap: 14 }}>
+                <span>u<sub>c</sub>: <b style={{ fontFamily: "var(--font-mono)" }}>{uc.toFixed(5)}</b></span>
+                <span>k: <b style={{ fontFamily: "var(--font-mono)" }}>{k}</b></span>
+                <span>U: <b style={{ fontFamily: "var(--font-mono)" }}>{U.toFixed(5)}</b></span>
+                {relPct != null && <span>U สัมพัทธ์: <b style={{ fontFamily: "var(--font-mono)" }}>{relPct.toFixed(2)}%</b></span>}
+              </div>
+            </div>
+            <table style={S.table}>
+              <thead><tr>{["องค์ประกอบ", "สัญลักษณ์", "ค่า", "การแจกแจง", "Divisor", "u(xi)", "c", "Contribution", "% Contribution", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {calcRows.map(r => (
+                  <tr key={r.id} style={S.tr}>
+                    <td style={S.td}>{r.componentName}</td>
+                    <td style={S.td}>{r.symbol}</td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.value} {r.unit}</td>
+                    <td style={S.td}>{r.distribution}</td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.divisor}</td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.u != null ? r.u.toFixed(5) : "-"}</td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.sensitivityCoefficient}</td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.contribution != null ? r.contribution.toFixed(5) : "-"}</td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.pctContribution != null ? `${r.pctContribution}%` : "-"}</td>
+                    <td style={S.td}><div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(r)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(r.id)}><Trash2 size={13} /></button></div></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+      {editing && <UncertaintyRowForm row={editing} equipment={equipment} existingBudgetIds={Object.keys(groups)} onCancel={() => setEditing(null)} onSave={upsert} />}
+    </div>
+  );
+}
+function UncertaintyRowForm({ row, equipment, existingBudgetIds, onCancel, onSave }) {
+  const [f, setF] = useState(row);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <Modal onClose={onCancel} title="Uncertainty Component" wide>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="Budget ID"><input style={S.input} list="budgetIds" value={f.budgetId} onChange={set("budgetId")} /><datalist id="budgetIds">{existingBudgetIds.map(id => <option key={id} value={id} />)}</datalist></Field>
+        <Field label="เครื่องมือ"><select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>{equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}</select></Field>
+        <Field label="วิธีทดสอบ"><input style={S.input} value={f.testMethod} onChange={set("testMethod")} /></Field>
+        <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} /></Field>
+        <Field label="ชื่อองค์ประกอบความไม่แน่นอน"><input style={S.input} value={f.componentName} onChange={set("componentName")} /></Field>
+        <Field label="สัญลักษณ์"><input style={S.input} value={f.symbol} onChange={set("symbol")} /></Field>
+        <Field label="ค่าที่ใช้"><input type="number" step="any" style={S.input} value={f.value} onChange={set("value")} /></Field>
+        <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} /></Field>
+        <Field label="การแจกแจงความน่าจะเป็น"><select style={S.input} value={f.distribution} onChange={set("distribution")}>{LK_DIST.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
+        <Field label="Divisor"><input type="number" step="any" style={S.input} value={f.divisor} onChange={set("divisor")} /></Field>
+        <Field label="Sensitivity coefficient (c)"><input type="number" step="any" style={S.input} value={f.sensitivityCoefficient} onChange={set("sensitivityCoefficient")} /></Field>
+        <Field label="Degrees of freedom"><input style={S.input} value={f.degreesOfFreedom} onChange={set("degreesOfFreedom")} /></Field>
+        <Field label="แหล่งข้อมูล"><input style={S.input} value={f.dataSource} onChange={set("dataSource")} /></Field>
+        <Field label="วันที่ทบทวน"><input type="date" style={S.input} value={f.reviewDate} onChange={set("reviewDate")} /></Field>
+        <Field label="ผู้อนุมัติ"><input style={S.input} value={f.approvedBy} onChange={set("approvedBy")} /></Field>
+        <Field label="Coverage factor k (รวมทั้ง Budget)"><input type="number" step="any" style={S.input} value={f.combinedK} onChange={set("combinedK")} /></Field>
+        <Field label="ค่าที่วัดได้ (สำหรับ % สัมพัทธ์)"><input type="number" step="any" style={S.input} value={f.measuredValue} onChange={set("measuredValue")} /></Field>
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.budgetId || !f.componentName} />
+    </Modal>
+  );
+}
+
+/* ================= Sheet 06: Trend / Drift Analysis (fully computed) ================= */
+function TrendAnalysisTab({ equipment, certificates, notify }) {
+  const [q, setQ] = useState("");
+  const rows = useMemo(() => computeTrendRows(certificates, equipment), [certificates, equipment]);
+  const filtered = rows.filter(r => ((r.instrument?.code || "") + (r.instrument?.name || "") + r.cert.parameter).toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>แนวโน้มการเปลี่ยนแปลงของเครื่องมือ (Trend / Drift)</h2><p style={S.h2sub}>Sheet 06 — คำนวณจากประวัติใบรับรอง (Sheet 02) ของแต่ละเครื่องมือ/พารามิเตอร์/จุดสอบเทียบข้ามปี</p></div>
+      </div>
+      <div style={S.toolbar}><div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ / พารามิเตอร์" value={q} onChange={e => setQ(e.target.value)} /></div></div>
+      <div style={S.tableWrap}>
+        <table style={S.table}>
+          <thead><tr>{["เครื่องมือ", "พารามิเตอร์/จุด", "ปี (พ.ศ.)", "Error", "Drift จากรอบก่อน", "อัตราเลื่อน/ปี", "คาดการณ์รอบถัดไป", "ปีที่คาดว่าหลุดเกณฑ์", "แนวโน้ม"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filtered.map(r => (
+              <tr key={r.cert.id} style={S.tr}>
+                <td style={S.td}>{r.instrument ? `${r.instrument.code} — ${r.instrument.name}` : "-"}</td>
+                <td style={S.td}>{r.cert.parameter} @ {r.cert.calibrationPoint}{r.cert.unit}</td>
+                <td style={S.td}>{r.calibYearBE || "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.error != null ? r.error.toFixed(4) : "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.drift != null ? r.drift.toFixed(4) : "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.driftRate != null ? r.driftRate.toFixed(4) : "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.projected != null ? r.projected.toFixed(4) : "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.yearsToOOT != null ? r.yearsToOOT.toFixed(1) : "-"}</td>
+                <td style={S.td}>{r.flag}</td>
+              </tr>
+            ))}
+            {filtered.length === 0 && <tr><td style={S.td} colSpan={9}><div style={S.emptyState}>ยังไม่มีข้อมูลใบรับรองพอสำหรับวิเคราะห์แนวโน้ม (ต้องมีอย่างน้อย 2 รอบต่อจุดสอบเทียบ)</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= Sheet 07: Equipment Status Summary (computed + a few manual fields) ================= */
+function EquipmentStatusTab({ equipment, certificates, intermediateChecks, setEquipment, notify }) {
+  const [q, setQ] = useState("");
+  const rows = useMemo(() => computeEquipmentStatusRows(equipment, certificates, intermediateChecks), [equipment, certificates, intermediateChecks]);
+  const filtered = rows.filter(r => ((r.e.code || "") + (r.e.name || "")).toLowerCase().includes(q.toLowerCase()));
+  function setManual(id, patch) { setEquipment(equipment.map(e => e.id === id ? { ...e, ...patch } : e)); notify("บันทึกแล้ว"); }
+  const CYCLE_LABEL = { ok: "ปกติ", warn: "ใกล้ถึงกำหนด", danger: "เลยกำหนด", none: "-" };
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>สรุปสถานะเครื่องมือ</h2><p style={S.h2sub}>Sheet 07 — สรุปจากผลสอบเทียบล่าสุด (Sheet 03), Intermediate Check 90 วันล่าสุด (Sheet 04) และ RPN (Sheet 01)</p></div>
+      </div>
+      <div style={S.toolbar}><div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ" value={q} onChange={e => setQ(e.target.value)} /></div></div>
+      <div style={S.tableWrap}>
+        <table style={S.table}>
+          <thead><tr>{["เครื่องมือ", "สอบเทียบล่าสุด", "ครบกำหนดถัดไป", "รอบสอบเทียบ", "ผลสอบเทียบล่าสุด", "Max Utilization", "จุด FAIL/WARN", "Check ไม่ผ่าน (90 วัน)", "RPN", "สถานะการใช้งาน", "ผู้อนุมัติ"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filtered.map(({ e, days, cycleStatus, overall, maxUtilization, failingCount, failedChecks90, rpn }) => (
+              <tr key={e.id} style={S.tr}>
+                <td style={S.td}>{e.code} — {e.name}</td>
+                <td style={S.td}>{fmtDate(e.lastCalibration)}</td>
+                <td style={S.td}>{fmtDate(e.nextDue)}</td>
+                <td style={S.td}><span style={{ color: STATUS_COLOR[cycleStatus] }}>{CYCLE_LABEL[cycleStatus]}{days != null ? ` (${days} วัน)` : ""}</span></td>
+                <td style={S.td}>{overall || "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{maxUtilization ? `${maxUtilization.toFixed(1)}%` : "-"}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{failingCount}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{failedChecks90}</td>
+                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{rpn ?? "-"}</td>
+                <td style={S.td}>
+                  <select style={{ ...S.input, fontSize: 11.5, padding: "5px 8px" }} value={e.usageStatus || ""} onChange={ev => setManual(e.id, { usageStatus: ev.target.value })}>
+                    <option value="">- ยังไม่ประเมิน -</option>
+                    {LK_USAGE.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </td>
+                <td style={S.td}><input style={{ ...S.input, fontSize: 11.5, padding: "5px 8px" }} placeholder="ผู้อนุมัติ" value={e.statusApprovedBy || ""} onChange={ev => setManual(e.id, { statusApprovedBy: ev.target.value, statusApprovalDate: e.statusApprovalDate || todayISO() })} /></td>
+              </tr>
+            ))}
+            {filtered.length === 0 && <tr><td style={S.td} colSpan={11}><div style={S.emptyState}>ไม่มีเครื่องมือ</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= Sheet 08: Action and Impact Evaluation ================= */
+function blankActionImpact(instrumentId) {
+  return {
+    id: uid(), dateIdentified: todayISO(), instrumentId, sourceOfFinding: "", description: "", assessedDecision: "",
+    impactPeriodFrom: "", impactPeriodTo: "", affectedTestMethods: "", reportsAffected: "", retrospectiveEval: "",
+    impactOnResults: "", customerNotificationRequired: "", immediateCorrection: "", correctiveAction: "", carNo: "",
+    responsiblePerson: "", targetDate: "", actionStatus: "เปิดเรื่อง", verificationOfEffectiveness: "", closedBy: "", closingDate: "",
+  };
+}
+function ActionImpactTab({ equipment, actionImpacts, setActionImpacts, notify }) {
+  const [editing, setEditing] = useState(null);
+  const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
+  const sorted = actionImpacts.slice().sort((a, b) => (b.dateIdentified || "").localeCompare(a.dateIdentified || ""));
+  function upsert(row) {
+    if (actionImpacts.find(a => a.id === row.id)) setActionImpacts(actionImpacts.map(a => a.id === row.id ? row : a));
+    else setActionImpacts([row, ...actionImpacts]);
+    notify("บันทึกแล้ว"); setEditing(null);
+  }
+  function remove(id) { setActionImpacts(actionImpacts.filter(a => a.id !== id)); notify("ลบรายการแล้ว"); }
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>การดำเนินการและการประเมินผลกระทบ</h2><p style={S.h2sub}>Sheet 08 — ตาม ISO/IEC 17025:2017 ข้อ 7.10 และ 8.7</p></div>
+        <button style={S.primaryBtn} onClick={() => setEditing(blankActionImpact(equipment[0]?.id || ""))}><Plus size={15} /> บันทึกรายการใหม่</button>
+      </div>
+      <div style={S.tableWrap}>
+        <table style={S.table}>
+          <thead><tr>{["วันที่พบ", "เครื่องมือ", "ลักษณะปัญหา", "สถานะที่ประเมินได้", "ผลกระทบต่อผลการทดสอบ", "สถานะการดำเนินการ", "กำหนดแล้วเสร็จ", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {sorted.map(row => (
+              <tr key={row.id} style={S.tr}>
+                <td style={S.td}>{fmtDate(row.dateIdentified)}</td>
+                <td style={S.td}>{byId[row.instrumentId] ? `${byId[row.instrumentId].code} — ${byId[row.instrumentId].name}` : "-"}</td>
+                <td style={{ ...S.td, maxWidth: 220 }}>{row.description}</td>
+                <td style={S.td}>{row.assessedDecision}</td>
+                <td style={S.td}>{row.impactOnResults}</td>
+                <td style={S.td}><span style={S.tag}>{row.actionStatus}</span></td>
+                <td style={S.td}>{fmtDate(row.targetDate)}</td>
+                <td style={S.td}><div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(row)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(row.id)}><Trash2 size={13} /></button></div></td>
+              </tr>
+            ))}
+            {sorted.length === 0 && <tr><td style={S.td} colSpan={8}><div style={S.emptyState}>ยังไม่มีรายการ</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {editing && <ActionImpactForm row={editing} equipment={equipment} onCancel={() => setEditing(null)} onSave={upsert} />}
+    </div>
+  );
+}
+function ActionImpactForm({ row, equipment, onCancel, onSave }) {
+  const [f, setF] = useState(row);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <Modal onClose={onCancel} title="การดำเนินการและการประเมินผลกระทบ" wide>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="วันที่พบ"><input type="date" style={S.input} value={f.dateIdentified} onChange={set("dateIdentified")} /></Field>
+        <Field label="เครื่องมือ"><select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>{equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}</select></Field>
+        <Field label="แหล่งที่พบปัญหา"><input style={S.input} list="lkSource" value={f.sourceOfFinding} onChange={set("sourceOfFinding")} /><datalist id="lkSource">{LK_SOURCE.map(s => <option key={s} value={s} />)}</datalist></Field>
+        <Field label="สถานะที่ประเมินได้"><input style={S.input} value={f.assessedDecision} onChange={set("assessedDecision")} placeholder="เช่น FAIL, WARNING" /></Field>
+        <Field label="ลักษณะปัญหา" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.description} onChange={set("description")} /></Field>
+        <Field label="ช่วงเวลาที่อาจได้รับผลกระทบ — ตั้งแต่"><input type="date" style={S.input} value={f.impactPeriodFrom} onChange={set("impactPeriodFrom")} /></Field>
+        <Field label="ถึงวันที่"><input type="date" style={S.input} value={f.impactPeriodTo} onChange={set("impactPeriodTo")} /></Field>
+        <Field label="วิธีทดสอบที่ได้รับผลกระทบ"><input style={S.input} value={f.affectedTestMethods} onChange={set("affectedTestMethods")} /></Field>
+        <Field label="จำนวนรายงานที่อาจได้รับผลกระทบ"><input type="number" style={S.input} value={f.reportsAffected} onChange={set("reportsAffected")} /></Field>
+        <Field label="การประเมินผลกระทบย้อนหลัง" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.retrospectiveEval} onChange={set("retrospectiveEval")} /></Field>
+        <Field label="ผลกระทบต่อผลการทดสอบ"><select style={S.input} value={f.impactOnResults} onChange={set("impactOnResults")}><option value="">- ยังไม่ระบุ -</option>{LK_IMPACT.map(i => <option key={i} value={i}>{i}</option>)}</select></Field>
+        <Field label="ต้องแจ้งลูกค้าหรือไม่"><select style={S.input} value={f.customerNotificationRequired} onChange={set("customerNotificationRequired")}><option value="">- ยังไม่ระบุ -</option>{LK_YESNO.map(y => <option key={y} value={y}>{y}</option>)}</select></Field>
+        <Field label="การแก้ไขทันที (Correction)" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.immediateCorrection} onChange={set("immediateCorrection")} /></Field>
+        <Field label="การแก้ไขเชิงป้องกัน (Corrective Action)" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.correctiveAction} onChange={set("correctiveAction")} /></Field>
+        <Field label="เลขที่ CAR"><input style={S.input} value={f.carNo} onChange={set("carNo")} /></Field>
+        <Field label="ผู้รับผิดชอบ"><input style={S.input} value={f.responsiblePerson} onChange={set("responsiblePerson")} /></Field>
+        <Field label="กำหนดแล้วเสร็จ"><input type="date" style={S.input} value={f.targetDate} onChange={set("targetDate")} /></Field>
+        <Field label="สถานะการดำเนินการ"><select style={S.input} value={f.actionStatus} onChange={set("actionStatus")}>{LK_ACTSTAT.map(s => <option key={s} value={s}>{s}</option>)}</select></Field>
+        <Field label="การติดตามประสิทธิผล" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.verificationOfEffectiveness} onChange={set("verificationOfEffectiveness")} /></Field>
+        <Field label="ผู้อนุมัติปิดเรื่อง"><input style={S.input} value={f.closedBy} onChange={set("closedBy")} /></Field>
+        <Field label="วันที่ปิดเรื่อง"><input type="date" style={S.input} value={f.closingDate} onChange={set("closingDate")} /></Field>
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.instrumentId || !f.description} />
+    </Modal>
+  );
+}
+
+/* ================= Sheet 09: Review and Approval Record ================= */
+function blankApprovalRecord(instrumentId) {
+  return {
+    id: uid(), date: todayISO(), instrumentId, referenceCertificateNo: "", subject: "", summary: "", supportingDocuments: "",
+    preparedBy: "", position: "", preparedDate: todayISO(), reviewedBy: "", reviewDate: "", approvedBy: "", approvalDate: "",
+    outcome: "", conditionsImposed: "", effectiveDate: "", nextReviewDate: "",
+  };
+}
+function ApprovalRecordTab({ equipment, approvalRecords, setApprovalRecords, notify }) {
+  const [editing, setEditing] = useState(null);
+  const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
+  const sorted = approvalRecords.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  function upsert(row) {
+    if (approvalRecords.find(a => a.id === row.id)) setApprovalRecords(approvalRecords.map(a => a.id === row.id ? row : a));
+    else setApprovalRecords([row, ...approvalRecords]);
+    notify("บันทึกการอนุมัติแล้ว"); setEditing(null);
+  }
+  function remove(id) { setApprovalRecords(approvalRecords.filter(a => a.id !== id)); notify("ลบรายการแล้ว"); }
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>บันทึกการทบทวนและอนุมัติ</h2><p style={S.h2sub}>Sheet 09 — หลักฐานอนุมัติเกณฑ์การยอมรับ, Decision Rule, การใช้ Correction และการอนุมัติให้ใช้งานเครื่องมือ</p></div>
+        <button style={S.primaryBtn} onClick={() => setEditing(blankApprovalRecord(equipment[0]?.id || ""))}><Plus size={15} /> บันทึกการอนุมัติใหม่</button>
+      </div>
+      <div style={S.tableWrap}>
+        <table style={S.table}>
+          <thead><tr>{["วันที่", "เครื่องมือ", "เรื่องที่ขออนุมัติ", "ผู้จัดทำ", "ผู้อนุมัติ", "ผลการอนุมัติ", "มีผลบังคับใช้", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {sorted.map(row => (
+              <tr key={row.id} style={S.tr}>
+                <td style={S.td}>{fmtDate(row.date)}</td>
+                <td style={S.td}>{byId[row.instrumentId] ? `${byId[row.instrumentId].code} — ${byId[row.instrumentId].name}` : "-"}</td>
+                <td style={S.td}>{row.subject}</td>
+                <td style={S.td}>{row.preparedBy}</td>
+                <td style={S.td}>{row.approvedBy || "-"}</td>
+                <td style={S.td}><span style={S.tag}>{row.outcome || "-"}</span></td>
+                <td style={S.td}>{fmtDate(row.effectiveDate)}</td>
+                <td style={S.td}><div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(row)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(row.id)}><Trash2 size={13} /></button></div></td>
+              </tr>
+            ))}
+            {sorted.length === 0 && <tr><td style={S.td} colSpan={8}><div style={S.emptyState}>ยังไม่มีบันทึกการอนุมัติ</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {editing && <ApprovalRecordForm row={editing} equipment={equipment} onCancel={() => setEditing(null)} onSave={upsert} />}
+    </div>
+  );
+}
+function ApprovalRecordForm({ row, equipment, onCancel, onSave }) {
+  const [f, setF] = useState(row);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <Modal onClose={onCancel} title="บันทึกการทบทวนและอนุมัติ" wide>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
+        <Field label="เครื่องมือ"><select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>{equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}</select></Field>
+        <Field label="เลขที่ใบรับรองอ้างอิง"><input style={S.input} value={f.referenceCertificateNo} onChange={set("referenceCertificateNo")} /></Field>
+        <Field label="เรื่องที่ขออนุมัติ"><input style={S.input} list="lkSubj" value={f.subject} onChange={set("subject")} /><datalist id="lkSubj">{LK_SUBJ.map(s => <option key={s} value={s} />)}</datalist></Field>
+        <Field label="สาระสำคัญของเรื่องที่ขออนุมัติ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.summary} onChange={set("summary")} /></Field>
+        <Field label="เอกสาร / หลักฐานอ้างอิง" full><input style={S.input} value={f.supportingDocuments} onChange={set("supportingDocuments")} /></Field>
+        <Field label="ผู้จัดทำ"><input style={S.input} value={f.preparedBy} onChange={set("preparedBy")} /></Field>
+        <Field label="ตำแหน่ง"><input style={S.input} value={f.position} onChange={set("position")} /></Field>
+        <Field label="วันที่จัดทำ"><input type="date" style={S.input} value={f.preparedDate} onChange={set("preparedDate")} /></Field>
+        <Field label="ผู้ทบทวน (Technical Manager)"><input style={S.input} value={f.reviewedBy} onChange={set("reviewedBy")} /></Field>
+        <Field label="วันที่ทบทวน"><input type="date" style={S.input} value={f.reviewDate} onChange={set("reviewDate")} /></Field>
+        <Field label="ผู้อนุมัติ (Quality Manager / Lab Manager)"><input style={S.input} value={f.approvedBy} onChange={set("approvedBy")} /></Field>
+        <Field label="วันที่อนุมัติ"><input type="date" style={S.input} value={f.approvalDate} onChange={set("approvalDate")} /></Field>
+        <Field label="ผลการอนุมัติ"><select style={S.input} value={f.outcome} onChange={set("outcome")}><option value="">- ยังไม่ระบุ -</option>{LK_OUTCOME.map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
+        <Field label="เงื่อนไขที่กำหนด" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.conditionsImposed} onChange={set("conditionsImposed")} /></Field>
+        <Field label="วันที่มีผลบังคับใช้"><input type="date" style={S.input} value={f.effectiveDate} onChange={set("effectiveDate")} /></Field>
+        <Field label="วันที่ทบทวนครั้งถัดไป"><input type="date" style={S.input} value={f.nextReviewDate} onChange={set("nextReviewDate")} /></Field>
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.instrumentId || !f.subject} />
+    </Modal>
+  );
+}
+
 // Unified "Daily check" tab — one dropdown covering every equipment type
 // that has a dedicated daily-check design: เครื่องชั่ง (weight check),
 // pH Meter / EC Meter (buffer / standard-solution check), Polarimeter
@@ -3287,6 +3903,33 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
               </button>
             </div>
           )}
+
+          {/* Sheet 04: Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance), Action
+              Limit = ค่าอ้างอิง ± Tolerance — computed straight from the
+              Tolerance/MPE set on this instrument in Sheet 01 (ทะเบียน
+              เครื่องมือ). Reference point defaults to the midpoint of the
+              instrument's working range; shown only when Tolerance is set,
+              so equipment not part of the formal calibration register is
+              unaffected. */}
+          {equip && equip.tolerance != null && equip.tolerance !== "" && (() => {
+            const refBasis = (Number(equip.workingRangeMin) + Number(equip.workingRangeMax)) / 2 || Number(equip.workingRangeMax) || 0;
+            const lims = warningActionLimits(equip, refBasis);
+            if (!lims) return null;
+            return (
+              <div style={{ ...S.panel, marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <AlertTriangle size={14} color="var(--amber)" />
+                  <span style={{ fontSize: 12.5, fontWeight: 700 }}>เกณฑ์ Warning / Action Limit (Sheet 04, อ้างอิงจุดกลางช่วงใช้งาน {refBasis}{equip.calUnit ? ` ${equip.calUnit}` : ""})</span>
+                </div>
+                <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
+                  <span>LWL: <b style={{ color: "var(--amber)" }}>{lims.lwl.toFixed(4)}</b></span>
+                  <span>UWL: <b style={{ color: "var(--amber)" }}>{lims.uwl.toFixed(4)}</b></span>
+                  <span>LAL: <b style={{ color: "var(--red)" }}>{lims.lal.toFixed(4)}</b></span>
+                  <span>UAL: <b style={{ color: "var(--red)" }}>{lims.ual.toFixed(4)}</b></span>
+                </div>
+              </div>
+            );
+          })()}
 
           {equip && (
             <div style={S.statGrid}>
@@ -6939,6 +7582,261 @@ function buildMPIRLookupSheet() {
   return ws;
 }
 
+// ---- Sheets 02/03 and 05-09: filled from the calibration module's own
+// records. Sheet 03, 06 and 07 hold no stored rows of their own — they are
+// derived views, so they're recomputed here at export time exactly the way
+// the on-screen tables compute them, which keeps the workbook and the app
+// from ever disagreeing. ----
+const codeOf = (equipment, id) => equipment.find(e => e.id === id)?.code || "";
+
+function mpirCertificateRows(certificates, equipment) {
+  return certificates.map(c => mpirRowFromMap(MPIR_DOC.sheets[1].headers, {
+    "Record ID": c.id,
+    "Instrument ID": codeOf(equipment, c.instrumentId),
+    "Certificate No.": c.certificateNo || "",
+    "Calibration Provider": c.provider || "",
+    "Provider Accreditation Status": c.providerAccreditationStatus || "",
+    "Provider Accreditation No.": c.providerAccreditationNo || "",
+    "Calibration Date": c.calibrationDate || "",
+    "Issue Date": c.issueDate || "",
+    "Calibration Method": c.calibrationMethod || "",
+    "Reference Standard Used": c.referenceStandardUsed || "",
+    "Metrological Traceability": c.traceability || "",
+    "Temperature (°C)": c.temperatureC ?? "",
+    "Humidity (%RH)": c.humidityRH ?? "",
+    "Parameter": c.parameter || "",
+    "Range ID": c.rangeId || "",
+    "Calibration Point": c.calibrationPoint ?? "",
+    "Unit": c.unit || "",
+    "Reported As": c.reportedAs || "",
+    "Reference Value": c.referenceValue ?? "",
+    "Indication": c.indication ?? "",
+    "Reported Error": c.reportedError ?? "",
+    "Reported Correction": c.reportedCorrection ?? "",
+    "Adjustment Status": c.adjustmentStatus || "",
+    "Derived Error": derivedErrorOf(c) ?? "",
+    "U Reported As": c.uReportedAs || "",
+    "Reported U": c.reportedU ?? "",
+    "Expanded Uncertainty (abs)": derivedUOf(c) ?? "",
+    "Coverage Factor": c.coverageFactor ?? "",
+    "Coverage Probability (%)": c.coverageProbabilityPct ?? "",
+    "Provider Statement of Conformity": c.providerStatementOfConformity || "",
+    "Provider Decision Rule": c.providerDecisionRule || "",
+    "Limitations / Notes on Certificate": c.limitationsNotes || "",
+    "Missing Items": c.missingItems || "",
+    "Reviewed By": c.reviewedBy || "",
+    "Review Date": c.reviewDate || "",
+    "Record Status": c.recordStatus || "",
+    "Certificate PDF Link": c.pdfLink || "",
+    "Calibration Year (BE)": beYear(c.calibrationDate),
+  }));
+}
+
+function mpirAcceptanceRows(certificates, equipment) {
+  return certificates.map((c, i) => {
+    const instrument = equipment.find(e => e.id === c.instrumentId);
+    const ev = evaluateAcceptance(c, instrument);
+    return mpirRowFromMap(MPIR_DOC.sheets[2].headers, {
+      "Index": i + 1,
+      "Instrument ID": codeOf(equipment, c.instrumentId),
+      "Certificate No.": c.certificateNo || "",
+      "Parameter": c.parameter || "",
+      "Calibration Point": c.calibrationPoint ?? "",
+      "Unit": c.unit || "",
+      "Error": derivedErrorOf(c) ?? "",
+      "Absolute Error": ev.absError ?? "",
+      "Expanded Uncertainty": derivedUOf(c) ?? "",
+      "Applied Tolerance": ev.tol ?? "",
+      "Tolerance Type": instrument?.toleranceType || "",
+      "Basis of Criteria": instrument?.basisOfCriteria || "",
+      "Applied Decision Rule": LK_RULE.find(r => r.key === (instrument?.decisionRule || "simple"))?.label || "",
+      "Guard Band Factor": instrument?.guardBandFactor ?? "",
+      "Acceptance Limit": ev.limit ?? "",
+      "Tolerance Utilization (%)": ev.utilizationPct ?? "",
+      "Test Uncertainty Ratio": ev.tur ?? "",
+      "Normalized Error": ev.en ?? "",
+      "Decision": ev.decision,
+      "Rationale / Condition": ev.rationale,
+      "Evaluated By": c.evaluatedBy || "",
+      "Evaluation Date": c.evaluationDate || "",
+      "Approved By": c.approvedBy || "",
+      "Approval Date": c.approvalDate || "",
+      "Calibration Year (BE)": beYear(c.calibrationDate),
+    });
+  });
+}
+
+function mpirIntermediateCheckRows(checks, equipment) {
+  return checks.map(c => {
+    const instrument = equipment.find(e => e.id === c.instrumentId);
+    const calc = calcIntermediateCheck(c, instrument);
+    return mpirRowFromMap(MPIR_DOC.sheets[3].headers, {
+      "Check Date": c.checkDate || "",
+      "Instrument ID": codeOf(equipment, c.instrumentId),
+      "Parameter": c.parameter || "",
+      "Check Type": c.checkType || "",
+      "Check Item": c.checkItem || "",
+      "Check Standard": c.checkStandard || "",
+      "Check Standard ID": c.checkStandardId || "",
+      "Reference Value": c.referenceValue ?? "",
+      "U of Check Standard": c.uOfCheckStandard ?? "",
+      "Unit": c.unit || "",
+      "Reading 1": c.reading1 ?? "", "Reading 2": c.reading2 ?? "", "Reading 3": c.reading3 ?? "",
+      "Reading 4": c.reading4 ?? "", "Reading 5": c.reading5 ?? "",
+      "Mean": calc.mean ?? "",
+      "Standard Deviation": calc.sd ?? "",
+      "Relative SD": calc.rsdPct ?? "",
+      "Applied Correction": c.appliedCorrection ?? "",
+      "Corrected Mean": calc.correctedMean ?? "",
+      "Bias": calc.bias ?? "",
+      "Relative Bias (%)": calc.relativeBiasPct ?? "",
+      "Applied Tolerance": calc.tol ?? "",
+      "LWL": calc.lwl ?? "", "UWL": calc.uwl ?? "",
+      "LAL": calc.lal ?? "", "UAL": calc.ual ?? "",
+      "Result": calc.result,
+      "Checked By": c.checkedBy || "",
+      "Reviewed By": c.reviewedBy || "",
+      "Action on Failure": c.actionOnFailure || "",
+      "CAR / NC No.": c.carNo || "",
+      "Remarks": c.remarks || "",
+      "Record Year (BE)": beYear(c.checkDate),
+    });
+  });
+}
+
+function mpirUncertaintyRows(budgets, equipment) {
+  // Grouped by Budget ID so uc / k / U land on the same rows the app shows.
+  const groups = {};
+  budgets.forEach(b => { (groups[b.budgetId || "-"] = groups[b.budgetId || "-"] || []).push(b); });
+  const rows = [];
+  Object.entries(groups).forEach(([budgetId, list]) => {
+    const { rows: calcRows, uc, k, U } = combineUncertaintyBudget(list);
+    calcRows.forEach((r, i) => {
+      rows.push(mpirRowFromMap(MPIR_DOC.sheets[4].headers, {
+        "Budget ID": budgetId,
+        "Instrument ID": codeOf(equipment, r.instrumentId),
+        "Test Method": r.testMethod || "",
+        "Parameter": r.parameter || "",
+        "Uncertainty Component": r.component || "",
+        "Symbol": r.symbol || "",
+        "Value": r.value ?? "",
+        "Unit": r.unit || "",
+        "Distribution": r.distribution || "",
+        "Divisor": r.divisor ?? "",
+        "Standard Uncertainty": r.u ?? "",
+        "Sensitivity Coefficient": r.sensitivityCoefficient ?? "",
+        "Contribution": r.contribution ?? "",
+        "Squared Contribution": r.contributionSq ?? "",
+        "Degrees of Freedom": r.degreesOfFreedom ?? "",
+        "Percent Contribution": r.pctContribution ?? "",
+        "Data Source": r.dataSource || "",
+        "Review Date": r.reviewDate || "",
+        "Approved By": r.approvedBy || "",
+        // The summary block on the right of Sheet 05 is written once per
+        // budget (on its first row) rather than repeated down every row.
+        "รหัส Budget ID": i === 0 ? budgetId : "",
+        "uc (Combined standard uncertainty)": i === 0 ? uc : "",
+        "k": i === 0 ? k : "",
+        "U (Expanded uncertainty)": i === 0 ? U : "",
+      }));
+    });
+  });
+  return rows;
+}
+
+function mpirTrendRows(certificates, equipment) {
+  return computeTrendRows(certificates, equipment).map(t => mpirRowFromMap(MPIR_DOC.sheets[5].headers, {
+    "Instrument ID": codeOf(equipment, t.cert.instrumentId),
+    "Parameter": t.cert.parameter || "",
+    "Calibration Point": t.cert.calibrationPoint ?? "",
+    "Calibration Year": t.calibYearBE,
+    "Calibration Date": t.cert.calibrationDate || "",
+    "Error": t.error ?? "",
+    "Correction": t.cert.reportedCorrection ?? "",
+    "Expanded Uncertainty": derivedUOf(t.cert) ?? "",
+    "Applied Tolerance": t.tol ?? "",
+    "Tolerance Utilization (%)": (t.tol && t.error != null) ? Math.round((Math.abs(t.error) / t.tol) * 1000) / 10 : "",
+    "Drift from Previous": t.drift ?? "",
+    "Years between Rounds": t.yearsBetween != null ? Math.round(t.yearsBetween * 100) / 100 : "",
+    "Drift Rate per Year": t.driftRate ?? "",
+    "Projected Error": t.projected ?? "",
+    "Years to Out-of-Tolerance": t.yearsToOOT != null ? Math.round(t.yearsToOOT * 100) / 100 : "",
+    "Trend Flag": t.flag,
+  }));
+}
+
+function mpirEquipmentStatusRows(equipment, certificates, intermediateChecks) {
+  return computeEquipmentStatusRows(equipment, certificates, intermediateChecks).map(r => mpirRowFromMap(MPIR_DOC.sheets[6].headers, {
+    "Instrument ID": r.e.code || "",
+    "Parameter": r.e.measuredParameter || "",
+    "Instrument Name": r.e.name || "",
+    "Group": r.e.riskGroup || resolveEquipGroup(r.e),
+    "Last Calibration": r.e.lastCalibration || "",
+    "Next Due Date": r.e.nextDue || "",
+    "Days Remaining": r.days ?? "",
+    "Calibration Cycle Status": STATUS_LABEL[r.cycleStatus] || "",
+    "Overall Calibration Decision": r.overall,
+    "Max Tolerance Utilization": r.maxUtilization || "",
+    "No. of Failing Points": r.failingCount,
+    "Failed Checks (90 days)": r.failedChecks90,
+    "Risk Priority Number": r.rpn ?? "",
+    "Usage Status": r.e.currentStatus || "",
+    "Approved By": r.e.authorizedBy || "",
+    "Remarks / Conditions of Use": r.e.notes || "",
+    "Latest Round Summarised": r.calibYearBE,
+  }));
+}
+
+function mpirActionImpactRows(actionImpacts, equipment) {
+  return actionImpacts.map(a => mpirRowFromMap(MPIR_DOC.sheets[7].headers, {
+    "Action ID": a.actionId || a.id,
+    "Date Identified": a.dateIdentified || "",
+    "Instrument ID": codeOf(equipment, a.instrumentId),
+    "Source of Finding": a.source || "",
+    "Description of Nonconformity": a.description || "",
+    "Assessed Decision": a.assessedDecision || "",
+    "Impact Period From": a.impactFrom || "",
+    "Impact Period To": a.impactTo || "",
+    "Affected Test Methods": a.affectedTestMethods || "",
+    "No. of Reports Affected": a.reportsAffected ?? "",
+    "Retrospective Impact Evaluation": a.retrospectiveEvaluation || "",
+    "Impact on Test Results": a.impactOnResults || "",
+    "Customer Notification Required": a.customerNotification || "",
+    "Immediate Correction": a.immediateCorrection || "",
+    "Corrective Action": a.correctiveAction || "",
+    "CAR No.": a.carNo || "",
+    "Responsible Person": a.responsiblePerson || "",
+    "Target Date": a.targetDate || "",
+    "Action Status": a.actionStatus || "",
+    "Verification of Effectiveness": a.verification || "",
+    "Closed By": a.closedBy || "",
+    "Closing Date": a.closingDate || "",
+  }));
+}
+
+function mpirApprovalRows(approvalRecords, equipment) {
+  return approvalRecords.map(a => mpirRowFromMap(MPIR_DOC.sheets[8].headers, {
+    "Approval ID": a.approvalId || a.id,
+    "Date": a.date || "",
+    "Instrument ID": codeOf(equipment, a.instrumentId),
+    "Reference Certificate No.": a.referenceCertificateNo || "",
+    "Subject of Approval": a.subject || "",
+    "Summary of Request": a.summary || "",
+    "Supporting Documents": a.supportingDocuments || "",
+    "Prepared By": a.preparedBy || "",
+    "Position": a.position || "",
+    "Prepared Date": a.preparedDate || "",
+    "Reviewed By": a.reviewedBy || "",
+    "Review Date": a.reviewDate || "",
+    "Approved By": a.approvedBy || "",
+    "Approval Date": a.approvalDate || "",
+    "Approval Outcome": a.outcome || "",
+    "Conditions Imposed": a.conditions || "",
+    "Effective Date": a.effectiveDate || "",
+    "Next Review Date": a.nextReviewDate || "",
+  }));
+}
+
 // ---- Sheet 11: User Guide - short note on what this particular export covers ----
 function buildMPIRUserGuideSheet(generatedAt) {
   const aoa = [
@@ -6948,11 +7846,16 @@ function buildMPIRUserGuideSheet(generatedAt) {
     [""],
     ["Sheet ที่กรอกข้อมูลอัตโนมัติจากแอป / Auto-filled from the app:"],
     ["  • 01_Instrument_Master — จากรายการ \"เครื่องมือ\" ในแอป"],
-    ["  • 04_Daily_Intermediate_Check — จากบันทึก \"Daily check\" ในแอป"],
+    ["  • 02_Certificate_Data — จากหน้า \"ใบรับรองสอบเทียบ\" (รวมที่อ่านจาก PDF ด้วย AI)"],
+    ["  • 04_Daily_Intermediate_Check — จากบันทึก \"Daily check\" และ \"ตรวจสอบระหว่างรอบ\""],
+    ["  • 05_Uncertainty_Input — จากหน้า \"Uncertainty Budget\""],
+    ["  • 08_Action_and_Impact — จากหน้า \"การดำเนินการ/ผลกระทบ\""],
+    ["  • 09_Approval_Record — จากหน้า \"บันทึกการอนุมัติ\""],
     [""],
-    ["Sheet ที่ต้องกรอกด้วยตนเอง (แอปยังไม่ได้เก็บข้อมูลส่วนนี้) / Fill in manually — not yet tracked in the app:"],
-    ["  • 02_Certificate_Data, 03_Acceptance_Criteria, 05_Uncertainty_Input,"],
-    ["    06_Trend_Analysis, 07_Equipment_Status, 08_Action_and_Impact, 09_Approval_Record"],
+    ["Sheet ที่คำนวณอัตโนมัติ ไม่ต้องกรอก / Derived — recomputed at export time:"],
+    ["  • 03_Acceptance_Criteria — เทียบใบรับรอง (02) กับเกณฑ์ในทะเบียนเครื่องมือ (01)"],
+    ["  • 06_Trend_Analysis — เทียบผลข้ามรอบจาก 02"],
+    ["  • 07_Equipment_Status — สรุปจาก 01 + 03 + 04"],
     [""],
     ["โปรดตรวจทานข้อมูลที่กรอกอัตโนมัติ และให้ Technical Manager อนุมัติเกณฑ์ก่อนใช้เป็นเอกสารทางการ"],
   ];
@@ -6961,11 +7864,28 @@ function buildMPIRUserGuideSheet(generatedAt) {
   return ws;
 }
 
-function exportMPIRWorkbook(equipment, dailyChecks) {
+function exportMPIRWorkbook(equipment, dailyChecks, cal = {}) {
+  const {
+    certificates = [], intermediateChecks = [], uncertaintyBudgets = [],
+    actionImpacts = [], approvalRecords = [],
+  } = cal;
   const wb = XLSX.utils.book_new();
   const rowsBySheet = {
     "01_Instrument_Master": () => mpirInstrumentMasterRows(equipment),
-    "04_Daily_Intermediate_Check": () => mpirDailyCheckRows(dailyChecks, equipment),
+    "02_Certificate_Data": () => mpirCertificateRows(certificates, equipment),
+    "03_Acceptance_Criteria": () => mpirAcceptanceRows(certificates, equipment),
+    // Sheet 04 carries both the per-type Daily checks and the general
+    // Intermediate Check records, since the template treats them as one
+    // log distinguished by its own "ประเภทการตรวจสอบ" column.
+    "04_Daily_Intermediate_Check": () => [
+      ...mpirDailyCheckRows(dailyChecks, equipment),
+      ...mpirIntermediateCheckRows(intermediateChecks, equipment),
+    ],
+    "05_Uncertainty_Input": () => mpirUncertaintyRows(uncertaintyBudgets, equipment),
+    "06_Trend_Analysis": () => mpirTrendRows(certificates, equipment),
+    "07_Equipment_Status": () => mpirEquipmentStatusRows(equipment, certificates, intermediateChecks),
+    "08_Action_and_Impact": () => mpirActionImpactRows(actionImpacts, equipment),
+    "09_Approval_Record": () => mpirApprovalRows(approvalRecords, equipment),
   };
   MPIR_DOC.sheets.forEach(sheet => {
     const rows = (rowsBySheet[sheet.name] ? rowsBySheet[sheet.name]() : []);
@@ -6995,7 +7915,8 @@ function dailyCheckSummaryText(c) {
   return parts.join(" · ");
 }
 
-function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consumables, purchaseRequests }) {
+function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consumables, purchaseRequests,
+  certificates = [], intermediateChecks = [], uncertaintyBudgets = [], actionImpacts = [], approvalRecords = [] }) {
   // Turns a header row + body rows (where a cell can be a plain value or a
   // { text, url } pair from link() above) into a worksheet with genuine
   // Excel cell hyperlinks — not text tricks — on every url cell.
@@ -7078,7 +7999,9 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
   // matching the lab's official calibration-record template. Kept as its
   // own panel (not a generic list-export card) since it produces one
   // multi-sheet document rather than one flat table.
-  const exportMPIR = () => exportMPIRWorkbook(equipment, dailyChecks);
+  const exportMPIR = () => exportMPIRWorkbook(equipment, dailyChecks, {
+    certificates, intermediateChecks, uncertaintyBudgets, actionImpacts, approvalRecords,
+  });
 
   const cards = [
     { title: "เครื่องมือทั้งหมด", desc: `${equipment.length} รายการ พร้อมกำหนดสอบเทียบ`, action: exportEquipment, icon: Wrench },
@@ -7173,7 +8096,10 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
         <div style={S.panelHead}><ClipboardList size={16} color="var(--teal)" /><span style={S.panelTitle}>MPIR Calibration Record (RDI-LF-070)</span></div>
         <div style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 12px" }}>
           ส่งออกไฟล์ Excel ตามฟอร์แมตแบบบันทึกและประเมินเกณฑ์การสอบเทียบเครื่องมือวัดของ MPIR ทั้ง 11 Sheet ในไฟล์เดียว —
-          Sheet "01_Instrument_Master" ({equipment.length} รายการ) และ "04_Daily_Intermediate_Check" ({dailyChecks.length} รายการ) กรอกข้อมูลอัตโนมัติจากแอปนี้
+          กรอกข้อมูลอัตโนมัติจากแอปนี้ทุก Sheet — ทะเบียนเครื่องมือ {equipment.length} รายการ, ใบรับรอง {certificates.length} จุดสอบเทียบ,
+          ตรวจสอบระหว่างรอบ {dailyChecks.length + intermediateChecks.length} รายการ, Uncertainty {uncertaintyBudgets.length} องค์ประกอบ,
+          การดำเนินการ {actionImpacts.length} เรื่อง, การอนุมัติ {approvalRecords.length} รายการ
+          {" — "}Sheet 03 / 06 / 07 คำนวณให้อัตโนมัติตอนส่งออก
           ส่วน Sheet ที่เหลือ (ใบรับรอง, Uncertainty, Trend, สถานะเครื่องมือ, CAR/NC, การอนุมัติ) ยังไม่มีข้อมูลในแอป จึงส่งออกเฉพาะหัวตารางให้กรอกต่อด้วยมือ
         </div>
         <button style={S.smallBtn} onClick={exportMPIR}>
