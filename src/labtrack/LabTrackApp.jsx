@@ -423,6 +423,46 @@ const LK_CURRENT_STATUS = [
   "ใช้งานแบบจำกัดช่วง (Restricted use)",
   "งดใช้งาน (Out of service)",
 ];
+// Descriptive anchors for the RPN risk-score inputs (Sheet 01, cols 28-30) —
+// plain 1-5 number fields gave no guidance on what each level means, which
+// left them ambiguous enough to skip entirely (every one of the 73
+// instruments had these blank). Detectability follows standard FMEA
+// convention: 5 = hardest to detect (worst), consistent with RPN = S×O×D
+// treating every factor as "higher is worse".
+const SEVERITY_SCALE = [
+  { v: 1, short: "1 · น้อยมาก", full: "1 — น้อยมาก: ไม่กระทบผลการทดสอบ" },
+  { v: 2, short: "2 · น้อย", full: "2 — น้อย: กระทบเล็กน้อย แก้ไขได้ง่ายโดยไม่ต้องออกรายงานใหม่" },
+  { v: 3, short: "3 · ปานกลาง", full: "3 — ปานกลาง: อาจกระทบผลทดสอบบางรายการ ต้องทบทวน" },
+  { v: 4, short: "4 · สูง", full: "4 — สูง: กระทบผลทดสอบที่รายงานไปแล้ว ต้องออกรายงานฉบับแก้ไข" },
+  { v: 5, short: "5 · รุนแรง", full: "5 — รุนแรง: กระทบผลทดสอบเป็นวงกว้างหรือความปลอดภัย/ความน่าเชื่อถือของลูกค้า" },
+];
+const OCCURRENCE_SCALE = [
+  { v: 1, short: "1 · แทบไม่เกิด", full: "1 — แทบไม่เคยเกิด: เครื่องมือเสถียรมาก ไม่เคยพบปัญหา" },
+  { v: 2, short: "2 · นานๆ ครั้ง", full: "2 — นานๆ ครั้ง: เคยพบปัญหาห่างๆ" },
+  { v: 3, short: "3 · เป็นระยะ", full: "3 — เกิดขึ้นเป็นระยะ: พบปัญหาเฉลี่ยปีละ 1-2 ครั้ง" },
+  { v: 4, short: "4 · บ่อย", full: "4 — เกิดบ่อย: พบปัญหาเกือบทุกรอบการตรวจสอบ" },
+  { v: 5, short: "5 · บ่อยมาก", full: "5 — บ่อยมาก: พบปัญหาเกือบทุกครั้งที่ใช้งาน" },
+];
+const DETECTABILITY_SCALE = [
+  { v: 1, short: "1 · ตรวจพบง่ายมาก", full: "1 — ตรวจพบได้ทันทีทุกครั้ง (มี Daily/Intermediate Check คุมอยู่)" },
+  { v: 2, short: "2 · ตรวจพบง่าย", full: "2 — ตรวจพบได้ง่ายในการใช้งานปกติ" },
+  { v: 3, short: "3 · ปานกลาง", full: "3 — ตรวจพบได้ปานกลาง อาจต้องสังเกตเพิ่มเติม" },
+  { v: 4, short: "4 · ตรวจพบยาก", full: "4 — ตรวจพบได้ยาก ต้องอาศัยการทวนสอบเฉพาะทาง" },
+  { v: 5, short: "5 · ตรวจพบยากมาก", full: "5 — แทบตรวจไม่พบจนกว่าจะถึงรอบสอบเทียบถัดไป" },
+];
+function ScoreSelect({ value, onChange, scale, compact }) {
+  return (
+    <select
+      style={{ ...S.input, ...(compact ? { minWidth: 118, fontSize: 12 } : {}) }}
+      value={value ?? ""}
+      onChange={e => onChange(e.target.value)}
+      title={scale.find(s => String(s.v) === String(value))?.full || ""}
+    >
+      <option value="">- เลือกระดับ -</option>
+      {scale.map(s => <option key={s.v} value={s.v} title={s.full}>{compact ? s.short : s.full}</option>)}
+    </select>
+  );
+}
 // Thai Buddhist-Era year (พ.ศ.) from a YYYY-MM-DD string — used on both
 // certificate records and the acceptance table ("รอบการสอบเทียบ (พ.ศ.)").
 function beYear(dateStr) {
@@ -1059,6 +1099,31 @@ function calibCriteriaGaps(e) {
   if (!e.decisionRule) gaps.push("Decision Rule");
   if ([e.severity, e.occurrence, e.detectability].some(v => v === undefined || v === null || v === "")) gaps.push("Risk score (S/O/D)");
   return gaps;
+}
+// Suggests default calibration criteria for a given instrument `type` by
+// copying them from an existing instrument of the same type that already
+// has a complete criteria set (Tolerance/Decision Rule/Risk score) —
+// instruments of the same type in a lab (e.g. every Refractometer) almost
+// always share the same tolerance/decision-rule/risk assessment, so this
+// turns "type in an existing template" into a one-click fill instead of
+// re-deriving it from scratch for every new/blank instrument. Picks the
+// alphabetically-first matching template so the suggestion is deterministic
+// (not "whichever was edited most recently").
+function suggestCriteriaByType(type, equipment, excludeId) {
+  if (!type) return null;
+  const templates = equipment
+    .filter(e => e.id !== excludeId && e.type === type && resolveEquipGroup(e) === EQUIP_GROUP_LABEL.analytical && calibCriteriaGaps(e).length === 0)
+    .slice().sort((a, b) => alphaCompare(a.code, b.code));
+  if (!templates.length) return null;
+  const t = templates[0];
+  return {
+    measuredParameter: t.measuredParameter || "", calUnit: t.calUnit || "",
+    tolerance: t.tolerance ?? "", toleranceType: t.toleranceType || "absolute",
+    basisOfCriteria: t.basisOfCriteria || "", referenceDocument: t.referenceDocument || "",
+    decisionRule: t.decisionRule || "simple", guardBandFactor: t.guardBandFactor ?? "",
+    severity: t.severity ?? "", occurrence: t.occurrence ?? "", detectability: t.detectability ?? "",
+    checkFrequency: t.checkFrequency || "", sourceCode: t.code,
+  };
 }
 const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
 // A more honest label than the raw status: "approved" alone doesn't say
@@ -2192,7 +2257,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       </div>
 
       {editing && (
-        <EquipmentForm item={editing} groupOptions={groupOptions} onCancel={() => setEditing(null)} onSave={upsert} />
+        <EquipmentForm item={editing} equipment={equipment} groupOptions={groupOptions} onCancel={() => setEditing(null)} onSave={upsert} />
       )}
       {selectedItem && (
         <EquipmentDetail
@@ -2281,9 +2346,16 @@ function ImageUploadField({ label, value, onChange }) {
   );
 }
 
-function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
+function EquipmentForm({ item, equipment = [], groupOptions = [], onCancel, onSave }) {
   const [f, setF] = useState(item);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const suggestion = useMemo(() => suggestCriteriaByType(f.type, equipment, f.id), [f.type, equipment, f.id]);
+  const criteriaEmpty = !f.tolerance && !f.decisionRule && f.severity == null && f.occurrence == null && f.detectability == null;
+  function applySuggestion() {
+    if (!suggestion) return;
+    const { sourceCode, ...vals } = suggestion;
+    setF({ ...f, ...vals });
+  }
   return (
     <Modal onClose={onCancel} title={item.code ? "แก้ไขเครื่องมือ" : "เพิ่มเครื่องมือใหม่"}>
       <div style={S.formGrid} className="ltFormGrid">
@@ -2421,6 +2493,18 @@ function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
         <div style={{ gridColumn: "1 / -1", marginTop: 6, paddingTop: 10, borderTop: "1px dashed var(--line)", fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)" }}>
           ข้อมูลทะเบียนสอบเทียบ (ISO/IEC 17025) — ไม่บังคับ
         </div>
+        {suggestion && criteriaEmpty && (
+          <div style={{
+            gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+            background: "#E9F1FB", border: "1px solid var(--teal)", borderRadius: 8, padding: "8px 11px", fontSize: 12,
+          }}>
+            <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>
+              พบเกณฑ์ที่ตั้งไว้แล้วสำหรับเครื่องมือประเภท "{f.type}" (จาก {suggestion.sourceCode}) — ใช้เป็นค่าเริ่มต้นได้เลย
+            </span>
+            <button type="button" style={S.smallBtn} onClick={applySuggestion}>ใช้ค่านี้</button>
+          </div>
+        )}
         <Field label="ผู้รับผิดชอบ (Custodian)"><input style={S.input} value={f.custodian || ""} onChange={set("custodian")} /></Field>
         <Field label="เลขทรัพย์สิน (Asset No.)"><input style={S.input} value={f.assetNo || ""} onChange={set("assetNo")} /></Field>
         <Field label="กลุ่มเครื่องมือ (A/B/C)"><input style={S.input} value={f.riskGroup || ""} onChange={set("riskGroup")} placeholder="A / B / C" /></Field>
@@ -2451,9 +2535,15 @@ function EquipmentForm({ item, groupOptions = [], onCancel, onSave }) {
           <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.guardBandFactor ?? ""} onChange={set("guardBandFactor")} placeholder="เช่น 1" /></Field>
         )}
         <Field label="ความถี่ Daily/Intermediate Check"><input style={S.input} value={f.checkFrequency || ""} onChange={set("checkFrequency")} placeholder="เช่น ทุกวัน, ทุกสัปดาห์" /></Field>
-        <Field label="Severity (1-5)"><input type="number" min="1" max="5" style={S.input} value={f.severity ?? ""} onChange={set("severity")} /></Field>
-        <Field label="Occurrence (1-5)"><input type="number" min="1" max="5" style={S.input} value={f.occurrence ?? ""} onChange={set("occurrence")} /></Field>
-        <Field label="Detectability (1-5)"><input type="number" min="1" max="5" style={S.input} value={f.detectability ?? ""} onChange={set("detectability")} /></Field>
+        <Field label="Severity — ผลกระทบหากเครื่องมือคลาดเคลื่อน">
+          <ScoreSelect value={f.severity} onChange={v => setF({ ...f, severity: v })} scale={SEVERITY_SCALE} />
+        </Field>
+        <Field label="Occurrence — ความถี่ที่เคยเกิดปัญหา">
+          <ScoreSelect value={f.occurrence} onChange={v => setF({ ...f, occurrence: v })} scale={OCCURRENCE_SCALE} />
+        </Field>
+        <Field label="Detectability — ความยากในการตรวจพบ">
+          <ScoreSelect value={f.detectability} onChange={v => setF({ ...f, detectability: v })} scale={DETECTABILITY_SCALE} />
+        </Field>
         {(() => { const { rpn, level } = calcRPN(f.severity, f.occurrence, f.detectability); return (
           <Field label="RPN / ระดับความเสี่ยง (คำนวณอัตโนมัติ)">
             <div style={{ ...S.input, background: "#F5F8F7", display: "flex", alignItems: "center", gap: 8 }}>
@@ -2548,6 +2638,33 @@ function CriteriaGridEditor({ equipment, setEquipment, notify, onClose }) {
     setDraft(prev => ({ ...prev, [id]: { ...prev[id], [key]: value } }));
   }
 
+  // Copies criteria from an existing, already-complete instrument of the
+  // same `type` into any row here that's still missing them — only fills
+  // fields that are still empty in the draft, so it never overwrites
+  // something the user already typed in this session or on the record.
+  function fillDefaultsByType() {
+    const isEmpty = (v) => v === undefined || v === null || v === "";
+    const patch = {};
+    let count = 0;
+    rows.forEach(e => {
+      const cur = draft[e.id] || e;
+      const needsAny = isEmpty(cur.tolerance) || !cur.decisionRule || isEmpty(cur.severity) || isEmpty(cur.occurrence) || isEmpty(cur.detectability);
+      if (!needsAny) return;
+      const sug = suggestCriteriaByType(cur.type, equipment, e.id);
+      if (!sug) return;
+      const merged = { ...cur };
+      Object.keys(sug).forEach(k => { if (k !== "sourceCode" && isEmpty(merged[k])) merged[k] = sug[k]; });
+      patch[e.id] = merged;
+      count++;
+    });
+    if (count > 0) {
+      setDraft(prev => ({ ...prev, ...patch }));
+      notify(`เติมค่าเริ่มต้นให้ ${count} เครื่องมือแล้ว (จากเครื่องมือประเภทเดียวกันที่มีเกณฑ์ครบแล้ว) — ตรวจสอบก่อนกด "บันทึก"`);
+    } else {
+      notify("ไม่พบเกณฑ์ต้นแบบสำหรับประเภทเครื่องมือที่ยังขาดอยู่ในรายการนี้");
+    }
+  }
+
   function saveAll() {
     const touchedIds = new Set(rows.map(e => e.id));
     const updated = equipment.map(e => (touchedIds.has(e.id) && draft[e.id]) ? { ...e, ...draft[e.id] } : e);
@@ -2568,6 +2685,9 @@ function CriteriaGridEditor({ equipment, setEquipment, notify, onClose }) {
         <span style={{ fontSize: 12, color: "var(--muted)" }}>
           {rows.length} รายการ — แก้ไขในตารางนี้แล้วกด "บันทึก" ครั้งเดียวเพื่อบันทึกทุกแถวพร้อมกัน
         </span>
+        <button type="button" style={{ ...S.smallBtn, marginLeft: "auto" }} onClick={fillDefaultsByType}>
+          <Sparkles size={13} /> เติมค่าเริ่มต้นตามประเภท
+        </button>
       </div>
       <div style={{ overflowX: "auto", border: "1px solid var(--line)", borderRadius: 10 }}>
         <table style={S.table}>
@@ -2605,16 +2725,13 @@ function CriteriaGridEditor({ equipment, setEquipment, notify, onClose }) {
                     </select>
                   </td>
                   <td style={S.td}>
-                    <input type="number" min="1" max="5" style={{ ...S.input, width: 48 }} value={d.severity ?? ""}
-                      onChange={ev => setField(e.id, "severity", ev.target.value)} />
+                    <ScoreSelect value={d.severity} onChange={v => setField(e.id, "severity", v)} scale={SEVERITY_SCALE} compact />
                   </td>
                   <td style={S.td}>
-                    <input type="number" min="1" max="5" style={{ ...S.input, width: 48 }} value={d.occurrence ?? ""}
-                      onChange={ev => setField(e.id, "occurrence", ev.target.value)} />
+                    <ScoreSelect value={d.occurrence} onChange={v => setField(e.id, "occurrence", v)} scale={OCCURRENCE_SCALE} compact />
                   </td>
                   <td style={S.td}>
-                    <input type="number" min="1" max="5" style={{ ...S.input, width: 48 }} value={d.detectability ?? ""}
-                      onChange={ev => setField(e.id, "detectability", ev.target.value)} />
+                    <ScoreSelect value={d.detectability} onChange={v => setField(e.id, "detectability", v)} scale={DETECTABILITY_SCALE} compact />
                   </td>
                   <td style={{ ...S.td, whiteSpace: "nowrap" }}>
                     <span style={{ fontFamily: "var(--font-mono)" }}>{rpn ?? "-"}</span>
