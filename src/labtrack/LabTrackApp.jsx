@@ -1929,6 +1929,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
   const [showImport, setShowImport] = useState(false);
+  const [showCriteriaGrid, setShowCriteriaGrid] = useState(false);
   const [bookingFor, setBookingFor] = useState(null); // equipment item to open the booking form for
 
   const types = useMemo(() => [...new Set(equipment.map(e => e.type).filter(Boolean))].sort(), [equipment]);
@@ -2043,15 +2044,17 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           style={{
             display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
             background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10,
-            padding: "9px 13px", fontSize: 12.5, color: "var(--ink)", cursor: "pointer",
+            padding: "9px 13px", fontSize: 12.5, color: "var(--ink)",
           }}
-          onClick={() => setCriteriaFilter("missing")}
         >
           <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
-          <span>
+          <span style={{ flex: 1 }}>
             <strong>{criteriaStats.missing}</strong> จาก {criteriaStats.total} เครื่องมือในทะเบียนสอบเทียบ
-            ยังไม่ได้กำหนดเกณฑ์ (Tolerance / Decision Rule / Risk score) — คลิกเพื่อกรองดูรายการ
+            ยังไม่ได้กำหนดเกณฑ์ (Tolerance / Decision Rule / Risk score)
           </span>
+          <button style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => setShowCriteriaGrid(true)}>
+            <ClipboardCheck size={13} /> กรอกเกณฑ์แบบตาราง
+          </button>
         </div>
       )}
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -2085,11 +2088,22 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
+        <button style={S.ghostBtn} onClick={() => setShowCriteriaGrid(true)}>
+          <ClipboardCheck size={14} style={{ marginRight: 4 }} /> กรอกเกณฑ์แบบตาราง
+        </button>
         <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", group: "", location: "", status: "active", lastCalibration: "", nextDue: "", intervalMonths: "", notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
       {showImport && <EquipmentImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
+      {showCriteriaGrid && (
+        <CriteriaGridEditor
+          equipment={equipment}
+          setEquipment={setEquipment}
+          notify={notify}
+          onClose={() => setShowCriteriaGrid(false)}
+        />
+      )}
 
       <div style={S.cardGrid}>
         {filtered.map(e => {
@@ -2494,6 +2508,128 @@ function EquipmentImportForm({ onCancel, onImport }) {
         ตรวจพบ <b>{parsed.length}</b> รายการที่จะนำเข้า (รายการเดิมจะไม่ถูกลบหรือทับ — รายการใหม่จะถูกเพิ่มเข้าไป)
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onImport(parsed)} disabled={parsed.length === 0} />
+    </Modal>
+  );
+}
+
+// Bulk editor for the Sheet 01 calibration-criteria fields (Tolerance/MPE,
+// Decision Rule, Risk score) — one row per instrument instead of one modal
+// per instrument. Built to clear the backlog the completeness banner
+// surfaces: filling these in one at a time through EquipmentForm for dozens
+// of instruments is what left them blank in the first place. Edits are kept
+// in local `draft` state and only written back to `equipment` on "บันทึก",
+// so closing without saving discards changes (same contract as every other
+// form in this app).
+function CriteriaGridEditor({ equipment, setEquipment, notify, onClose }) {
+  const [scope, setScope] = useState("missing"); // "missing" | "all"
+  const inScope = useMemo(
+    () => equipment.filter(e => resolveEquipGroup(e) === EQUIP_GROUP_LABEL.analytical),
+    [equipment]
+  );
+  const rows = useMemo(
+    () => (scope === "missing" ? inScope.filter(e => calibCriteriaGaps(e).length > 0) : inScope)
+      .slice().sort((a, b) => alphaCompare(a.code, b.code)),
+    [inScope, scope]
+  );
+  const [draft, setDraft] = useState({});
+  // Seed draft entries for any row not yet edited this session (covers both
+  // first render and switching scope to reveal more rows) — never clobbers
+  // an in-progress edit.
+  useEffect(() => {
+    setDraft(prev => {
+      const next = { ...prev };
+      let changed = false;
+      rows.forEach(e => { if (!next[e.id]) { next[e.id] = { ...e }; changed = true; } });
+      return changed ? next : prev;
+    });
+  }, [rows]);
+
+  function setField(id, key, value) {
+    setDraft(prev => ({ ...prev, [id]: { ...prev[id], [key]: value } }));
+  }
+
+  function saveAll() {
+    const touchedIds = new Set(rows.map(e => e.id));
+    const updated = equipment.map(e => (touchedIds.has(e.id) && draft[e.id]) ? { ...e, ...draft[e.id] } : e);
+    setEquipment(updated);
+    notify(`บันทึกเกณฑ์ ${rows.length} เครื่องมือแล้ว`);
+    onClose();
+  }
+
+  const CRIT_COLS = ["รหัส", "ชื่อเครื่องมือ", "พารามิเตอร์", "หน่วย", "Tolerance/MPE", "ชนิดเกณฑ์", "Decision Rule", "S", "O", "D", "RPN"];
+
+  return (
+    <Modal onClose={onClose} title="กรอกเกณฑ์การสอบเทียบแบบตาราง (Sheet 01)" xwide>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+        <select value={scope} onChange={e => setScope(e.target.value)} style={S.select}>
+          <option value="missing">แสดงเฉพาะที่เกณฑ์ยังไม่ครบ</option>
+          <option value="all">แสดงทั้งหมด (กลุ่มเครื่องมือวิเคราะห์)</option>
+        </select>
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>
+          {rows.length} รายการ — แก้ไขในตารางนี้แล้วกด "บันทึก" ครั้งเดียวเพื่อบันทึกทุกแถวพร้อมกัน
+        </span>
+      </div>
+      <div style={{ overflowX: "auto", border: "1px solid var(--line)", borderRadius: 10 }}>
+        <table style={S.table}>
+          <thead><tr>{CRIT_COLS.map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {rows.map(e => {
+              const d = draft[e.id] || e;
+              const { rpn, level } = calcRPN(d.severity, d.occurrence, d.detectability);
+              return (
+                <tr key={e.id} style={S.tr}>
+                  <td style={{ ...S.td, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{e.code}</td>
+                  <td style={{ ...S.td, whiteSpace: "nowrap" }}>{e.name}</td>
+                  <td style={S.td}>
+                    <input style={{ ...S.input, minWidth: 120 }} value={d.measuredParameter || ""}
+                      onChange={ev => setField(e.id, "measuredParameter", ev.target.value)} />
+                  </td>
+                  <td style={S.td}>
+                    <input style={{ ...S.input, width: 70 }} value={d.calUnit || ""}
+                      onChange={ev => setField(e.id, "calUnit", ev.target.value)} />
+                  </td>
+                  <td style={S.td}>
+                    <input type="number" step="any" style={{ ...S.input, width: 90 }} value={d.tolerance ?? ""}
+                      onChange={ev => setField(e.id, "tolerance", ev.target.value)} />
+                  </td>
+                  <td style={S.td}>
+                    <select style={{ ...S.input, minWidth: 110 }} value={d.toleranceType || "absolute"}
+                      onChange={ev => setField(e.id, "toleranceType", ev.target.value)}>
+                      {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}>
+                    <select style={{ ...S.input, minWidth: 160 }} value={d.decisionRule || "simple"}
+                      onChange={ev => setField(e.id, "decisionRule", ev.target.value)}>
+                      {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}>
+                    <input type="number" min="1" max="5" style={{ ...S.input, width: 48 }} value={d.severity ?? ""}
+                      onChange={ev => setField(e.id, "severity", ev.target.value)} />
+                  </td>
+                  <td style={S.td}>
+                    <input type="number" min="1" max="5" style={{ ...S.input, width: 48 }} value={d.occurrence ?? ""}
+                      onChange={ev => setField(e.id, "occurrence", ev.target.value)} />
+                  </td>
+                  <td style={S.td}>
+                    <input type="number" min="1" max="5" style={{ ...S.input, width: 48 }} value={d.detectability ?? ""}
+                      onChange={ev => setField(e.id, "detectability", ev.target.value)} />
+                  </td>
+                  <td style={{ ...S.td, whiteSpace: "nowrap" }}>
+                    <span style={{ fontFamily: "var(--font-mono)" }}>{rpn ?? "-"}</span>
+                    {level ? <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{level}</div> : null}
+                  </td>
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
+              <tr><td style={S.td} colSpan={CRIT_COLS.length}><EmptyState text="ไม่มีรายการในเงื่อนไขนี้ — เกณฑ์ครบทุกเครื่องมือแล้ว" /></td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <ModalFooter onCancel={onClose} onSave={saveAll} disabled={rows.length === 0} />
     </Modal>
   );
 }
