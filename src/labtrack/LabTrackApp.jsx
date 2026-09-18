@@ -1043,6 +1043,23 @@ function resolveEquipGroup(e) {
   if (g) return EQUIP_GROUP_LABEL[g] || g;
   return e.type === "เครื่องปรับอากาศ" ? EQUIP_GROUP_LABEL.aircon : EQUIP_GROUP_LABEL.analytical;
 }
+// Sheet 01 (Instrument Master) completeness check — mirrors the
+// Draft/Verified/"รายการที่ขาด" pattern already used for certificates
+// (Sheet 02), applied here to the calibration-criteria fields (Tolerance,
+// Decision Rule, Risk score) that determine every downstream calculation
+// (Sheet 03 acceptance decision, Sheet 04 warning/action limits, Sheet 07
+// status). Only equipment in the formal analytical/calibration register
+// group is checked — air conditioners and general support tools are
+// intentionally excluded per the field notes in EquipmentForm ("ไม่บังคับ...
+// เช่น general tools/aircon").
+function calibCriteriaGaps(e) {
+  if (resolveEquipGroup(e) !== EQUIP_GROUP_LABEL.analytical) return [];
+  const gaps = [];
+  if (e.tolerance === undefined || e.tolerance === null || e.tolerance === "") gaps.push("Tolerance/MPE");
+  if (!e.decisionRule) gaps.push("Decision Rule");
+  if ([e.severity, e.occurrence, e.detectability].some(v => v === undefined || v === null || v === "")) gaps.push("Risk score (S/O/D)");
+  return gaps;
+}
 const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
 // A more honest label than the raw status: "approved" alone doesn't say
 // whether the item has actually been returned/finished yet. Used anywhere
@@ -1908,6 +1925,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   const [typeFilter, setTypeFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState("all"); // "all" or any group label (free text)
   const [calibFilter, setCalibFilter] = useState("all"); // "all" | "warn" | "danger"
+  const [criteriaFilter, setCriteriaFilter] = useState("all"); // "all" | "missing" | "complete"
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
   const [showImport, setShowImport] = useState(false);
@@ -1922,10 +1940,22 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       const matchT = typeFilter === "all" || e.type === typeFilter;
       const matchG = groupFilter === "all" || resolveEquipGroup(e) === groupFilter;
       const matchC = calibFilter === "all" || statusOf(daysUntil(e.nextDue)) === calibFilter;
-      return matchQ && matchS && matchT && matchG && matchC;
+      const gaps = calibCriteriaGaps(e);
+      const matchCrit = criteriaFilter === "all" || (criteriaFilter === "missing" ? gaps.length > 0 : gaps.length === 0);
+      return matchQ && matchS && matchT && matchG && matchC && matchCrit;
     })
     .slice()
     .sort((a, b) => alphaCompare(a.code, b.code));
+
+  // Completeness summary for the calibration-criteria fields (Sheet 01) —
+  // counted only over equipment in the formal register group, so this
+  // reads as an honest "X of Y still need criteria" rather than lumping in
+  // aircon/support items that were never meant to have them.
+  const criteriaStats = useMemo(() => {
+    const inScope = equipment.filter(e => resolveEquipGroup(e) === EQUIP_GROUP_LABEL.analytical);
+    const missing = inScope.filter(e => calibCriteriaGaps(e).length > 0).length;
+    return { total: inScope.length, missing };
+  }, [equipment]);
 
   const groupCounts = useMemo(() => {
     const c = {};
@@ -2008,6 +2038,22 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   return (
     <div>
       <TabHeader title="เครื่องมือ" sub="รายการเครื่องมือทั้งหมดและกำหนดสอบเทียบ" />
+      {criteriaStats.missing > 0 && (
+        <div
+          style={{
+            display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
+            background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10,
+            padding: "9px 13px", fontSize: 12.5, color: "var(--ink)", cursor: "pointer",
+          }}
+          onClick={() => setCriteriaFilter("missing")}
+        >
+          <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
+          <span>
+            <strong>{criteriaStats.missing}</strong> จาก {criteriaStats.total} เครื่องมือในทะเบียนสอบเทียบ
+            ยังไม่ได้กำหนดเกณฑ์ (Tolerance / Decision Rule / Risk score) — คลิกเพื่อกรองดูรายการ
+          </span>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <ViewTab active={groupFilter === "all"} onClick={() => setGroupFilter("all")} label="ทั้งหมด" count={equipment.length} />
         {groupOrder.map(g => (
@@ -2031,6 +2077,11 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           <option value="warn">ใกล้ถึงรอบสอบเทียบ</option>
           <option value="danger">เลยกำหนดสอบเทียบ</option>
         </select>
+        <select value={criteriaFilter} onChange={e => setCriteriaFilter(e.target.value)} style={S.select}>
+          <option value="all">ทุกสถานะเกณฑ์</option>
+          <option value="missing">เกณฑ์ยังไม่ครบ</option>
+          <option value="complete">เกณฑ์ครบแล้ว</option>
+        </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
@@ -2046,6 +2097,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           const st = statusOf(days);
           const bk = equipmentBookingSummary(e.id, bookings);
           const isDisabled = e.status === "maintenance" || e.status === "inactive";
+          const critGaps = calibCriteriaGaps(e);
           return (
             <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden", height: "100%", ...(isDisabled ? { border: "1px solid var(--red)" } : {}) }} onClick={() => setSelected(e.id)}>
               <div style={{ position: "relative", flexShrink: 0 }}>
@@ -2081,6 +2133,18 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
                   {!isDisabled && e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
                 </div>
                 <div style={S.eqName}>{e.name}</div>
+                {critGaps.length > 0 && (
+                  <div
+                    title={`ยังไม่ได้กำหนด: ${critGaps.join(", ")}`}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 4, marginTop: 4, alignSelf: "flex-start",
+                      fontSize: 10.5, fontWeight: 600, color: "var(--amber)", background: "#FDF3E3",
+                      border: "1px solid var(--amber)", borderRadius: 20, padding: "2px 8px",
+                    }}
+                  >
+                    <FileWarning size={11} /> เกณฑ์ไม่ครบ
+                  </div>
+                )}
                 {e.brand && (
                   <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
                     {e.brand}
@@ -2538,6 +2602,13 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
             <Tag color={STATUS_COLOR[st]}>{item.nextDue ? `${STATUS_LABEL[st]} · ${fmtDate(item.nextDue)}` : "ไม่มีกำหนด"}</Tag>
             <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
           </div>
+
+          {(() => { const gaps = calibCriteriaGaps(item); return gaps.length > 0 && (
+            <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", fontSize: 12.5, color: "var(--ink)", display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <FileWarning size={14} color="var(--amber)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <span><strong>ยังไม่ได้กำหนดเกณฑ์การสอบเทียบ (Sheet 01):</strong> {gaps.join(", ")} — กด "แก้ไข" เพื่อกรอกให้ครบ</span>
+            </div>
+          ); })()}
 
           {item.status === "maintenance" && item.unavailableReason && (
             <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", fontSize: 12.5, color: "var(--ink)" }}>
