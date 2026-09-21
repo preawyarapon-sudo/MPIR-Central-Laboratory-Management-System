@@ -8268,21 +8268,59 @@ function buildMPIRSheet(headers, rows, sheetMeta) {
 }
 
 // ---- Sheet 01: Instrument Master - filled from the app's equipment list ----
+// Previously mapped only 11 of the sheet's 38 columns — everything from
+// "Measured Parameter" onward (Tolerance, Decision Rule, Severity/
+// Occurrence/Detectability, RPN, Risk Level, Current Status, etc.) was
+// silently dropped even when the equipment record had it filled in, which
+// is why a completed calibration register still exported with those
+// columns blank. Fixed to map every stored field, and to compute the
+// derived ones (Days Remaining, RPN, Risk Level, Lookup Key) the same way
+// the rest of the app does.
 function mpirInstrumentMasterRows(equipment) {
-  return equipment.map(e => mpirRowFromMap(MPIR_DOC.sheets[0].headers, {
-    "Instrument ID": e.code || "",
-    "Instrument Name": e.name || "",
-    "Instrument Type": e.type || "",
-    "Brand": e.brand || "",
-    "Model": e.model || "",
-    "Serial No.": e.serialNo || "",
-    "Location": e.location || "",
-    "Calibration Interval": e.intervalMonths || "",
-    "Last Calibration Date": e.lastCalibration || "",
-    "Next Due Date": e.nextDue || "",
-    "Remarks": e.notes || "",
-    "Lookup Key": `${e.code || ""}|${e.type || ""}`,
-  }));
+  return equipment.map(e => {
+    const { rpn, level } = calcRPN(e.severity, e.occurrence, e.detectability);
+    const days = daysUntil(e.nextDue);
+    return mpirRowFromMap(MPIR_DOC.sheets[0].headers, {
+      "Instrument ID": e.code || "",
+      "Instrument Name": e.name || "",
+      "Instrument Type": e.type || "",
+      "Brand": e.brand || "",
+      "Model": e.model || "",
+      "Serial No.": e.serialNo || "",
+      "Asset No.": e.assetNo || "",
+      "Location": e.location || "",
+      "Custodian": e.custodian || "",
+      "Group (A/B/C)": e.riskGroup || "",
+      "Scope of Use": e.scopeOfUse || "",
+      "Related Test Method": e.relatedTestMethod || "",
+      "Measured Parameter": e.measuredParameter || "",
+      "Unit": e.calUnit || "",
+      "Working Range Min": e.workingRangeMin ?? "",
+      "Working Range Max": e.workingRangeMax ?? "",
+      "Resolution": e.resolution || "",
+      "Tolerance / MPE": e.tolerance ?? "",
+      "Tolerance Type": e.toleranceType || "",
+      "Basis of Criteria": e.basisOfCriteria || "",
+      "Reference Document": e.referenceDocument || "",
+      "Approved Decision Rule": LK_RULE.find(r => r.key === e.decisionRule)?.label || e.decisionRule || "",
+      "Calibration Interval": e.intervalMonths || "",
+      "Check Frequency": e.checkFrequency || "",
+      "Last Calibration Date": e.lastCalibration || "",
+      "Next Due Date": e.nextDue || "",
+      "Days Remaining": days ?? "",
+      "Severity": e.severity ?? "",
+      "Occurrence": e.occurrence ?? "",
+      "Detectability": e.detectability ?? "",
+      "Risk Priority Number": rpn ?? "",
+      "Risk Level": level || "",
+      "Current Status": e.currentStatus || "",
+      "Authorized By": e.authorizedBy || "",
+      "Certificate File Link": e.certFileLink || "",
+      "Remarks": e.notes || "",
+      "Lookup Key": `${e.code || ""}|${e.measuredParameter || ""}`,
+      "Manual Last Calibration": e.manualLastCalibration || "",
+    });
+  });
 }
 
 // ---- Sheet 04: Daily / Intermediate Check - filled from the app's dailyChecks log ----
