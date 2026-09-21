@@ -3229,7 +3229,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
             <FileWarning size={14} color="var(--amber)" style={{ flexShrink: 0, marginTop: 1 }} />
             <span>
               {calOverdue && <>เครื่องมือนี้เลยกำหนดสอบเทียบ ({fmtDate(equip.nextDue)}). </>}
-              {calBad && <>ผลสอบเทียบล่าสุด ({fmtDate(calSummary.date)}) ได้ <b>{calSummary.decision}</b> — ตรวจสอบที่ บันทึกการสอบเทียบ › เกณฑ์ยอมรับผล ก่อนใช้ผลตรวจนี้ตัดสินการใช้งาน</>}
+              {calBad && <>ผลสอบเทียบล่าสุด ({fmtDate(calSummary.date)}) ได้ <b>{calSummary.decision}</b> — ตรวจสอบที่ บันทึกการสอบเทียบ › ผลสอบเทียบ & แนวโน้ม ก่อนใช้ผลตรวจนี้ตัดสินการใช้งาน</>}
             </span>
           </div>
         )}
@@ -3821,19 +3821,46 @@ function CertificateForm({ row, equipment, onCancel, onSave }) {
   );
 }
 
-/* ================= Sheet 03: Acceptance Criteria (calculated) =================
-   Read-only comparison of each certificate row against its instrument's
-   approved Tolerance/Decision Rule (Sheet 01) — nothing here is typed in
-   except the evaluator/approver sign-off, matching the workbook's own
-   "เขียว = คำนวณอัตโนมัติ ห้ามพิมพ์ทับ" convention. */
-function AcceptanceCriteriaTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "" }) {
+/* ================= Sheet 03 + Sheet 06: Calibration Results & Trend (calculated) =================
+   One row per calibration point of each certificate. Sheet 03 (acceptance
+   decision against the Sheet 01 Tolerance/Decision Rule) and Sheet 06
+   (drift across calibration rounds) used to be two tabs listing the same
+   rows; they are merged here. The MPIR export still writes them as separate
+   sheets (mpirAcceptanceRows / mpirTrendRows) — only the screen is merged.
+   Nothing is typed in except the evaluator/approver sign-off, matching the
+   workbook's own "เขียว = คำนวณอัตโนมัติ ห้ามพิมพ์ทับ" convention. */
+function calPointLabel(c) {
+  return `${c.parameter || ""}${c.calibrationPoint !== "" && c.calibrationPoint != null ? ` @ ${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : ""}`;
+}
+function CalibrationResultsTab({ equipment, certificates, setCertificates, notify }) {
   const [q, setQ] = useState("");
   const byId = useMemo(() => Object.fromEntries(equipment.map(e => [e.id, e])), [equipment]);
-  const rows = useMemo(() => certificates.map(c => ({ c, instrument: byId[c.instrumentId], ev: evaluateAcceptance(c, byId[c.instrumentId]) })), [certificates, byId]);
+  const trendById = useMemo(() => Object.fromEntries(computeTrendRows(certificates, equipment).map(r => [r.cert.id, r])), [certificates, equipment]);
+  // Keep every calibration point's history together (same instrument +
+  // parameter + point), newest round first; points appear in certificate order.
+  const rows = useMemo(() => {
+    const groups = new Map();
+    certificates.forEach(c => {
+      const key = `${c.instrumentId}|${c.parameter}|${c.calibrationPoint}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
+    });
+    const out = [];
+    groups.forEach(list => {
+      list.slice().sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || "")).forEach((c, i) => {
+        const instrument = byId[c.instrumentId];
+        out.push({ c, instrument, ev: evaluateAcceptance(c, instrument), tr: trendById[c.id], older: i > 0 });
+      });
+    });
+    return out;
+  }, [certificates, byId, trendById]);
   const filtered = rows.filter(({ c, instrument }) =>
-    ((instrument?.code || "") + (instrument?.name || "") + c.certificateNo + c.parameter).toLowerCase().includes(q.toLowerCase())
+    ((instrument?.code || "") + (instrument?.name || "") + (c.certificateNo || "") + calPointLabel(c)).toLowerCase().includes(q.toLowerCase())
   );
   const DECISION_COLOR = { PASS: "var(--green)", "CONDITIONAL PASS": "var(--teal)", WARNING: "var(--amber)", FAIL: "var(--red)", "INCOMPLETE DATA": "var(--muted)" };
+  const mono = { fontFamily: "var(--font-mono)" };
+  const fx = (v, d = 4) => (v != null ? v.toFixed(d) : "-");
+  const HEAD = ["พารามิเตอร์ / จุด", "ปี (พ.ศ.)", "Error", "Tolerance ที่ใช้", "Utilization %", "TUR", "ผลการตัดสิน", "Drift จากรอบก่อน", "อัตราเลื่อน/ปี", "คาดการณ์รอบถัดไป", "ปีที่คาดว่าหลุดเกณฑ์", "แนวโน้ม", "ผู้ประเมิน / อนุมัติ"];
 
   function setSignoff(certId, patch) {
     setCertificates(certificates.map(c => c.id === certId ? { ...c, ...patch } : c));
@@ -3843,36 +3870,38 @@ function AcceptanceCriteriaTab({ equipment, certificates, setCertificates, notif
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>เกณฑ์การยอมรับผลการสอบเทียบ (Acceptance Criteria)</h2><p style={S.h2sub}>Sheet 03 — คำนวณอัตโนมัติจากทะเบียนเครื่องมือ (Sheet 01) เทียบกับใบรับรอง (Sheet 02); ห้ามสรุปว่า "ผ่าน" จาก Statement of Conformity ของผู้สอบเทียบเพียงอย่างเดียว</p></div>
+        <div><h2 style={S.h2}>ผลสอบเทียบและแนวโน้ม (Acceptance &amp; Trend)</h2><p style={S.h2sub}>Sheet 03 + 06 — เทียบใบรับรอง (Sheet 02) กับ Tolerance ใน Sheet 01 แล้วดูการเลื่อนของค่าข้ามรอบของแต่ละจุด; ห้ามสรุปว่า "ผ่าน" จาก Statement of Conformity ของผู้สอบเทียบเพียงอย่างเดียว (ชี้เมาส์ที่ผลตัดสินเพื่อดูเหตุผล)</p></div>
       </div>
       <div style={S.toolbar}>
-        <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหารหัสเครื่องมือ / เลขที่ใบรับรอง / พารามิเตอร์" value={q} onChange={e => setQ(e.target.value)} /></div>
+        <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหารหัสเครื่องมือ / เลขที่ใบรับรอง / พารามิเตอร์ / จุด" value={q} onChange={e => setQ(e.target.value)} /></div>
       </div>
-      <div style={S.tableWrap}>
-        <table style={S.table}>
-          <thead><tr>
-            {["เครื่องมือ", "พารามิเตอร์ / จุด", "|Error|", "Tolerance ที่ใช้", "Utilization %", "TUR", "ผลการตัดสิน", "เหตุผล", "ผู้ประเมิน / อนุมัติ"].map(h => <th key={h} style={S.th}>{h}</th>)}
-          </tr></thead>
+      <div style={{ ...S.tableWrap, overflowX: "auto" }}>
+        <table style={{ ...S.table, minWidth: 1180 }}>
+          <thead><tr>{HEAD.map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
           <tbody>
-            {filtered.map(({ c, instrument, ev }) => (
+            {filtered.map(({ c, ev, tr, older }) => (
               <tr key={c.id} style={S.tr}>
-                <td style={S.td}>{instrument ? `${instrument.code} — ${instrument.name}` : "-"}</td>
-                <td style={S.td}>{c.parameter} {c.calibrationPoint !== "" ? `@ ${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : ""}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{ev.absError != null ? ev.absError.toFixed(4) : "-"}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{ev.tol != null ? ev.tol.toFixed(4) : "ยังไม่ตั้งค่าใน Sheet 01"}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{ev.utilizationPct != null ? `${ev.utilizationPct}%` : "-"}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{ev.tur != null ? ev.tur.toFixed(2) : "-"}</td>
-                <td style={S.td}><span style={{ ...S.tag, borderColor: DECISION_COLOR[ev.decision], color: DECISION_COLOR[ev.decision] }}>{ev.decision}</span></td>
-                <td style={{ ...S.td, fontSize: 11.5, color: "var(--muted)", maxWidth: 220 }}>{ev.rationale}</td>
+                <td style={{ ...S.td, ...(older ? { opacity: 0.55 } : {}) }}>{calPointLabel(c) || "-"}</td>
+                <td style={S.td}>{tr?.calibYearBE || "-"}</td>
+                <td style={{ ...S.td, ...mono }}>{fx(tr?.error)}</td>
+                <td style={{ ...S.td, ...mono }}>{ev.tol != null ? ev.tol.toFixed(4) : "ยังไม่ตั้งค่าใน Sheet 01"}</td>
+                <td style={{ ...S.td, ...mono }}>{ev.utilizationPct != null ? `${ev.utilizationPct}%` : "-"}</td>
+                <td style={{ ...S.td, ...mono }}>{ev.tur != null ? ev.tur.toFixed(2) : "-"}</td>
+                <td style={S.td}><span title={ev.rationale} style={{ ...S.tag, borderColor: DECISION_COLOR[ev.decision], color: DECISION_COLOR[ev.decision] }}>{ev.decision}</span></td>
+                <td style={{ ...S.td, ...mono }}>{fx(tr?.drift)}</td>
+                <td style={{ ...S.td, ...mono }}>{fx(tr?.driftRate)}</td>
+                <td style={{ ...S.td, ...mono }}>{fx(tr?.projected)}</td>
+                <td style={{ ...S.td, ...mono }}>{fx(tr?.yearsToOOT, 1)}</td>
+                <td style={{ ...S.td, fontSize: 11.5, color: "var(--muted)" }}>{tr?.flag || "-"}</td>
                 <td style={S.td}>
-                  <input style={{ ...S.input, marginBottom: 4, fontSize: 11.5, padding: "5px 8px" }} placeholder="ผู้ประเมิน" value={c.evaluatedBy || ""}
+                  <input style={{ ...S.input, marginBottom: 4, fontSize: 11.5, padding: "5px 8px", minWidth: 130 }} placeholder="ผู้ประเมิน" value={c.evaluatedBy || ""}
                     onChange={e => setSignoff(c.id, { evaluatedBy: e.target.value, evaluationDate: c.evaluationDate || todayISO() })} />
-                  <input style={{ ...S.input, fontSize: 11.5, padding: "5px 8px" }} placeholder="ผู้อนุมัติ (Technical Manager)" value={c.approvedBy || ""}
+                  <input style={{ ...S.input, fontSize: 11.5, padding: "5px 8px", minWidth: 130 }} placeholder="ผู้อนุมัติ (Technical Manager)" value={c.approvedBy || ""}
                     onChange={e => setSignoff(c.id, { approvedBy: e.target.value, approvalDate: c.approvalDate || todayISO() })} />
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td style={S.td} colSpan={9}><div style={S.emptyState}>ยังไม่มีข้อมูลใบรับรองให้ประเมิน — ไปที่หน้า "ใบรับรองสอบเทียบ" ก่อน</div></td></tr>}
+            {filtered.length === 0 && <tr><td style={S.td} colSpan={HEAD.length}><div style={S.emptyState}>ยังไม่มีข้อมูลใบรับรองให้ประเมิน — ไปที่แท็บ "ใบรับรองสอบเทียบ" ก่อน (แนวโน้มจะคำนวณได้เมื่อมีอย่างน้อย 2 รอบต่อจุด)</div></td></tr>}
           </tbody>
         </table>
       </div>
@@ -4070,7 +4099,7 @@ function IntermediateCheckForm({ row, equipment, currentDisplayName, onCancel, o
           )}
           {calc.result === "ข้อมูลไม่ครบ" && (
             <div style={{ fontSize: 12.5, color: "var(--amber)", background: "#FFF8EC", border: "1px solid #F3DDB5", borderRadius: 8, padding: "8px 10px" }}>
-              เครื่องมือนี้ยังไม่ได้ตั้ง Tolerance จึงยังไม่มี Warning/Action Limit — ตั้งได้ที่แท็บ “เกณฑ์ยอมรับผล” (ช่อง Tolerance/MPE) แล้วผลจะคำนวณให้เอง
+              เครื่องมือนี้ยังไม่ได้ตั้ง Tolerance จึงยังไม่มี Warning/Action Limit — ตั้งได้ที่แท็บ “ข้อมูลเครื่องมือ (Sheet 01)” (ช่อง Tolerance/MPE) แล้วผลจะคำนวณให้เอง
             </div>
           )}
         </div>
@@ -4233,42 +4262,6 @@ function UncertaintyRowForm({ row, equipment, existingBudgetIds, onCancel, onSav
   ];
 
   return <WizardModal title="Uncertainty Component" steps={steps} onCancel={onCancel} onSave={() => onSave(f)} saveDisabled={!f.budgetId || !f.componentName} />;
-}
-
-/* ================= Sheet 06: Trend / Drift Analysis (fully computed) ================= */
-function TrendAnalysisTab({ equipment, certificates, notify }) {
-  const [q, setQ] = useState("");
-  const rows = useMemo(() => computeTrendRows(certificates, equipment), [certificates, equipment]);
-  const filtered = rows.filter(r => ((r.instrument?.code || "") + (r.instrument?.name || "") + r.cert.parameter).toLowerCase().includes(q.toLowerCase()));
-  return (
-    <div>
-      <div style={S.detailHead}>
-        <div><h2 style={S.h2}>แนวโน้มการเปลี่ยนแปลงของเครื่องมือ (Trend / Drift)</h2><p style={S.h2sub}>Sheet 06 — คำนวณจากประวัติใบรับรอง (Sheet 02) ของแต่ละเครื่องมือ/พารามิเตอร์/จุดสอบเทียบข้ามปี</p></div>
-      </div>
-      <div style={S.toolbar}><div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ / พารามิเตอร์" value={q} onChange={e => setQ(e.target.value)} /></div></div>
-      <div style={S.tableWrap}>
-        <table style={S.table}>
-          <thead><tr>{["เครื่องมือ", "พารามิเตอร์/จุด", "ปี (พ.ศ.)", "Error", "Drift จากรอบก่อน", "อัตราเลื่อน/ปี", "คาดการณ์รอบถัดไป", "ปีที่คาดว่าหลุดเกณฑ์", "แนวโน้ม"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
-          <tbody>
-            {filtered.map(r => (
-              <tr key={r.cert.id} style={S.tr}>
-                <td style={S.td}>{r.instrument ? `${r.instrument.code} — ${r.instrument.name}` : "-"}</td>
-                <td style={S.td}>{r.cert.parameter} @ {r.cert.calibrationPoint}{r.cert.unit}</td>
-                <td style={S.td}>{r.calibYearBE || "-"}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.error != null ? r.error.toFixed(4) : "-"}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.drift != null ? r.drift.toFixed(4) : "-"}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.driftRate != null ? r.driftRate.toFixed(4) : "-"}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.projected != null ? r.projected.toFixed(4) : "-"}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.yearsToOOT != null ? r.yearsToOOT.toFixed(1) : "-"}</td>
-                <td style={S.td}>{r.flag}</td>
-              </tr>
-            ))}
-            {filtered.length === 0 && <tr><td style={S.td} colSpan={9}><div style={S.emptyState}>ยังไม่มีข้อมูลใบรับรองพอสำหรับวิเคราะห์แนวโน้ม (ต้องมีอย่างน้อย 2 รอบต่อจุดสอบเทียบ)</div></td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
 }
 
 /* ================= Sheet 07: Equipment Status Summary (computed + a few manual fields) ================= */
@@ -4476,21 +4469,20 @@ function ApprovalRecordForm({ row, equipment, onCancel, onSave }) {
 }
 
 /* ================= Calibration Records Hub =================
-   Replaces the old flat menu (8 separate sub-tabs, each listing every
+   Replaces the old flat menu (separate sub-tabs, each listing every
    instrument in a table) with: pick an instrument first, then flip between
-   the 8 record types (certificates, acceptance criteria, intermediate
-   check, uncertainty budget, trend, status summary, action/impact,
+   the record types (instrument master, certificates, acceptance + trend,
+   intermediate check, uncertainty budget, status summary, action/impact,
    approval record) as tabs scoped to just that instrument. Air conditioners
    aren't calibrated, so they never appear in the instrument picker here.
-   Daily check is deliberately NOT one of the 8 — it keeps its own separate
-   nav entry outside this hub. */
+   Daily check is deliberately NOT part of this bundle — it keeps its own
+   separate nav entry outside this hub. */
 const CALIBRATION_SUBTABS = [
   { key: "instrumentMaster", label: "ข้อมูลเครื่องมือ (Sheet 01)", icon: Wrench },
   { key: "certificates", label: "ใบรับรองสอบเทียบ", icon: FileCheck2 },
-  { key: "acceptance", label: "เกณฑ์ยอมรับผล", icon: BadgeCheck },
+  { key: "acceptance", label: "ผลสอบเทียบ & แนวโน้ม", icon: BadgeCheck },
   { key: "intermediateCheck", label: "ตรวจสอบระหว่างรอบ", icon: ClipboardCheck },
   { key: "uncertainty", label: "Uncertainty Budget", icon: Gauge },
-  { key: "trend", label: "แนวโน้ม (Trend)", icon: TrendingUp },
   { key: "equipStatus", label: "สรุปสถานะเครื่องมือ", icon: ShieldCheck },
   { key: "actionImpact", label: "การดำเนินการ/ผลกระทบ", icon: FileWarning },
   { key: "approvalRecord", label: "บันทึกการอนุมัติ", icon: Stamp },
@@ -4705,7 +4697,7 @@ function CalibrationRecordsHub({
         <div style={S.detailHead}>
           <div>
             <h2 style={S.h2}>บันทึกการสอบเทียบ</h2>
-            <p style={S.h2sub}>เลือกเครื่องมือ เพื่อกรอกข้อมูลเครื่องมือ/เกณฑ์การสอบเทียบ (Sheet 01) ดูใบรับรองสอบเทียบ เกณฑ์ยอมรับผล ตรวจสอบระหว่างรอบ Uncertainty Budget แนวโน้ม สถานะ การดำเนินการ/ผลกระทบ และบันทึกการอนุมัติ ของเครื่องมือนั้น</p>
+            <p style={S.h2sub}>เลือกเครื่องมือ เพื่อกรอกข้อมูลเครื่องมือ/เกณฑ์การสอบเทียบ (Sheet 01) ดูใบรับรองสอบเทียบ ผลสอบเทียบและแนวโน้ม ตรวจสอบระหว่างรอบ Uncertainty Budget สถานะ การดำเนินการ/ผลกระทบ และบันทึกการอนุมัติ ของเครื่องมือนั้น</p>
           </div>
         </div>
         {criteriaStats.missing > 0 && (
@@ -4818,10 +4810,10 @@ function CalibrationRecordsHub({
         />
       )}
       {subTab === "acceptance" && (
-        <AcceptanceCriteriaTab
+        <CalibrationResultsTab
           equipment={scopedEquipment} certificates={scopedCertificates}
           setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName}
+          notify={notify}
         />
       )}
       {subTab === "intermediateCheck" && (
@@ -4837,9 +4829,6 @@ function CalibrationRecordsHub({
           setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
           notify={notify}
         />
-      )}
-      {subTab === "trend" && (
-        <TrendAnalysisTab equipment={scopedEquipment} certificates={scopedCertificates} notify={notify} />
       )}
       {subTab === "equipStatus" && (
         <EquipmentStatusTab
