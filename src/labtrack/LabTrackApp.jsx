@@ -752,6 +752,11 @@ function parsePastedCertificateText(text) {
 
 // Sheet 10 lookups needed by Sheets 04-09.
 const LK_CHKTYPE = ["Daily Check", "Intermediate Check", "Performance Check ก่อนใช้งาน"];
+// Sheet 04 form only takes Intermediate / Performance checks — Daily checks are
+// recorded in the dedicated Daily check tab (per-type forms) and read from
+// there. LK_CHKTYPE above stays whole because the MPIR export still lists
+// both kinds in sheet 04.
+const LK_CHKTYPE_FORM = LK_CHKTYPE.filter(t => t !== "Daily Check");
 const LK_DIST = ["Normal (k=1)", "Normal (k=2)", "Normal (k=3)", "Rectangular", "Triangular"];
 const LK_USAGE = ["ใช้งานได้ปกติ (In use)", "ใช้งานโดยต้องใช้ Correction (In use with correction)", "ใช้งานแบบจำกัดช่วง (Restricted use)", "รอประเมิน"];
 const LK_SOURCE = ["ผลการสอบเทียบประจำปี", "Daily Check", "Intermediate Check"];
@@ -838,9 +843,10 @@ function computeTrendRows(certificates, equipment) {
 }
 // Sheet 07: one row per instrument, rolling up its latest calibration round
 // (Sheet 03 decisions) and Intermediate Check failures in the last 90 days.
-function computeEquipmentStatusRows(equipment, certificates, intermediateChecks) {
-  const DECISION_RANK = { "PASS": 0, "CONDITIONAL PASS": 1, "WARNING": 2, "FAIL": 3, "INCOMPLETE DATA": 1 };
+function computeEquipmentStatusRows(equipment, certificates, intermediateChecks, dailyChecks = []) {
+  const DECISION_RANK = CALIB_DECISION_RANK;
   const now = Date.now();
+  const within90 = (d) => d && (now - new Date(d + "T00:00:00")) <= 90 * 86400000;
   return equipment.map(e => {
     const certs = certificates.filter(c => c.instrumentId === e.id);
     const latestDate = certs.reduce((max, c) => (c.calibrationDate || "") > max ? (c.calibrationDate || "") : max, "");
@@ -849,7 +855,12 @@ function computeEquipmentStatusRows(equipment, certificates, intermediateChecks)
     const overall = evals.reduce((worst, ev) => (DECISION_RANK[ev.decision] || 0) > (DECISION_RANK[worst] || 0) ? ev.decision : worst, evals[0]?.decision || "-");
     const maxUtilization = evals.reduce((m, ev) => Math.max(m, ev.utilizationPct || 0), 0);
     const failingCount = evals.filter(ev => ev.decision === "FAIL" || ev.decision === "WARNING").length;
-    const failedChecks90 = intermediateChecks.filter(ic => ic.instrumentId === e.id && ic.result === "FAIL" && ic.checkDate && (now - new Date(ic.checkDate + "T00:00:00")) <= 90 * 86400000).length;
+    // Intermediate-check pass/fail is never stored on the record (it is
+    // recalculated from readings + Sheet 01 tolerance), so recalc it here;
+    // Daily checks keep their frozen boolean `result`. Both count.
+    const failedIntermediate = intermediateChecks.filter(ic => ic.instrumentId === e.id && within90(ic.checkDate) && calcIntermediateCheck(ic, e).result === "FAIL").length;
+    const failedDaily = dailyChecks.filter(dc => dc.equipmentId === e.id && dc.result === false && within90(dc.date)).length;
+    const failedChecks90 = failedIntermediate + failedDaily;
     const days = daysUntil(e.nextDue);
     const { rpn } = calcRPN(e.severity, e.occurrence, e.detectability);
     return { e, days, cycleStatus: statusOf(days), overall, maxUtilization, failingCount, failedChecks90, rpn, calibYearBE: beYear(latestDate) };
@@ -865,6 +876,30 @@ function warningActionLimits(instrument, referenceValue) {
   if (tol == null || isNaN(ref)) return null;
   const w = tol * (2 / 3);
   return { lwl: ref - w, uwl: ref + w, lal: ref - tol, ual: ref + tol };
+}
+
+const round4 = (n) => Math.round(n * 10000) / 10000;
+// Acceptance range for a routine check, derived from the instrument's own
+// Sheet 01 Tolerance (Action limits = reference ± Tolerance, Warning limits =
+// reference ± ⅔ Tolerance) — the same rule Sheet 04 uses. Returns null while
+// the instrument has no Tolerance yet.
+function deriveCheckLimits(instrument, referenceValue) {
+  const lim = warningActionLimits(instrument, referenceValue);
+  if (!lim) return null;
+  const tol = resolveTolerance(instrument, { indication: referenceValue, referenceValue });
+  return { lwl: round4(lim.lwl), uwl: round4(lim.uwl), lal: round4(lim.lal), ual: round4(lim.ual), tol: round4(tol) };
+}
+// Worst Sheet 03 decision across the newest calibration round of one
+// instrument — lets a daily check warn when the latest certificate failed.
+const CALIB_DECISION_RANK = { "PASS": 0, "CONDITIONAL PASS": 1, "WARNING": 2, "FAIL": 3, "INCOMPLETE DATA": 1 };
+function latestCalibrationSummary(instrument, certificates = []) {
+  if (!instrument) return null;
+  const certs = certificates.filter(c => c.instrumentId === instrument.id);
+  const latestDate = certs.reduce((max, c) => (c.calibrationDate || "") > max ? (c.calibrationDate || "") : max, "");
+  if (!latestDate) return null;
+  const evals = certs.filter(c => c.calibrationDate === latestDate).map(c => evaluateAcceptance(c, instrument));
+  const decision = evals.reduce((worst, ev) => (CALIB_DECISION_RANK[ev.decision] || 0) > (CALIB_DECISION_RANK[worst] || 0) ? ev.decision : worst, evals[0].decision);
+  return { date: latestDate, decision };
 }
 
 /* ---------- return-tracking helpers (chemicals / consumables withdrawals) ---------- */
@@ -1118,7 +1153,7 @@ const SEED_EQUIPMENT = [
   { id: "e7", code: "Oven1", name: "ตู้อบลมร้อน", type: "Oven", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-07-15", ovenMin: 104.31, ovenMax: 105.69, notes: "" },
   { id: "e8", code: "MPIR-DH1", name: "เครื่องควบคุมความชื้น", type: "เครื่องควบคุมความชื้น", location: "C1", status: "active", lastCalibration: "", nextDue: "", notes: "" },
   { id: "e9", code: "MPIR-CB1", name: "Cooling Bath", type: "Cooling Bath", location: "C1", status: "active", lastCalibration: "", nextDue: "", coolingBathMin: 19.80, coolingBathMax: 20.20, notes: "" },
-  { id: "e10", code: "MPIR-RF1", name: "Refractometer", type: "Refractometer", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-07-15", brixMin: 19.91, brixMax: 20.09, notes: "" },
+  { id: "e10", code: "MPIR-RF1", name: "Refractometer", type: "Refractometer", location: "C1", status: "active", lastCalibration: "2025-07-15", nextDue: "2026-07-15", measuredParameter: "%Brix", calUnit: "°Brix", tolerance: 0.09, toleranceType: "absolute", notes: "" },
 ];
 const SEED_DAILY_CHECKS = [
 ];
@@ -1478,20 +1513,21 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} />
           )}
           {!restrictToBooking && tab === "equipment" && (
-            <EquipmentTab equipment={equipment} setEquipment={persist.equipment}
+            <EquipmentTab equipment={equipment} setEquipment={persist.equipment} certificates={certificates}
               activities={activities} setActivities={persist.activities}
               bookings={bookings} setBookings={persist.bookings} items={items} notify={notify}
               dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks}
               canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
-            <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialCheckId={equipDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+            <DailyCheckTab equipment={equipment} certificates={certificates} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialCheckId={equipDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "calibrationRecords" && (
             <CalibrationRecordsHub
               equipment={equipment} setEquipment={persist.equipment}
               certificates={certificates} setCertificates={persist.certificates}
               intermediateChecks={intermediateChecks} setIntermediateChecks={persist.intermediateChecks}
+              dailyChecks={dailyChecks}
               uncertaintyBudgets={uncertaintyBudgets} setUncertaintyBudgets={persist.uncertaintyBudgets}
               actionImpacts={actionImpacts} setActionImpacts={persist.actionImpacts}
               approvalRecords={approvalRecords} setApprovalRecords={persist.approvalRecords}
@@ -1795,17 +1831,15 @@ function AlertPanel({ title, icon: Icon, items, empty, onSeeAll }) {
 }
 
 /* ================= EQUIPMENT ================= */
-function EquipmentTab({ equipment, setEquipment, activities, setActivities, bookings, setBookings, items = [], notify, dailyChecks = [], setDailyChecks, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+function EquipmentTab({ equipment, setEquipment, certificates = [], activities, setActivities, bookings, setBookings, items = [], notify, dailyChecks = [], setDailyChecks, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState("all"); // "all" or any group label (free text)
   const [calibFilter, setCalibFilter] = useState("all"); // "all" | "warn" | "danger"
-  const [criteriaFilter, setCriteriaFilter] = useState("all"); // "all" | "missing" | "complete"
   const [editing, setEditing] = useState(null); // equipment object or null
   const [selected, setSelected] = useState(null); // detail view id
   const [showImport, setShowImport] = useState(false);
-  const [showCriteriaGrid, setShowCriteriaGrid] = useState(false);
   const [bookingFor, setBookingFor] = useState(null); // equipment item to open the booking form for
 
   const types = useMemo(() => [...new Set(equipment.map(e => e.type).filter(Boolean))].sort(), [equipment]);
@@ -1817,22 +1851,11 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       const matchT = typeFilter === "all" || e.type === typeFilter;
       const matchG = groupFilter === "all" || resolveEquipGroup(e) === groupFilter;
       const matchC = calibFilter === "all" || statusOf(daysUntil(e.nextDue)) === calibFilter;
-      const gaps = calibCriteriaGaps(e);
-      const matchCrit = criteriaFilter === "all" || (criteriaFilter === "missing" ? gaps.length > 0 : gaps.length === 0);
-      return matchQ && matchS && matchT && matchG && matchC && matchCrit;
+      return matchQ && matchS && matchT && matchG && matchC;
     })
     .slice()
     .sort((a, b) => alphaCompare(a.code, b.code));
 
-  // Completeness summary for the calibration-criteria fields (Sheet 01) —
-  // counted only over equipment in the formal register group, so this
-  // reads as an honest "X of Y still need criteria" rather than lumping in
-  // aircon/support items that were never meant to have them.
-  const criteriaStats = useMemo(() => {
-    const inScope = equipment.filter(e => resolveEquipGroup(e) === EQUIP_GROUP_LABEL.analytical);
-    const missing = inScope.filter(e => calibCriteriaGaps(e).length > 0).length;
-    return { total: inScope.length, missing };
-  }, [equipment]);
 
   const groupCounts = useMemo(() => {
     const c = {};
@@ -1915,24 +1938,6 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
   return (
     <div>
       <TabHeader title="เครื่องมือ" sub="รายการเครื่องมือทั้งหมดและกำหนดสอบเทียบ" />
-      {criteriaStats.missing > 0 && (
-        <div
-          style={{
-            display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
-            background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10,
-            padding: "9px 13px", fontSize: 12.5, color: "var(--ink)",
-          }}
-        >
-          <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
-          <span style={{ flex: 1 }}>
-            <strong>{criteriaStats.missing}</strong> จาก {criteriaStats.total} เครื่องมือในทะเบียนสอบเทียบ
-            ยังไม่ได้กำหนดเกณฑ์ (Tolerance / Decision Rule / Risk score)
-          </span>
-          <button style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => setShowCriteriaGrid(true)}>
-            <ClipboardCheck size={13} /> กรอกเกณฑ์แบบตาราง
-          </button>
-        </div>
-      )}
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <ViewTab active={groupFilter === "all"} onClick={() => setGroupFilter("all")} label="ทั้งหมด" count={equipment.length} />
         {groupOrder.map(g => (
@@ -1956,30 +1961,14 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           <option value="warn">ใกล้ถึงรอบสอบเทียบ</option>
           <option value="danger">เลยกำหนดสอบเทียบ</option>
         </select>
-        <select value={criteriaFilter} onChange={e => setCriteriaFilter(e.target.value)} style={S.select}>
-          <option value="all">ทุกสถานะเกณฑ์</option>
-          <option value="missing">เกณฑ์ยังไม่ครบ</option>
-          <option value="complete">เกณฑ์ครบแล้ว</option>
-        </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
-        </button>
-        <button style={S.ghostBtn} onClick={() => setShowCriteriaGrid(true)}>
-          <ClipboardCheck size={14} style={{ marginRight: 4 }} /> กรอกเกณฑ์แบบตาราง
         </button>
         <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", group: "", location: "", status: "active", lastCalibration: "", nextDue: "", intervalMonths: "", notes: "", imageUrl: "" })}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
       {showImport && <EquipmentImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
-      {showCriteriaGrid && (
-        <CriteriaGridEditor
-          equipment={equipment}
-          setEquipment={setEquipment}
-          notify={notify}
-          onClose={() => setShowCriteriaGrid(false)}
-        />
-      )}
 
       <div style={S.cardGrid}>
         {filtered.map(e => {
@@ -1987,7 +1976,6 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
           const st = statusOf(days);
           const bk = equipmentBookingSummary(e.id, bookings);
           const isDisabled = e.status === "maintenance" || e.status === "inactive";
-          const critGaps = calibCriteriaGaps(e);
           return (
             <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden", height: "100%", ...(isDisabled ? { border: "1px solid var(--red)" } : {}) }} onClick={() => setSelected(e.id)}>
               <div style={{ position: "relative", flexShrink: 0 }}>
@@ -2023,18 +2011,6 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
                   {!isDisabled && e.nextDue && (st === "warn" || st === "danger") && <Tag color={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</Tag>}
                 </div>
                 <div style={S.eqName}>{e.name}</div>
-                {critGaps.length > 0 && (
-                  <div
-                    title={`ยังไม่ได้กำหนด: ${critGaps.join(", ")}`}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 4, marginTop: 4, alignSelf: "flex-start",
-                      fontSize: 10.5, fontWeight: 600, color: "var(--amber)", background: "#FDF3E3",
-                      border: "1px solid var(--amber)", borderRadius: 20, padding: "2px 8px",
-                    }}
-                  >
-                    <FileWarning size={11} /> เกณฑ์ไม่ครบ
-                  </div>
-                )}
                 {e.brand && (
                   <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
                     {e.brand}
@@ -2073,6 +2049,7 @@ function EquipmentTab({ equipment, setEquipment, activities, setActivities, book
       {selectedItem && (
         <EquipmentDetail
           item={selectedItem}
+          certificates={certificates}
           activities={activities.filter(a => a.equipmentId === selectedItem.id).sort((a, b) => b.date.localeCompare(a.date))}
           dailyChecks={dailyChecks.filter(c => c.equipmentId === selectedItem.id)}
           bookings={bookings.filter(b => b.equipmentId === selectedItem.id).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""))}
@@ -2160,13 +2137,6 @@ function ImageUploadField({ label, value, onChange }) {
 function EquipmentForm({ item, equipment = [], groupOptions = [], onCancel, onSave }) {
   const [f, setF] = useState(item);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const suggestion = useMemo(() => suggestCriteriaByType(f.type, equipment, f.id), [f.type, equipment, f.id]);
-  const criteriaEmpty = !f.tolerance && !f.decisionRule && f.severity == null && f.occurrence == null && f.detectability == null;
-  function applySuggestion() {
-    if (!suggestion) return;
-    const { sourceCode, ...vals } = suggestion;
-    setF({ ...f, ...vals });
-  }
   return (
     <Modal onClose={onCancel} title={item.code ? "แก้ไขเครื่องมือ" : "เพิ่มเครื่องมือใหม่"}>
       <div style={S.formGrid} className="ltFormGrid">
@@ -2176,16 +2146,6 @@ function EquipmentForm({ item, equipment = [], groupOptions = [], onCancel, onSa
         <Field label="รุ่น (Model)"><input style={S.input} value={f.model || ""} onChange={set("model")} placeholder="เช่น SRK24CYV-W1" /></Field>
         <Field label="หมายเลขเครื่อง (Serial No.)"><input style={S.input} value={f.serialNo || ""} onChange={set("serialNo")} /></Field>
         <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder='เช่น เครื่องชั่ง, pH Meter, EC Meter, Polarimeter, Oven, เครื่องควบคุมความชื้น, Cooling Bath, Refractometer, Glass Thermometer' /></Field>
-        {f.type === "Refractometer" && (
-          <>
-            <Field label="เกณฑ์การยอมรับ %Brix — ต่ำสุด">
-              <input type="number" step="any" style={S.input} value={f.brixMin ?? ""} onChange={set("brixMin")} placeholder="เช่น 19.91" />
-            </Field>
-            <Field label="เกณฑ์การยอมรับ %Brix — สูงสุด">
-              <input type="number" step="any" style={S.input} value={f.brixMax ?? ""} onChange={set("brixMax")} placeholder="เช่น 20.09" />
-            </Field>
-          </>
-        )}
         {f.type === "Polarimeter" && (
           <>
             <Field label="แผ่นควอตซ์มาตรฐาน (Quartz Control Plate No.)">
@@ -2297,79 +2257,9 @@ function EquipmentForm({ item, equipment = [], groupOptions = [], onCancel, onSa
         />
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.notes} onChange={set("notes")} /></Field>
 
-        {/* ---- Sheet 01 (Instrument Master): fields for the ISO/IEC 17025
-             calibration record — tolerance, decision rule, risk score, etc.
-             All optional; leave blank for equipment that isn't part of the
-             formal calibration register (e.g. general tools/aircon). ---- */}
-        <div style={{ gridColumn: "1 / -1", marginTop: 6, paddingTop: 10, borderTop: "1px dashed var(--line)", fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)" }}>
-          ข้อมูลทะเบียนสอบเทียบ (ISO/IEC 17025) — ไม่บังคับ
+        <div style={{ gridColumn: "1 / -1", marginTop: 6, paddingTop: 10, borderTop: "1px dashed var(--line)", fontSize: 12, color: "var(--muted)" }}>
+          ข้อมูลทะเบียนสอบเทียบ (Tolerance/MPE, Decision Rule, Risk score, ความถี่ตรวจสอบ ฯลฯ) ย้ายไปกรอกที่เมนู <b>บันทึกการสอบเทียบ › ข้อมูลเครื่องมือ (Sheet 01)</b>
         </div>
-        {suggestion && criteriaEmpty && (
-          <div style={{
-            gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-            background: "#E9F1FB", border: "1px solid var(--teal)", borderRadius: 8, padding: "8px 11px", fontSize: 12,
-          }}>
-            <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
-            <span style={{ flex: 1 }}>
-              พบเกณฑ์ที่ตั้งไว้แล้วสำหรับเครื่องมือประเภท "{f.type}" (จาก {suggestion.sourceCode}) — ใช้เป็นค่าเริ่มต้นได้เลย
-            </span>
-            <button type="button" style={S.smallBtn} onClick={applySuggestion}>ใช้ค่านี้</button>
-          </div>
-        )}
-        <Field label="ผู้รับผิดชอบ (Custodian)"><input style={S.input} value={f.custodian || ""} onChange={set("custodian")} /></Field>
-        <Field label="เลขทรัพย์สิน (Asset No.)"><input style={S.input} value={f.assetNo || ""} onChange={set("assetNo")} /></Field>
-        <Field label="กลุ่มเครื่องมือ (A/B/C)"><input style={S.input} value={f.riskGroup || ""} onChange={set("riskGroup")} placeholder="A / B / C" /></Field>
-        <Field label="ขอบข่ายการใช้งาน"><input style={S.input} value={f.scopeOfUse || ""} onChange={set("scopeOfUse")} /></Field>
-        <Field label="วิธีทดสอบที่เกี่ยวข้อง"><input style={S.input} value={f.relatedTestMethod || ""} onChange={set("relatedTestMethod")} /></Field>
-        <Field label="พารามิเตอร์ที่วัด"><input style={S.input} value={f.measuredParameter || ""} onChange={set("measuredParameter")} /></Field>
-        <Field label="หน่วย"><input style={S.input} value={f.calUnit || ""} onChange={set("calUnit")} /></Field>
-        <Field label="ช่วงใช้งานจริง — ต่ำสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMin ?? ""} onChange={set("workingRangeMin")} /></Field>
-        <Field label="ช่วงใช้งานจริง — สูงสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMax ?? ""} onChange={set("workingRangeMax")} /></Field>
-        <Field label="ความละเอียด (Resolution)"><input style={S.input} value={f.resolution || ""} onChange={set("resolution")} /></Field>
-        <Field label="เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)"><input type="number" step="any" style={S.input} value={f.tolerance ?? ""} onChange={set("tolerance")} /></Field>
-        <Field label="ชนิดของเกณฑ์">
-          <select style={S.input} value={f.toleranceType || "absolute"} onChange={set("toleranceType")}>
-            {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </Field>
-        <Field label="แหล่งอ้างอิงของเกณฑ์">
-          <input style={S.input} list="basisOptions" value={f.basisOfCriteria || ""} onChange={set("basisOfCriteria")} />
-          <datalist id="basisOptions">{LK_BASIS.map(b => <option key={b} value={b} />)}</datalist>
-        </Field>
-        <Field label="เอกสารอ้างอิงของเกณฑ์"><input style={S.input} value={f.referenceDocument || ""} onChange={set("referenceDocument")} /></Field>
-        <Field label="Decision Rule ที่อนุมัติ">
-          <select style={S.input} value={f.decisionRule || "simple"} onChange={set("decisionRule")}>
-            {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
-          </select>
-        </Field>
-        {f.decisionRule === "guardband" && (
-          <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.guardBandFactor ?? ""} onChange={set("guardBandFactor")} placeholder="เช่น 1" /></Field>
-        )}
-        <Field label="ความถี่ Daily/Intermediate Check"><input style={S.input} value={f.checkFrequency || ""} onChange={set("checkFrequency")} placeholder="เช่น ทุกวัน, ทุกสัปดาห์" /></Field>
-        <Field label="Severity — ผลกระทบหากเครื่องมือคลาดเคลื่อน">
-          <ScoreSelect value={f.severity} onChange={v => setF({ ...f, severity: v })} scale={SEVERITY_SCALE} />
-        </Field>
-        <Field label="Occurrence — ความถี่ที่เคยเกิดปัญหา">
-          <ScoreSelect value={f.occurrence} onChange={v => setF({ ...f, occurrence: v })} scale={OCCURRENCE_SCALE} />
-        </Field>
-        <Field label="Detectability — ความยากในการตรวจพบ">
-          <ScoreSelect value={f.detectability} onChange={v => setF({ ...f, detectability: v })} scale={DETECTABILITY_SCALE} />
-        </Field>
-        {(() => { const { rpn, level } = calcRPN(f.severity, f.occurrence, f.detectability); return (
-          <Field label="RPN / ระดับความเสี่ยง (คำนวณอัตโนมัติ)">
-            <div style={{ ...S.input, background: "#F5F8F7", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontFamily: "var(--font-mono)" }}>{rpn ?? "-"}</span><span style={{ color: "var(--muted)" }}>{level}</span>
-            </div>
-          </Field>
-        ); })()}
-        <Field label="สถานะเครื่องมือปัจจุบัน">
-          <select style={S.input} value={f.currentStatus || ""} onChange={set("currentStatus")}>
-            <option value="">- ยังไม่ระบุ -</option>
-            {LK_CURRENT_STATUS.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </Field>
-        <Field label="ผู้อนุมัติให้ใช้งาน"><input style={S.input} value={f.authorizedBy || ""} onChange={set("authorizedBy")} /></Field>
-        <Field label="ลิงก์ไฟล์ใบรับรอง" full><input style={S.input} value={f.certificateFileLink || ""} onChange={set("certificateFileLink")} placeholder="https://..." /></Field>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.code || !f.name} />
     </Modal>
@@ -2562,7 +2452,7 @@ function CriteriaGridEditor({ equipment, setEquipment, notify, onClose }) {
   );
 }
 
-function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity, onSaveDailyCheck, onApproveDailyCheck, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+function EquipmentDetail({ item, certificates = [], activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity, onSaveDailyCheck, onApproveDailyCheck, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
@@ -2666,13 +2556,6 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
             <Tag color={STATUS_COLOR[st]}>{item.nextDue ? `${STATUS_LABEL[st]} · ${fmtDate(item.nextDue)}` : "ไม่มีกำหนด"}</Tag>
             <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
           </div>
-
-          {(() => { const gaps = calibCriteriaGaps(item); return gaps.length > 0 && (
-            <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", fontSize: 12.5, color: "var(--ink)", display: "flex", alignItems: "flex-start", gap: 6 }}>
-              <FileWarning size={14} color="var(--amber)" style={{ flexShrink: 0, marginTop: 1 }} />
-              <span><strong>ยังไม่ได้กำหนดเกณฑ์การสอบเทียบ (Sheet 01):</strong> {gaps.join(", ")} — กด "แก้ไข" เพื่อกรอกให้ครบ</span>
-            </div>
-          ); })()}
 
           {item.status === "maintenance" && item.unavailableReason && (
             <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", fontSize: 12.5, color: "var(--ink)" }}>
@@ -2836,6 +2719,7 @@ function EquipmentDetail({ item, activities, dailyChecks = [], bookings, onClose
         <MeterCheckForm
           entry={dailyCheckEntry}
           equip={item}
+          certificates={certificates}
           isExisting={false}
           canApprove={canApprove}
           currentUsername={currentUsername}
@@ -3120,21 +3004,30 @@ function computeCoolingBathTempResult(equip, reading) {
 /* ================= REFRACTOMETER (BRIX) DAILY CHECK ================= */
 // Per form "บันทึกตรวจสอบเครื่องมือประจำวัน (DAILY CHECK) — Refractometer":
 // a 20 Brix standard solution is prepared fresh each day from sucrose +
-// water, then read on the instrument. Like the Oven/Polarimeter, the
-// acceptance range is a fixed property of the instrument (brixMin / brixMax,
-// set in EquipmentForm) rather than re-entered every day.
+// water, then read on the instrument. Unlike the Oven/Polarimeter, the
+// acceptance range is not typed in per instrument: it is derived from
+// the Tolerance approved in the calibration record (Sheet 01) as
+// 20 Brix ± Tolerance. Legacy brixMin / brixMax values are only used as a
+// fallback while an instrument has no Tolerance yet.
+const REFRACTOMETER_STD_BRIX = 20;
 const REFRACTOMETER_PREUSE_ITEMS = [
   { key: "stdPrepared", label: "เตรียมสารละลายมาตรฐาน Std. 20 Brix เรียบร้อย" },
 ];
 function computeRefractometerResult(equip, reading) {
-  const min = Number(equip?.brixMin);
-  const max = Number(equip?.brixMax);
-  const hasRange = equip?.brixMin !== undefined && equip?.brixMin !== "" && !isNaN(min)
-    && equip?.brixMax !== undefined && equip?.brixMax !== "" && !isNaN(max);
+  const derived = deriveCheckLimits(equip, REFRACTOMETER_STD_BRIX);
+  let min = null, max = null, source = null, tol = null;
+  if (derived) {
+    min = derived.lal; max = derived.ual; tol = derived.tol; source = "sheet01";
+  } else {
+    const lo = numOrNull(equip?.brixMin), hi = numOrNull(equip?.brixMax);
+    if (lo != null && hi != null) { min = lo; max = hi; source = "legacy"; }
+  }
+  const hasRange = min !== null && max !== null;
   const read = Number(reading);
-  const hasRead = reading !== "" && reading !== undefined && !isNaN(read);
+  const hasRead = reading !== "" && reading !== undefined && reading !== null && !isNaN(read);
   return {
-    min: hasRange ? min : null, max: hasRange ? max : null,
+    standard: REFRACTOMETER_STD_BRIX, tol, source,
+    min, max,
     reading: hasRead ? read : null,
     pass: (hasRange && hasRead) ? (read >= min && read <= max) : null,
   };
@@ -3271,7 +3164,7 @@ function blankMeterCheckEntry(equipmentId) {
 // scale's DailyCheckForm, but shows only the pH block or the EC block
 // depending on which type the equipment record is (they're always kept as
 // two separate equipment entries, never one combined "pH/EC" item).
-function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, currentUsername = "", currentDisplayName = "", onCancel, onSave, onApprove }) {
+function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, canApprove = false, currentUsername = "", currentDisplayName = "", onCancel, onSave, onApprove }) {
   const isPh = equip?.type === "pH Meter";
   const isEc = equip?.type === "EC Meter";
   const isPolarimeter = equip?.type === "Polarimeter";
@@ -3299,6 +3192,11 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
   const refractometerResult = isRefractometer ? computeRefractometerResult(equip, f.brixReading) : null;
   const coolingBathResult = isCoolingBath ? computeCoolingBathTempResult(equip, f.coolingBathReading) : null;
   const humidityResult = isHumidity ? computeHumidityResult(equip, f.humidityReading) : null;
+  // Link back to the calibration record: warn when the instrument is past its
+  // calibration due date or its newest certificate failed the Sheet 03 check.
+  const calSummary = latestCalibrationSummary(equip, certificates);
+  const calOverdue = !!equip?.nextDue && daysUntil(equip.nextDue) < 0;
+  const calBad = !!calSummary && ["FAIL", "WARNING", "CONDITIONAL PASS"].includes(calSummary.decision);
   const readingsComplete = isPh ? phRows.every(r => r.reading !== null)
     : isPolarimeter ? polarimeterResult.reading !== null
     : isOven ? ovenResult.reading !== null
@@ -3326,6 +3224,15 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="เวลา"><input type="time" style={S.input} value={f.time} onChange={set("time")} /></Field>
+        {(calOverdue || calBad) && (
+          <div style={{ gridColumn: "1 / -1", fontSize: 12.5, color: "var(--ink)", background: "#FFF8EC", border: "1px solid #F3DDB5", borderRadius: 8, padding: "8px 10px", display: "flex", gap: 6, alignItems: "flex-start" }}>
+            <FileWarning size={14} color="var(--amber)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>
+              {calOverdue && <>เครื่องมือนี้เลยกำหนดสอบเทียบ ({fmtDate(equip.nextDue)}). </>}
+              {calBad && <>ผลสอบเทียบล่าสุด ({fmtDate(calSummary.date)}) ได้ <b>{calSummary.decision}</b> — ตรวจสอบที่ บันทึกการสอบเทียบ › เกณฑ์ยอมรับผล ก่อนใช้ผลตรวจนี้ตัดสินการใช้งาน</>}
+            </span>
+          </div>
+        )}
 
         {preUseItems.map(it => (
           <Field key={it.key} label={it.label} plain>
@@ -3406,7 +3313,13 @@ function MeterCheckForm({ entry, equip, isExisting = false, canApprove = false, 
             <Field label="%Brix วัดได้จริง"><input type="number" step="any" style={S.input} value={f.brixReading} onChange={set("brixReading")} /></Field>
             <Field label="เกณฑ์ที่ยอมรับ (%Brix)" plain>
               <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
-                {refractometerResult.min !== null ? `${refractometerResult.min} – ${refractometerResult.max} °Brix` : "ยังไม่ได้ตั้งค่า — กรอกได้ที่หน้าเครื่องมือ"}
+                {refractometerResult.min !== null ? `${refractometerResult.min} – ${refractometerResult.max} °Brix` : "ยังไม่ได้ตั้งค่า — ตั้ง Tolerance ที่ บันทึกการสอบเทียบ › ข้อมูลเครื่องมือ"}
+                {refractometerResult.source === "sheet01" && (
+                  <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix (จาก Tolerance ในบันทึกการสอบเทียบ)</div>
+                )}
+                {refractometerResult.source === "legacy" && (
+                  <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2, color: "var(--amber)" }}>ค่าเดิมที่กรอกไว้ — ควรตั้ง Tolerance ในบันทึกการสอบเทียบแทน</div>
+                )}
               </div>
             </Field>
             <Field label="ผล" plain>
@@ -3968,18 +3881,20 @@ function AcceptanceCriteriaTab({ equipment, certificates, setCertificates, notif
 }
 
 /* ================= Sheet 04: Intermediate / Performance Check (general) =================
-   Sits alongside the existing type-specific "Daily check" tab — this one
-   follows "04_Daily_Intermediate_Check" column-for-column for any
-   instrument/parameter, with Warning/Action limits computed automatically. */
+   Covers Intermediate and pre-use Performance checks for any
+   instrument/parameter, with Warning/Action limits computed from the Sheet 01
+   Tolerance. Daily checks are NOT re-entered here: they live in the
+   type-specific "Daily check" tab and are summarised at the top of this tab
+   (and merged into the same MPIR sheet 04 on export). */
 function blankIntermediateCheck(instrumentId) {
   return {
-    id: uid(), checkDate: todayISO(), instrumentId, parameter: "", checkType: "Daily Check",
+    id: uid(), checkDate: todayISO(), instrumentId, parameter: "", checkType: "Intermediate Check",
     checkItem: "", checkStandard: "", checkStandardId: "", referenceValue: "", uOfCheckStandard: "", unit: "",
     reading1: "", reading2: "", reading3: "", reading4: "", reading5: "",
     appliedCorrection: "", checkedBy: "", reviewedBy: "", actionOnFailure: "", carNo: "", remarks: "",
   };
 }
-function IntermediateCheckTab({ equipment, checks, setChecks, notify, currentDisplayName = "" }) {
+function IntermediateCheckTab({ equipment, checks, setChecks, dailyChecks = [], notify, currentDisplayName = "" }) {
   const [editing, setEditing] = useState(null);
   const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
   const sorted = checks.slice().sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""));
@@ -3993,9 +3908,28 @@ function IntermediateCheckTab({ equipment, checks, setChecks, notify, currentDis
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Daily / Intermediate / Performance Check)</h2><p style={S.h2sub}>Sheet 04 — Warning/Action Limit คำนวณจาก Tolerance ที่อนุมัติใน Sheet 01</p></div>
+        <div><h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Intermediate / Performance Check)</h2><p style={S.h2sub}>Sheet 04 — Warning/Action Limit คำนวณจาก Tolerance ที่อนุมัติในข้อมูลเครื่องมือ (Sheet 01)</p></div>
         <button style={S.primaryBtn} onClick={() => setEditing(blankIntermediateCheck(equipment[0]?.id || ""))}><Plus size={15} /> บันทึกผลตรวจสอบ</button>
       </div>
+      {(() => {
+        const bySeq = dailyChecks.slice().sort((a, b) => ((b.date || "") + (b.time || "")).localeCompare((a.date || "") + (a.time || "")));
+        const last = bySeq[0];
+        const now = Date.now();
+        const failed90 = dailyChecks.filter(c => c.result === false && c.date && (now - new Date(c.date + "T00:00:00")) <= 90 * 86400000).length;
+        return (
+          <div style={{ ...S.notesBox, marginTop: 0, marginBottom: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <CheckCircle2 size={14} color={last ? (last.result === false ? "var(--red)" : "var(--green)") : "var(--muted)"} style={{ flexShrink: 0 }} />
+            {last ? (
+              <span>
+                Daily check ล่าสุด {fmtDate(last.date)}: <b>{last.result === false ? "ไม่ผ่าน" : last.result === true ? "ผ่าน" : "-"}</b> · ไม่ผ่านใน 90 วัน {failed90} ครั้ง · ทั้งหมด {dailyChecks.length} รายการ
+              </span>
+            ) : (
+              <span>ยังไม่มี Daily check ของเครื่องมือนี้</span>
+            )}
+            <span style={{ color: "var(--muted)" }}>— บันทึกที่เมนู "Daily check" ไม่ต้องกรอกซ้ำที่นี่</span>
+          </div>
+        );
+      })()}
       <div style={S.tableWrap}>
         <table style={S.table}>
           <thead><tr>{["วันที่", "เครื่องมือ", "พารามิเตอร์", "ประเภท", "ค่าเฉลี่ยหลังแก้ค่า", "Bias", "LWL/UWL", "LAL/UAL", "ผล", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
@@ -4056,7 +3990,7 @@ function IntermediateCheckForm({ row, equipment, currentDisplayName, onCancel, o
           <select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>{equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}</select>
         </Field>
         <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} placeholder="เช่น Wavelength Accuracy" /></Field>
-        <Field label="ประเภทการตรวจสอบ"><select style={S.input} value={f.checkType} onChange={set("checkType")}>{LK_CHKTYPE.map(t => <option key={t} value={t}>{t}</option>)}</select></Field>
+        <Field label="ประเภทการตรวจสอบ"><select style={S.input} value={f.checkType} onChange={set("checkType")}>{(LK_CHKTYPE_FORM.includes(f.checkType) || !f.checkType ? LK_CHKTYPE_FORM : [f.checkType, ...LK_CHKTYPE_FORM]).map(t => <option key={t} value={t}>{t}{t === "Daily Check" ? " (ข้อมูลเดิม)" : ""}</option>)}</select></Field>
       </>),
     },
     {
@@ -4338,9 +4272,9 @@ function TrendAnalysisTab({ equipment, certificates, notify }) {
 }
 
 /* ================= Sheet 07: Equipment Status Summary (computed + a few manual fields) ================= */
-function EquipmentStatusTab({ equipment, certificates, intermediateChecks, setEquipment, notify }) {
+function EquipmentStatusTab({ equipment, certificates, intermediateChecks, dailyChecks = [], setEquipment, notify }) {
   const [q, setQ] = useState("");
-  const rows = useMemo(() => computeEquipmentStatusRows(equipment, certificates, intermediateChecks), [equipment, certificates, intermediateChecks]);
+  const rows = useMemo(() => computeEquipmentStatusRows(equipment, certificates, intermediateChecks, dailyChecks), [equipment, certificates, intermediateChecks, dailyChecks]);
   const filtered = rows.filter(r => ((r.e.code || "") + (r.e.name || "")).toLowerCase().includes(q.toLowerCase()));
   function setManual(id, patch) { setEquipment(equipment.map(e => e.id === id ? { ...e, ...patch } : e)); notify("บันทึกแล้ว"); }
   const CYCLE_LABEL = { ok: "ปกติ", warn: "ใกล้ถึงกำหนด", danger: "เลยกำหนด", none: "-" };
@@ -4551,6 +4485,7 @@ function ApprovalRecordForm({ row, equipment, onCancel, onSave }) {
    Daily check is deliberately NOT one of the 8 — it keeps its own separate
    nav entry outside this hub. */
 const CALIBRATION_SUBTABS = [
+  { key: "instrumentMaster", label: "ข้อมูลเครื่องมือ (Sheet 01)", icon: Wrench },
   { key: "certificates", label: "ใบรับรองสอบเทียบ", icon: FileCheck2 },
   { key: "acceptance", label: "เกณฑ์ยอมรับผล", icon: BadgeCheck },
   { key: "intermediateCheck", label: "ตรวจสอบระหว่างรอบ", icon: ClipboardCheck },
@@ -4583,10 +4518,161 @@ function makeScopedEquipmentSetter(fullEquipment, setFullEquipment) {
     setFullEquipment(fullEquipment.map(e => (byId[e.id] ? byId[e.id] : e)));
   };
 }
+/* ================= Sheet 01: Instrument Master (calibration criteria) =================
+   The ISO/IEC 17025 fields of the equipment record — Tolerance/MPE, Decision
+   Rule, Risk score, check frequency, etc. — are edited here, next to the
+   records that depend on them, instead of on the Equipment page. They are
+   still stored on the equipment record itself; only the editing UI moved.
+   Everything downstream is derived from these values: Sheet 03 (acceptance
+   decision), Sheet 04 (Warning/Action limits), Sheet 07 (status) and the
+   Refractometer daily check's %Brix acceptance range. */
+const SHEET01_KEYS = [
+  "custodian", "assetNo", "riskGroup", "scopeOfUse", "relatedTestMethod", "measuredParameter", "calUnit",
+  "workingRangeMin", "workingRangeMax", "resolution", "tolerance", "toleranceType", "basisOfCriteria",
+  "referenceDocument", "decisionRule", "guardBandFactor", "checkFrequency", "severity", "occurrence",
+  "detectability", "currentStatus", "authorizedBy", "certificateFileLink", "brixMin", "brixMax",
+];
+function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates = [], notify }) {
+  const pick = (e) => Object.fromEntries(SHEET01_KEYS.map(k => [k, e?.[k] ?? ""]));
+  const [f, setF] = useState(() => ({ ...instrument }));
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const dirty = JSON.stringify(pick(f)) !== JSON.stringify(pick(instrument));
+  const suggestion = useMemo(() => suggestCriteriaByType(f.type, equipment, f.id), [f.type, equipment, f.id]);
+  const criteriaEmpty = !f.tolerance && !f.decisionRule && (f.severity == null || f.severity === "") && (f.occurrence == null || f.occurrence === "") && (f.detectability == null || f.detectability === "");
+  const gaps = calibCriteriaGaps(f);
+  const isRefractometer = f.type === "Refractometer";
+  const legacyLo = numOrNull(f.brixMin), legacyHi = numOrNull(f.brixMax);
+  const legacyBrix = isRefractometer && numOrNull(f.tolerance) == null && legacyLo != null && legacyHi != null;
+  const legacySymmetric = legacyBrix && Math.abs((legacyLo + legacyHi) / 2 - REFRACTOMETER_STD_BRIX) < 1e-9;
+  const brixLimits = isRefractometer ? deriveCheckLimits(f, REFRACTOMETER_STD_BRIX) : null;
+  const generalLimits = !isRefractometer && numOrNull(f.tolerance) != null ? true : false;
+  const calSummary = latestCalibrationSummary(f, certificates);
+  const { rpn, level } = calcRPN(f.severity, f.occurrence, f.detectability);
+
+  function applySuggestion() {
+    if (!suggestion) return;
+    const { sourceCode, ...vals } = suggestion;
+    setF({ ...f, ...vals });
+  }
+  function importLegacyBrix() {
+    setF({
+      ...f, tolerance: round4((legacyHi - legacyLo) / 2), toleranceType: "absolute",
+      measuredParameter: f.measuredParameter || "%Brix", calUnit: f.calUnit || "°Brix", brixMin: "", brixMax: "",
+    });
+  }
+  function save() {
+    const patch = pick(f);
+    setEquipment(equipment.map(e => e.id === f.id ? { ...e, ...patch } : e));
+    notify("บันทึกข้อมูลเครื่องมือ (Sheet 01) แล้ว");
+  }
+  const banner = (tone, children) => (
+    <div style={{
+      gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12,
+      background: tone === "warn" ? "#FDF3E3" : "#E9F1FB", border: `1px solid ${tone === "warn" ? "var(--amber)" : "var(--teal)"}`,
+      borderRadius: 8, padding: "8px 11px",
+    }}>{children}</div>
+  );
+
+  return (
+    <div>
+      <div style={S.detailHead}>
+        <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ (Sheet 01)</h2><p style={S.h2sub}>Tolerance, Decision Rule และ Risk score ที่กรอกที่นี่ใช้คำนวณ Sheet 03, Sheet 04, Sheet 07 และเกณฑ์ผ่าน/ไม่ผ่านของ Daily check โดยอัตโนมัติ</p></div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={S.ghostBtn} disabled={!dirty} onClick={() => setF({ ...f, ...pick(instrument) })}>ยกเลิกการแก้ไข</button>
+          <button style={{ ...S.primaryBtn, opacity: dirty ? 1 : 0.5 }} disabled={!dirty} onClick={save}><Check size={15} /> บันทึก</button>
+        </div>
+      </div>
+      <div style={S.formGrid} className="ltFormGrid">
+        {gaps.length > 0 && banner("warn", <><FileWarning size={14} color="var(--amber)" /><span><strong>ยังไม่ได้กำหนด:</strong> {gaps.join(", ")}</span></>)}
+        {suggestion && criteriaEmpty && banner("info", <>
+          <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>พบเกณฑ์ที่ตั้งไว้แล้วสำหรับเครื่องมือประเภท "{f.type}" (จาก {suggestion.sourceCode}) — ใช้เป็นค่าเริ่มต้นได้เลย</span>
+          <button type="button" style={S.smallBtn} onClick={applySuggestion}>ใช้ค่านี้</button>
+        </>)}
+        {legacyBrix && banner("info", <>
+          <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
+          {legacySymmetric ? (
+            <>
+              <span style={{ flex: 1 }}>เครื่องนี้มีเกณฑ์ %Brix แบบเดิม ({legacyLo} – {legacyHi}) — แปลงเป็น Tolerance ±{round4((legacyHi - legacyLo) / 2)} °Brix เพื่อให้เกณฑ์ผูกกับบันทึกการสอบเทียบ</span>
+              <button type="button" style={S.smallBtn} onClick={importLegacyBrix}>แปลงเป็น Tolerance</button>
+            </>
+          ) : (
+            <span style={{ flex: 1 }}>เกณฑ์ %Brix แบบเดิม ({legacyLo} – {legacyHi}) ไม่สมมาตรรอบ {REFRACTOMETER_STD_BRIX} — กรอก Tolerance ด้านล่างเองเพื่อให้ Daily check ใช้ค่าจากบันทึกการสอบเทียบ</span>
+          )}
+        </>)}
+
+        <Field label="ผู้รับผิดชอบ (Custodian)"><input style={S.input} value={f.custodian || ""} onChange={set("custodian")} /></Field>
+        <Field label="เลขทรัพย์สิน (Asset No.)"><input style={S.input} value={f.assetNo || ""} onChange={set("assetNo")} /></Field>
+        <Field label="กลุ่มเครื่องมือ (A/B/C)"><input style={S.input} value={f.riskGroup || ""} onChange={set("riskGroup")} placeholder="A / B / C" /></Field>
+        <Field label="ขอบข่ายการใช้งาน"><input style={S.input} value={f.scopeOfUse || ""} onChange={set("scopeOfUse")} /></Field>
+        <Field label="วิธีทดสอบที่เกี่ยวข้อง"><input style={S.input} value={f.relatedTestMethod || ""} onChange={set("relatedTestMethod")} /></Field>
+        <Field label="พารามิเตอร์ที่วัด"><input style={S.input} value={f.measuredParameter || ""} onChange={set("measuredParameter")} /></Field>
+        <Field label="หน่วย"><input style={S.input} value={f.calUnit || ""} onChange={set("calUnit")} /></Field>
+        <Field label="ช่วงใช้งานจริง — ต่ำสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMin ?? ""} onChange={set("workingRangeMin")} /></Field>
+        <Field label="ช่วงใช้งานจริง — สูงสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMax ?? ""} onChange={set("workingRangeMax")} /></Field>
+        <Field label="ความละเอียด (Resolution)"><input style={S.input} value={f.resolution || ""} onChange={set("resolution")} /></Field>
+        <Field label="เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)"><input type="number" step="any" style={S.input} value={f.tolerance ?? ""} onChange={set("tolerance")} /></Field>
+        <Field label="ชนิดของเกณฑ์">
+          <select style={S.input} value={f.toleranceType || "absolute"} onChange={set("toleranceType")}>
+            {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </Field>
+        <Field label="แหล่งอ้างอิงของเกณฑ์">
+          <input style={S.input} list="basisOptions" value={f.basisOfCriteria || ""} onChange={set("basisOfCriteria")} />
+          <datalist id="basisOptions">{LK_BASIS.map(b => <option key={b} value={b} />)}</datalist>
+        </Field>
+        <Field label="เอกสารอ้างอิงของเกณฑ์"><input style={S.input} value={f.referenceDocument || ""} onChange={set("referenceDocument")} /></Field>
+        <Field label="Decision Rule ที่อนุมัติ">
+          <select style={S.input} value={f.decisionRule || "simple"} onChange={set("decisionRule")}>
+            {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+          </select>
+        </Field>
+        {f.decisionRule === "guardband" && (
+          <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.guardBandFactor ?? ""} onChange={set("guardBandFactor")} placeholder="เช่น 1" /></Field>
+        )}
+        <Field label="ความถี่ Daily/Intermediate Check"><input style={S.input} value={f.checkFrequency || ""} onChange={set("checkFrequency")} placeholder="เช่น ทุกวัน, ทุกสัปดาห์" /></Field>
+        <Field label="Severity — ผลกระทบหากเครื่องมือคลาดเคลื่อน">
+          <ScoreSelect value={f.severity} onChange={v => setF({ ...f, severity: v })} scale={SEVERITY_SCALE} />
+        </Field>
+        <Field label="Occurrence — ความถี่ที่เคยเกิดปัญหา">
+          <ScoreSelect value={f.occurrence} onChange={v => setF({ ...f, occurrence: v })} scale={OCCURRENCE_SCALE} />
+        </Field>
+        <Field label="Detectability — ความยากในการตรวจพบ">
+          <ScoreSelect value={f.detectability} onChange={v => setF({ ...f, detectability: v })} scale={DETECTABILITY_SCALE} />
+        </Field>
+        <Field label="RPN / ระดับความเสี่ยง (คำนวณอัตโนมัติ)">
+          <div style={{ ...S.input, background: "#F5F8F7", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontFamily: "var(--font-mono)" }}>{rpn ?? "-"}</span><span style={{ color: "var(--muted)" }}>{level}</span>
+          </div>
+        </Field>
+        <Field label="สถานะเครื่องมือปัจจุบัน">
+          <select style={S.input} value={f.currentStatus || ""} onChange={set("currentStatus")}>
+            <option value="">- ยังไม่ระบุ -</option>
+            {LK_CURRENT_STATUS.map(st => <option key={st} value={st}>{st}</option>)}
+          </select>
+        </Field>
+        <Field label="ผู้อนุมัติให้ใช้งาน"><input style={S.input} value={f.authorizedBy || ""} onChange={set("authorizedBy")} /></Field>
+        <Field label="ลิงก์ไฟล์ใบรับรอง" full><input style={S.input} value={f.certificateFileLink || ""} onChange={set("certificateFileLink")} placeholder="https://..." /></Field>
+      </div>
+
+      <div style={{ ...S.notesBox, marginTop: 14, fontSize: 12.5, lineHeight: 1.7 }}>
+        <div style={{ fontWeight: 700, color: "var(--teal-dark)", marginBottom: 4 }}>ค่านี้ถูกนำไปใช้ที่ไหนบ้าง</div>
+        <div>• Sheet 03: ตัดสินผลสอบเทียบด้วย Tolerance และ Decision Rule ของเครื่องมือนี้</div>
+        <div>• Sheet 04: Warning Limit = ค่าอ้างอิง ± ⅔ Tolerance, Action Limit = ค่าอ้างอิง ± Tolerance{generalLimits ? "" : " (ยังไม่มี Tolerance จึงยังคำนวณไม่ได้)"}</div>
+        {isRefractometer && (
+          <div>• Daily check (Refractometer): เกณฑ์ %Brix = {REFRACTOMETER_STD_BRIX} ± Tolerance {brixLimits ? <b style={{ fontFamily: "var(--font-mono)" }}>→ {brixLimits.lal} – {brixLimits.ual} °Brix</b> : "(ยังไม่ได้ตั้ง Tolerance)"}</div>
+        )}
+        <div>• ผลสอบเทียบล่าสุด: {calSummary ? <><b>{calSummary.decision}</b> (รอบ {fmtDate(calSummary.date)})</> : "ยังไม่มีใบรับรอง"}</div>
+      </div>
+    </div>
+  );
+}
+
 function CalibrationRecordsHub({
   equipment, setEquipment,
   certificates, setCertificates,
   intermediateChecks, setIntermediateChecks,
+  dailyChecks = [],
   uncertaintyBudgets, setUncertaintyBudgets,
   actionImpacts, setActionImpacts,
   approvalRecords, setApprovalRecords,
@@ -4595,30 +4681,62 @@ function CalibrationRecordsHub({
   const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
   const [subTab, setSubTab] = useState("certificates");
   const [q, setQ] = useState("");
+  const [critFilter, setCritFilter] = useState("all"); // "all" | "missing" | "complete"
+  const [showGrid, setShowGrid] = useState(false);
 
   // เครื่องปรับอากาศ (air conditioners) aren't calibrated instruments, so
   // they're excluded from this flow entirely.
   const calibratable = useMemo(() => equipment.filter(e => e.type !== "เครื่องปรับอากาศ"), [equipment]);
+  // Sheet 01 completeness — counted only over the formal calibration register
+  // group, so it reads as an honest "X of Y still need criteria".
+  const criteriaStats = useMemo(() => {
+    const inScope = equipment.filter(e => resolveEquipGroup(e) === EQUIP_GROUP_LABEL.analytical);
+    return { total: inScope.length, missing: inScope.filter(e => calibCriteriaGaps(e).length > 0).length };
+  }, [equipment]);
 
   // ---------------- Level 1: pick an instrument ----------------
   if (!selectedInstrumentId) {
     const rows = calibratable
       .filter(e => (e.code + e.name + (e.type || "")).toLowerCase().includes(q.toLowerCase()))
+      .filter(e => critFilter === "all" || (critFilter === "missing" ? calibCriteriaGaps(e).length > 0 : calibCriteriaGaps(e).length === 0))
       .sort((a, b) => alphaCompare(a.code, b.code));
     return (
       <div>
         <div style={S.detailHead}>
           <div>
             <h2 style={S.h2}>บันทึกการสอบเทียบ</h2>
-            <p style={S.h2sub}>เลือกเครื่องมือ เพื่อดูใบรับรองสอบเทียบ เกณฑ์ยอมรับผล ตรวจสอบระหว่างรอบ Uncertainty Budget แนวโน้ม สถานะ การดำเนินการ/ผลกระทบ และบันทึกการอนุมัติ ของเครื่องมือนั้น</p>
+            <p style={S.h2sub}>เลือกเครื่องมือ เพื่อกรอกข้อมูลเครื่องมือ/เกณฑ์การสอบเทียบ (Sheet 01) ดูใบรับรองสอบเทียบ เกณฑ์ยอมรับผล ตรวจสอบระหว่างรอบ Uncertainty Budget แนวโน้ม สถานะ การดำเนินการ/ผลกระทบ และบันทึกการอนุมัติ ของเครื่องมือนั้น</p>
           </div>
         </div>
+        {criteriaStats.missing > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, color: "var(--ink)" }}>
+            <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>
+              <strong>{criteriaStats.missing}</strong> จาก {criteriaStats.total} เครื่องมือในทะเบียนสอบเทียบ
+              ยังไม่ได้กำหนดเกณฑ์ (Tolerance / Decision Rule / Risk score)
+            </span>
+            <button style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => setShowGrid(true)}>
+              <ClipboardCheck size={13} /> กรอกเกณฑ์แบบตาราง
+            </button>
+          </div>
+        )}
         <div style={S.toolbar}>
           <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ (รหัส / ชื่อ / ประเภท)" value={q} onChange={e => setQ(e.target.value)} /></div>
+          <select value={critFilter} onChange={e => setCritFilter(e.target.value)} style={S.select}>
+            <option value="all">ทุกสถานะเกณฑ์</option>
+            <option value="missing">เกณฑ์ยังไม่ครบ</option>
+            <option value="complete">เกณฑ์ครบแล้ว</option>
+          </select>
+          <button style={S.ghostBtn} onClick={() => setShowGrid(true)}>
+            <ClipboardCheck size={14} style={{ marginRight: 4 }} /> กรอกเกณฑ์แบบตาราง
+          </button>
         </div>
+        {showGrid && (
+          <CriteriaGridEditor equipment={equipment} setEquipment={setEquipment} notify={notify} onClose={() => setShowGrid(false)} />
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
           {rows.map(e => (
-            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => { setSelectedInstrumentId(e.id); setSubTab("certificates"); }}>
+            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => { setSelectedInstrumentId(e.id); setSubTab(calibCriteriaGaps(e).length > 0 ? "instrumentMaster" : "certificates"); }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{e.code}</div>
@@ -4627,6 +4745,18 @@ function CalibrationRecordsHub({
                 <ChevronRight size={16} color="var(--muted)" />
               </div>
               <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>{e.type}{e.location ? ` · ${e.location}` : ""}</div>
+              {calibCriteriaGaps(e).length > 0 && (
+                <div
+                  title={`ยังไม่ได้กำหนด: ${calibCriteriaGaps(e).join(", ")}`}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 4, marginTop: 6,
+                    fontSize: 10.5, fontWeight: 600, color: "var(--amber)", background: "#FDF3E3",
+                    border: "1px solid var(--amber)", borderRadius: 20, padding: "2px 8px",
+                  }}
+                >
+                  <FileWarning size={11} /> เกณฑ์ไม่ครบ
+                </div>
+              )}
             </div>
           ))}
           {rows.length === 0 && <EmptyState text="ไม่พบเครื่องมือ" />}
@@ -4639,6 +4769,7 @@ function CalibrationRecordsHub({
   const scopedEquipment = instrument ? [instrument] : [];
   const scopedCertificates = certificates.filter(c => c.instrumentId === selectedInstrumentId);
   const scopedChecks = intermediateChecks.filter(c => c.instrumentId === selectedInstrumentId);
+  const scopedDailyChecks = dailyChecks.filter(c => c.equipmentId === selectedInstrumentId);
   const scopedBudgets = uncertaintyBudgets.filter(b => b.instrumentId === selectedInstrumentId);
   const scopedActionImpacts = actionImpacts.filter(a => a.instrumentId === selectedInstrumentId);
   const scopedApprovalRecords = approvalRecords.filter(a => a.instrumentId === selectedInstrumentId);
@@ -4672,6 +4803,13 @@ function CalibrationRecordsHub({
           );
         })}
       </div>
+      {subTab === "instrumentMaster" && instrument && (
+        <InstrumentMasterTab
+          key={instrument.id}
+          instrument={instrument} equipment={equipment} setEquipment={setEquipment}
+          certificates={scopedCertificates} notify={notify}
+        />
+      )}
       {subTab === "certificates" && (
         <CertificateDataTab
           equipment={scopedEquipment} certificates={scopedCertificates}
@@ -4688,7 +4826,7 @@ function CalibrationRecordsHub({
       )}
       {subTab === "intermediateCheck" && (
         <IntermediateCheckTab
-          equipment={scopedEquipment} checks={scopedChecks}
+          equipment={scopedEquipment} checks={scopedChecks} dailyChecks={scopedDailyChecks}
           setChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
           notify={notify} currentDisplayName={currentDisplayName}
         />
@@ -4705,7 +4843,7 @@ function CalibrationRecordsHub({
       )}
       {subTab === "equipStatus" && (
         <EquipmentStatusTab
-          equipment={scopedEquipment} certificates={scopedCertificates} intermediateChecks={scopedChecks}
+          equipment={scopedEquipment} certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
           setEquipment={makeScopedEquipmentSetter(equipment, setEquipment)} notify={notify}
         />
       )}
@@ -4733,7 +4871,7 @@ function CalibrationRecordsHub({
 // (quartz control plate check), and Oven (temperature check). Which form
 // opens (DailyCheckForm vs MeterCheckForm) is decided per selected item's
 // type, so this tab stays a single entry point instead of splitting by type.
-function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initialCheckId, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, notify, initialCheckId, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const checkable = equipment
     .filter(e => e.type === "เครื่องชั่ง" || e.type === "pH Meter" || e.type === "EC Meter" || e.type === "Polarimeter" || e.type === "Oven" || e.type === "เครื่องควบคุมความชื้น" || e.type === "Cooling Bath" || e.type === "Refractometer" || e.type === "Glass Thermometer")
     .slice()
@@ -4929,6 +5067,7 @@ function DailyCheckTab({ equipment, dailyChecks, setDailyChecks, notify, initial
         <MeterCheckForm
           entry={editing}
           equip={editEquip}
+          certificates={certificates}
           isExisting={dailyChecks.some(c => c.id === editing.id)}
           canApprove={canApprove}
           currentUsername={currentUsername}
@@ -8731,8 +8870,8 @@ function mpirTrendRows(certificates, equipment) {
   }));
 }
 
-function mpirEquipmentStatusRows(equipment, certificates, intermediateChecks) {
-  return computeEquipmentStatusRows(equipment, certificates, intermediateChecks).map(r => mpirRowFromMap(MPIR_DOC.sheets[6].headers, {
+function mpirEquipmentStatusRows(equipment, certificates, intermediateChecks, dailyChecks = []) {
+  return computeEquipmentStatusRows(equipment, certificates, intermediateChecks, dailyChecks).map(r => mpirRowFromMap(MPIR_DOC.sheets[6].headers, {
     "Instrument ID": r.e.code || "",
     "Parameter": r.e.measuredParameter || "",
     "Instrument Name": r.e.name || "",
@@ -8849,7 +8988,7 @@ function exportMPIRWorkbook(equipment, dailyChecks, cal = {}) {
     ],
     "05_Uncertainty_Input": () => mpirUncertaintyRows(uncertaintyBudgets, equipment),
     "06_Trend_Analysis": () => mpirTrendRows(certificates, equipment),
-    "07_Equipment_Status": () => mpirEquipmentStatusRows(equipment, certificates, intermediateChecks),
+    "07_Equipment_Status": () => mpirEquipmentStatusRows(equipment, certificates, intermediateChecks, dailyChecks),
     "08_Action_and_Impact": () => mpirActionImpactRows(actionImpacts, equipment),
     "09_Approval_Record": () => mpirApprovalRows(approvalRecords, equipment),
   };
