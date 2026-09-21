@@ -5,7 +5,7 @@ import {
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
   LayoutGrid, ZoomIn, QrCode, Printer, FileCheck2, BadgeCheck,
-  UploadCloud, Loader2, Sparkles, ClipboardCheck, Gauge, TrendingUp,
+  Sparkles, ClipboardCheck, Gauge, TrendingUp,
   ShieldCheck, FileWarning, Stamp, Check
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
@@ -596,213 +596,12 @@ function evaluateAcceptance(cert, instrument) {
   return { decision, rationale, absError, tol, limit, tur, en, utilizationPct };
 }
 
-// Calls the Anthropic API (already authenticated in this environment — no
-// key needed) with the certificate PDF as a document block, asking for one
-// JSON object per calibration point matching the Sheet 02 column schema.
-// Returns { certificateNo, provider, ..., points: [...] } or throws.
-// Loads pdf.js on demand so a certificate PDF can be rasterised in the
-// browser. Sending the raw PDF as a `document` block was the first attempt
-// and it failed: these certificates are *scanned* (the page content is one
-// flat image, with no text layer at all), and the in-artifact API proxy
-// does not accept document blocks anyway. Rendering each page to a JPEG and
-// sending it as an `image` block works for scans and stays within what the
-// proxy supports.
-async function loadPdfJs() {
-  if (window.pdfjsLib) return window.pdfjsLib;
-  await new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-    s.onload = resolve;
-    s.onerror = () => reject(new Error("โหลดไลบรารีอ่าน PDF (pdf.js) ไม่สำเร็จ — ตรวจสอบการเชื่อมต่ออินเทอร์เน็ต"));
-    document.head.appendChild(s);
-  });
-  if (!window.pdfjsLib) throw new Error("โหลดไลบรารีอ่าน PDF (pdf.js) ไม่สำเร็จ");
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  return window.pdfjsLib;
-}
-
-// Renders every page to a base64 JPEG. Scale 2 keeps the small table digits
-// legible after scanning; quality 0.82 keeps each page well under the API's
-// per-image size limit.
-async function pdfPagesToImages(file, onProgress) {
-  const pdfjsLib = await loadPdfJs();
-  const buf = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-  const images = [];
-  for (let n = 1; n <= pdf.numPages; n++) {
-    if (onProgress) onProgress(n, pdf.numPages);
-    const page = await pdf.getPage(n);
-    // Target ~1600px on the long edge: enough to resolve 4-decimal table
-    // digits on an A4 scan, while keeping each request small. Scale 2 on a
-    // 300dpi scan produced multi-megabyte bodies, which is one of the ways
-    // a request can die as a bare "Failed to fetch".
-    const base = page.getViewport({ scale: 1 });
-    const scale = Math.min(2, Math.max(1, 1600 / Math.max(base.width, base.height)));
-    const viewport = page.getViewport({ scale });
-    const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-    let data = canvas.toDataURL("image/jpeg", 0.78).split(",")[1];
-    // Hard ceiling well under the API's per-image limit; step quality down
-    // rather than fail outright on an unusually dense page.
-    for (let q = 0.6; data.length > 3_500_000 && q >= 0.4; q -= 0.1) {
-      data = canvas.toDataURL("image/jpeg", q).split(",")[1];
-    }
-    images.push(data);
-  }
-  return images;
-}
-
-// One API call per page. Pages are read individually (rather than the whole
-// PDF at once) for two reasons: max_tokens is 1000 in this environment, and
-// a single certificate page can hold 20 calibration points — a verbose
-// object per point would blow that budget. Hence the compact positional
-// "points" array, which costs roughly a third of the tokens.
-const CERT_PAGE_PROMPT = `คุณคือระบบดึงข้อมูลจากใบรับรองผลการสอบเทียบ (Certificate of Calibration) จากภาพสแกน
-ตอบเป็น JSON บรรทัดเดียวเท่านั้น ห้ามมีคำอธิบาย ห้ามมี markdown code fence
-
-{"cert":"เลขที่ใบรับรอง","provider":"ชื่อบริษัทผู้สอบเทียบ","accredNo":"เลขที่การรับรอง","calDate":"YYYY-MM-DD","issueDate":"YYYY-MM-DD","method":"วิธีสอบเทียบ","refStd":"มาตรฐานอ้างอิงที่ใช้","trace":"ข้อความ traceability","tempC":ตัวเลข,"rh":ตัวเลข,"notes":"ข้อจำกัด/หมายเหตุ","points":[[พารามิเตอร์,ช่วง,จุดสอบเทียบ,หน่วย,ค่าอ้างอิง,ค่าที่เครื่องอ่านได้,Error,Correction,U,k]]}
-
-กติกาสำคัญ:
-- หน้านี้อาจไม่มีข้อมูลบางช่อง ให้ใส่ null หรือ "" ห้ามเดา ห้ามคำนวณเอง
-- ถ้าหน้านี้ไม่มีตารางผลการสอบเทียบเลย ให้ "points" เป็น []
-- แต่ละแถวใน points = หนึ่งจุดสอบเทียบ ใช้ลำดับ 10 ช่องตามด้านบนเสมอ
-- ถ้าใบรับรองรายงานเฉพาะ Correction ไม่มี Error ให้ใส่ Correction และใส่ Error เป็น null
-- คอลัมน์ "Certified Values of Reference Material" คือค่าอ้างอิง, "UUC Reading" คือค่าที่เครื่องอ่านได้
-- ถ้ามีหลายตารางในหน้าเดียว (เช่น HG Set / DG Set / Photometric) ให้ใส่ชื่อตารางลงในช่องพารามิเตอร์ของทุกแถวในตารางนั้น
-- ตารางที่จัดกลุ่มตามความยาวคลื่น ให้ใส่ความยาวคลื่นลงในช่อง "ช่วง"
-- ถ้าหน้านี้เป็นใบรับรองคนละฉบับกับหน้าก่อน ให้ใส่เลขที่ใบรับรองของหน้านี้`;
-
-async function extractCertificatePage(base64Jpeg, apiKey = "") {
-  // When this app runs inside Claude's artifact sandbox the request is
-  // proxied and needs no key. When it runs anywhere else (a normal web
-  // host, localhost, an embedded WebView) the browser talks to Anthropic
-  // directly, which requires both a key and the opt-in CORS header —
-  // without them the call dies as a bare "Failed to fetch" with nothing
-  // in the response to explain why.
-  const headers = { "Content-Type": "application/json" };
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-    headers["anthropic-version"] = "2023-06-01";
-    headers["anthropic-dangerous-direct-browser-access"] = "true";
-  }
-  let resp;
-  try {
-    resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1000,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64Jpeg } },
-            { type: "text", text: CERT_PAGE_PROMPT },
-          ],
-        }],
-      }),
-    });
-  } catch (e) {
-    // fetch() only rejects for network-level failures — DNS, CORS, or the
-    // request never leaving the browser. Spell out what that means here,
-    // since "Failed to fetch" on its own tells the user nothing.
-    throw new Error(
-      `เรียก API ไม่ได้ (${e.message}) — เบราว์เซอร์ติดต่อ api.anthropic.com ไม่ได้ `
-      + `สาเหตุที่พบบ่อยคือแอปไม่ได้รันในสภาพแวดล้อมที่ต่อ API ให้อัตโนมัติ `
-      + `ให้ใส่ API key ในช่องด้านล่าง หรือใช้วิธี "วางข้อมูลที่ดึงมาแล้ว" แทน`
-    );
-  }
-  if (!resp.ok) {
-    let detail = "";
-    try { detail = (await resp.json())?.error?.message || ""; } catch (e) { /* non-JSON error body */ }
-    // 401 on a direct browser call is almost always the same mix-up: people
-    // paste in a claude.ai session value or a Claude Code/Desktop token,
-    // when what this needs is a Console API key. Naming that here saves a
-    // second round-trip of "still doesn't work."
-    if (resp.status === 401) {
-      throw new Error(
-        `API key ไม่ถูกต้อง (HTTP 401${detail ? ": " + detail : ""}) — ต้องเป็น API key จาก console.anthropic.com `
-        + `(ขึ้นต้นด้วย sk-ant-api03-...) เท่านั้น ไม่ใช่รหัสผ่านหรือ session ของ claude.ai `
-        + `และบัญชี Console ต้องเปิดใช้ billing แยกต่างหากจากแอป Claude ก่อนคีย์จะใช้งานได้ — `
-        + `ถ้าไม่สะดวกตั้งค่านี้ ใช้ "วางข้อมูลที่ดึงมาแล้ว" ด้านล่างแทนได้เลย ไม่ต้องมีคีย์`
-      );
-    }
-    throw new Error(`เรียก API ไม่สำเร็จ (HTTP ${resp.status})${detail ? ": " + detail : ""}`);
-  }
-  const data = await resp.json();
-  if (data.error) throw new Error(data.error.message || "API ตอบกลับเป็นข้อผิดพลาด");
-  const text = (data.content || []).map(b => (b.type === "text" ? b.text : "")).join("\n");
-  // The model is told to emit bare JSON, but strip fences and grab the outer
-  // object defensively — one malformed page shouldn't lose the whole file.
-  const clean = text.replace(/```json|```/g, "").trim();
-  const firstBrace = clean.indexOf("{"), lastBrace = clean.lastIndexOf("}");
-  if (firstBrace === -1 || lastBrace === -1) throw new Error("อ่านค่าจากหน้านี้ไม่ได้ (รูปแบบคำตอบไม่ถูกต้อง)");
-  return JSON.parse(clean.slice(firstBrace, lastBrace + 1));
-}
-
 const numOrNullRaw = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
 
-// Reads a whole PDF and returns one entry per *certificate* found in it —
-// a single scanned file often holds several (the AT102/26 + AT105/26 file
-// is the normal case here, not an edge case). Header fields carry forward
-// from a certificate's first page onto its continuation pages, which only
-// repeat the certificate number.
-async function extractCertificatesFromPdf(file, onProgress, apiKey = "") {
-  const images = await pdfPagesToImages(file, onProgress);
-  const certs = new Map();
-  const pageErrors = [];
-  let lastCertNo = "";
-  for (let i = 0; i < images.length; i++) {
-    if (onProgress) onProgress(i + 1, images.length, "reading");
-    let page;
-    try {
-      page = await extractCertificatePage(images[i], apiKey);
-    } catch (e) {
-      pageErrors.push(`หน้า ${i + 1}: ${e.message}`);
-      continue;
-    }
-    const certNo = (page.cert || "").trim() || lastCertNo;
-    if (!certNo && !(page.points || []).length) continue; // blank / label-only page
-    lastCertNo = certNo;
-    if (!certs.has(certNo)) {
-      certs.set(certNo, {
-        certificateNo: certNo, provider: "", providerAccreditationNo: "", calibrationDate: "", issueDate: "",
-        calibrationMethod: "", referenceStandardUsed: "", traceability: "", temperatureC: "", humidityRH: "",
-        limitationsNotes: "", points: [],
-      });
-    }
-    const c = certs.get(certNo);
-    // First non-empty value wins — continuation pages leave header cells blank.
-    const carry = {
-      provider: page.provider, providerAccreditationNo: page.accredNo, calibrationDate: page.calDate,
-      issueDate: page.issueDate, calibrationMethod: page.method, referenceStandardUsed: page.refStd,
-      traceability: page.trace, temperatureC: page.tempC, humidityRH: page.rh, limitationsNotes: page.notes,
-    };
-    Object.entries(carry).forEach(([k, v]) => { if (!c[k] && v != null && v !== "") c[k] = v; });
-    (page.points || []).forEach(p => {
-      if (!Array.isArray(p)) return;
-      const [parameter, rangeId, point, unit, ref, reading, error, correction, u, k] = p;
-      c.points.push({
-        parameter: parameter || "", rangeId: rangeId == null ? "" : String(rangeId),
-        calibrationPoint: numOrNullRaw(point), unit: unit || "",
-        referenceValue: numOrNullRaw(ref), indication: numOrNullRaw(reading),
-        reportedError: numOrNullRaw(error), reportedCorrection: numOrNullRaw(correction),
-        reportedU: numOrNullRaw(u), coverageFactor: numOrNullRaw(k) ?? 2,
-        sourcePage: i + 1,
-      });
-    });
-  }
-  return { certificates: [...certs.values()], pageErrors, pageCount: images.length };
-}
-
-// Offline fallback for when the browser can't reach the API at all. The
-// user pastes the same compact JSON shape the page reader produces (they
-// can get it by handing the PDF to Claude in a chat), and it's parsed and
-// filed through exactly the same path — so a certificate imported this way
-// is indistinguishable from one read automatically, and no separate
-// half-supported code path exists.
+// Paste-in import (JSON). The user pastes the compact JSON shape below — for
+// example produced by handing the certificate PDF to Claude in a chat — and it
+// is parsed and filed through the same builder as the text import, so both
+// paste paths produce identical rows.
 function parsePastedCertificateJson(text) {
   const raw = String(text).trim().replace(/```json|```/g, "").trim();
   if (!raw) throw new Error("ยังไม่ได้วางข้อมูล");
@@ -850,7 +649,7 @@ function parsePastedCertificateJson(text) {
   return out;
 }
 
-// Text-only import: no PDF rendering, no API call, no cost — the user
+// Text import: no PDF reading and no API call — the user
 // converts the scanned certificate to a Word doc (OCR), copies the header
 // block and each results table as plain text, and pastes it here. Tuned to
 // the Analytical Technology Co.,Ltd. certificate layout seen in this lab's
@@ -3758,15 +3557,10 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   const [selectedGroupKey, setSelectedGroupKey] = useState(null); // `${certificateNo}|||${calibrationDate}`
   const [q, setQ] = useState(""); // instrument search, level 1 only
   const [editing, setEditing] = useState(null);
-  const [uploadFor, setUploadFor] = useState(null); // instrument to attach an uploaded PDF to
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState("");  // per-page status while importing
+  const [uploadFor, setUploadFor] = useState(null); // instrument to attach pasted certificate data to
   const [errorMsg, setErrorMsg] = useState("");  // real failure reason, shown in the dialog
   const [pasteText, setPasteText] = useState("");
-  const [showPaste, setShowPaste] = useState(false);
-  const [pasteMode, setPasteMode] = useState("text"); // "text" (paste from Word, free) | "json" (paste from a chat, free) — both skip the API
-  // Only needed when the app isn't running somewhere that proxies the API.
-  const [apiKey, setApiKey] = useState("");
+  const [pasteMode, setPasteMode] = useState("text"); // "text" (paste from Word) | "json" (paste from a chat)
 
   const instrumentName = (id) => { const e = equipment.find(x => x.id === id); return e ? `${e.code} — ${e.name}` : id; };
 
@@ -3781,7 +3575,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     notify("ลบรายการแล้ว");
   }
 
-  // Shared by both import paths (PDF reader and pasted JSON) so the two can
+  // Shared by both paste paths (text and JSON) so the two can
   // never drift apart in how they flag incomplete rows.
   function buildRowsFromExtracted(found, instrumentId) {
     const rows = [];
@@ -3815,8 +3609,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     return rows;
   }
 
-  // Offline path: user pastes JSON produced elsewhere, saved through the
-  // same builder as the automatic reader.
+  // Saves whatever the user pasted (text or JSON) through buildRowsFromExtracted.
   function handlePasteImport(instrumentId) {
     try {
       const found = pasteMode === "text" ? parsePastedCertificateText(pasteText) : parsePastedCertificateJson(pasteText);
@@ -3836,133 +3629,61 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     }
   }
 
-  // Reads the uploaded PDF page by page and saves every calibration point
-  // it finds straight away, with no review step — that's how this lab wants
-  // the import to work. Two things are deliberately NOT hidden from the
-  // user: any page the reader failed on, and any row with a missing value.
-  // Failed pages are reported in the toast; incomplete rows are saved with
-  // recordStatus "Draft" and their gaps listed in `missingItems`, so a bad
-  // scan can never quietly become a row that reads as verified.
-  async function handlePdfUpload(file, instrumentId) {
-    setBusy(true);
-    setProgress("กำลังเปิดไฟล์...");
-    try {
-      const { certificates: found, pageErrors, pageCount } = await extractCertificatesFromPdf(
-        file,
-        (n, total, phase) => setProgress(phase === "reading" ? `กำลังอ่านหน้า ${n} จาก ${total}...` : `กำลังแปลงหน้า ${n} จาก ${total}...`),
-        apiKey
-      );
-      const totalPoints = found.reduce((sum, c) => sum + c.points.length, 0);
-      if (totalPoints === 0) {
-        notify(pageErrors.length
-          ? `อ่านไฟล์ไม่สำเร็จ — ${pageErrors[0]}`
-          : `อ่าน ${pageCount} หน้าแล้วแต่ไม่พบตารางผลสอบเทียบ — กรุณากรอกด้วยตนเอง`, 6000);
-        return;
-      }
-      const newRows = buildRowsFromExtracted(found, instrumentId);
-      setCertificates([...newRows, ...certificates]);
-      const certLabel = found.map(c => c.certificateNo || "-").join(", ");
-      const draftCount = newRows.filter(r => r.recordStatus === "Draft").length;
-      notify(
-        `นำเข้า ${newRows.length} จุดสอบเทียบจาก ${found.length} ใบรับรอง (${certLabel})`
-        + (draftCount ? ` — ${draftCount} แถวข้อมูลไม่ครบ ขึ้นสถานะ Draft` : "")
-        + (pageErrors.length ? ` — อ่านไม่ได้ ${pageErrors.length} หน้า` : ""),
-        7000
-      );
-      setUploadFor(null);
-    } catch (e) {
-      console.error(e);
-      // Show the real reason rather than a generic failure — the useful
-      // cases (pdf.js blocked, API rejected the request, corrupt file) are
-      // all distinguishable and all actionable.
-      setErrorMsg(e.message || String(e));
-    } finally {
-      setBusy(false);
-      setProgress("");
-    }
-  }
-
-  // Shared by level 2 & 3 — the PDF-upload / paste-import modal, scoped to
-  // whichever instrument was picked at level 1 (uploadFor still selects the
-  // exact instrument in case that ever needs to change mid-upload).
+  // Shared by level 2 & 3 — the paste-import modal, scoped to whichever
+  // instrument was picked at level 1 (uploadFor still selects the exact
+  // instrument in case that ever needs to change mid-import).
+  const closeImport = () => { setUploadFor(null); setErrorMsg(""); setPasteText(""); };
   const uploadModal = uploadFor !== null && (
-    <Modal onClose={() => !busy && (setUploadFor(null), setErrorMsg(""))} title="อัปโหลด PDF ใบรับรองสอบเทียบ">
+    <Modal onClose={closeImport} title="นำเข้าใบรับรองสอบเทียบ (วางข้อความ)">
       <Field label="เครื่องมือที่ใบรับรองนี้เป็นของ">
         <select style={S.input} value={uploadFor} onChange={e => setUploadFor(e.target.value)}>
           {equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
         </select>
       </Field>
-      <Field label="ไฟล์ PDF ใบรับรอง" full>
-        <input type="file" accept="application/pdf" disabled={busy}
-          onChange={e => { setErrorMsg(""); if (e.target.files[0]) handlePdfUpload(e.target.files[0], uploadFor); }} />
-      </Field>
-      {busy && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 12.5, marginTop: 10 }}>
-          <Loader2 size={15} className="ltSpin" /> {progress || "กำลังอ่านค่าจากใบรับรอง..."}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 14, margin: "12px 0 8px" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, cursor: "pointer" }}>
+          <input type="radio" checked={pasteMode === "text"} onChange={() => setPasteMode("text")} /> วางข้อความจาก Word
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, cursor: "pointer" }}>
+          <input type="radio" checked={pasteMode === "json"} onChange={() => setPasteMode("json")} /> วาง JSON (ให้ Claude ช่วยดึงในแชต)
+        </label>
+      </div>
+      {pasteMode === "text" ? (
+        <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
+          แปลงไฟล์ PDF สแกนเป็น Word (เมนู OCR ของ Word หรือ Google Docs ก็ได้) แล้วคัดลอกทั้งบล็อกข้อมูลหัวใบรับรองและตารางผลการสอบเทียบ
+          (รวมบรรทัดชื่อตาราง เช่น "Wavelength Accuracy by Using...") มาวางที่นี่ทั้งหมด — ปรับให้เข้ากับรูปแบบใบรับรอง Analytical Technology Co.,Ltd. ที่ใช้อยู่
+        </div>
+      ) : (
+        <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
+          ส่งไฟล์ PDF ให้ Claude ในหน้าแชต ขอให้ตอบกลับเป็น JSON ตามรูปแบบนี้ แล้วนำมาวางที่นี่
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, marginTop: 5, color: "var(--ink)" }}>
+            {'{"cert":"AT102/26","provider":"...","calDate":"2026-07-15","points":[["พารามิเตอร์","ช่วง",จุด,"หน่วย",ค่าอ้างอิง,ค่าที่อ่านได้,Error,Correction,U,k]]}'}
+          </div>
         </div>
       )}
+      <textarea
+        style={{ ...S.input, minHeight: 180, fontFamily: "var(--font-mono)", fontSize: 11.5 }}
+        value={pasteText} onChange={e => setPasteText(e.target.value)}
+        placeholder={pasteMode === "text" ? "วางข้อความทั้งก้อนที่คัดลอกจาก Word ที่นี่" : "วาง JSON ที่นี่ (รองรับทั้งใบเดียวและหลายใบในรูปแบบ array)"}
+      />
       {errorMsg && (
         <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, background: "#FDF1F1", border: "1px solid var(--red)", fontSize: 12.5, color: "var(--red)" }}>
-          <div style={{ fontWeight: 700, marginBottom: 3 }}>อ่าน PDF ไม่สำเร็จ</div>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>นำเข้าไม่สำเร็จ</div>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, wordBreak: "break-word" }}>{errorMsg}</div>
-          <div style={{ color: "var(--muted)", marginTop: 5 }}>กรอกด้วยตนเองได้จากปุ่ม "กรอกด้วยตนเอง" ในหน้านี้</div>
+          <div style={{ color: "var(--muted)", marginTop: 5 }}>ตรวจข้อความที่วางอีกครั้ง หรือกรอกด้วยตนเองจากปุ่ม "กรอกด้วยตนเอง" ในหน้านี้</div>
         </div>
       )}
       <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.65 }}>
-        รองรับใบรับรองที่เป็นภาพสแกน และไฟล์เดียวที่มีหลายใบรับรอง (เช่น AT102/26 + AT105/26 ในไฟล์เดียว) โดยจะอ่านทีละหน้า<br />
-        ระบบบันทึกทุกจุดที่อ่านได้ทันทีโดยไม่หยุดให้ตรวจสอบก่อน — แถวที่ข้อมูลไม่ครบจะขึ้นสถานะ "Draft" พร้อมระบุช่องที่ขาดไว้ในคอลัมน์ "รายการที่ขาด"
+        วางได้หลายใบรับรองในครั้งเดียว ระบบบันทึกทุกจุดที่อ่านได้ทันทีโดยไม่หยุดให้ตรวจสอบก่อน —
+        แถวที่ข้อมูลไม่ครบจะขึ้นสถานะ "Draft" พร้อมระบุช่องที่ขาดไว้ในคอลัมน์ "รายการที่ขาด"
       </div>
-
-      <Field label="Anthropic API key (ใส่เฉพาะกรณีขึ้น Failed to fetch)" full>
-        <input style={S.input} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-          placeholder="sk-ant-api03-... — เว้นว่างได้ถ้าแอปรันในที่ที่ต่อ API ให้อยู่แล้ว" autoComplete="off" />
-        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.6 }}>
-          ต้องเป็น API key จาก <b>console.anthropic.com</b> (ขึ้นต้นด้วย sk-ant-api03-...) เท่านั้น — คนละอย่างกับรหัสผ่าน
-          หรือ session ของแอป Claude / claude.ai และบัญชี Console ต้องผูก billing ไว้แล้วคีย์จึงจะเรียกได้
-          คีย์ใช้เฉพาะในเบราว์เซอร์นี้ ไม่ได้บันทึกลงระบบ และจะหายเมื่อปิดหน้าต่าง
-          — ถ้าไม่สะดวกตั้งค่านี้ ใช้ช่อง "วางข้อมูลที่ดึงมาแล้ว" ด้านล่างแทนได้ ไม่ต้องมีคีย์เลย
-        </div>
-      </Field>
-
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
-        <button style={{ ...S.smallBtn, marginBottom: showPaste ? 8 : 0 }} onClick={() => setShowPaste(v => !v)}>
-          {showPaste ? "ซ่อน" : "หรือ วางข้อความ/ข้อมูลที่ดึงมาแล้ว (ไม่ต้องใช้ API ไม่มีค่าใช้จ่าย)"}
+      <div style={S.modalFoot}>
+        <div style={{ flex: 1 }} />
+        <button style={S.ghostBtn} onClick={closeImport}>ยกเลิก</button>
+        <button style={{ ...S.primaryBtn, opacity: pasteText.trim() ? 1 : 0.5 }} disabled={!pasteText.trim()} onClick={() => handlePasteImport(uploadFor)}>
+          <ClipboardList size={14} /> นำเข้า
         </button>
-        {showPaste && (
-          <>
-            <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
-                <input type="radio" checked={pasteMode === "text"} onChange={() => setPasteMode("text")} /> วางข้อความจาก Word (แปลงจาก PDF สแกนด้วย OCR)
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
-                <input type="radio" checked={pasteMode === "json"} onChange={() => setPasteMode("json")} /> วาง JSON (จากที่ขอให้ Claude ช่วยดึงในแชต)
-              </label>
-            </div>
-            {pasteMode === "text" ? (
-              <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
-                แปลงไฟล์ PDF สแกนเป็น Word (เมนู OCR ของ Word หรือ Google Docs ก็ได้) แล้วคัดลอกทั้งบล็อกข้อมูลหัวใบรับรองและตารางผลการสอบเทียบ (รวมบรรทัดชื่อตาราง เช่น "Wavelength Accuracy by Using...") มาวางที่นี่ทั้งหมด — ปรับให้เข้ากับรูปแบบใบรับรอง Analytical Technology Co.,Ltd. ที่ใช้อยู่
-              </div>
-            ) : (
-              <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
-                ส่งไฟล์ PDF ให้ Claude ในหน้าแชต ขอให้ตอบกลับเป็น JSON ตามรูปแบบนี้ แล้วนำมาวางที่นี่
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, marginTop: 5, color: "var(--ink)" }}>
-                  {'{"cert":"AT102/26","provider":"...","calDate":"2026-07-15","points":[["พารามิเตอร์","ช่วง",จุด,"หน่วย",ค่าอ้างอิง,ค่าที่อ่านได้,Error,Correction,U,k]]}'}
-                </div>
-              </div>
-            )}
-            <textarea
-              style={{ ...S.input, minHeight: 160, fontFamily: "var(--font-mono)", fontSize: 11.5 }}
-              value={pasteText} onChange={e => setPasteText(e.target.value)}
-              placeholder={pasteMode === "text" ? "วางข้อความทั้งก้อนที่คัดลอกจาก Word ที่นี่" : "วาง JSON ที่นี่ (รองรับทั้งใบเดียวและหลายใบในรูปแบบ array)"}
-            />
-            <button style={{ ...S.primaryBtn, marginTop: 8 }} disabled={!pasteText.trim()}
-              onClick={() => handlePasteImport(uploadFor)}>
-              <Sparkles size={14} /> นำเข้าจากข้อมูลที่วาง
-            </button>
-          </>
-        )}
       </div>
-      <ModalFooter onCancel={() => !busy && setUploadFor(null)} onSave={() => setUploadFor(null)} disabled={busy} />
     </Modal>
   );
 
@@ -4038,7 +3759,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
         <div style={S.detailHead}>
           <div><h2 style={S.h2}>{instrument?.code} — {instrument?.name}</h2><p style={S.h2sub}>ประวัติใบรับรองสอบเทียบ จัดกลุ่มตามปี (พ.ศ.)</p></div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button style={S.primaryBtn} onClick={() => setUploadFor(selectedInstrumentId)}><UploadCloud size={15} /> อัปโหลด PDF ใบรับรอง</button>
+            <button style={S.primaryBtn} onClick={() => setUploadFor(selectedInstrumentId)}><ClipboardList size={15} /> นำเข้าใบรับรอง (วางข้อความ)</button>
             <button style={S.ghostBtn} onClick={() => setEditing(blankCertificate(selectedInstrumentId))}><Plus size={15} /> กรอกด้วยตนเอง</button>
           </div>
         </div>
@@ -9091,7 +8812,7 @@ function buildMPIRUserGuideSheet(generatedAt) {
     [""],
     ["Sheet ที่กรอกข้อมูลอัตโนมัติจากแอป / Auto-filled from the app:"],
     ["  • 01_Instrument_Master — จากรายการ \"เครื่องมือ\" ในแอป"],
-    ["  • 02_Certificate_Data — จากหน้า \"ใบรับรองสอบเทียบ\" (รวมที่อ่านจาก PDF ด้วย AI)"],
+    ["  • 02_Certificate_Data — จากหน้า \"ใบรับรองสอบเทียบ\" (รวมที่นำเข้าด้วยการวางข้อความ)"],
     ["  • 04_Daily_Intermediate_Check — จากบันทึก \"Daily check\" และ \"ตรวจสอบระหว่างรอบ\""],
     ["  • 05_Uncertainty_Input — จากหน้า \"Uncertainty Budget\""],
     ["  • 08_Action_and_Impact — จากหน้า \"การดำเนินการ/ผลกระทบ\""],
