@@ -1363,14 +1363,15 @@ const NAV = [
   // below) — still its own top-level tab/URL, and stays a normal flat
   // item in the mobile bottom bar since that layout has no room to nest.
   { key: "dailyCheck", label: "Daily check", icon: CheckCircle2, parent: "equipment" },
-  { key: "certificates", label: "ใบรับรองสอบเทียบ", icon: FileCheck2, parent: "equipment" },
-  { key: "acceptance", label: "เกณฑ์ยอมรับผล", icon: BadgeCheck, parent: "equipment" },
-  { key: "intermediateCheck", label: "ตรวจสอบระหว่างรอบ", icon: ClipboardCheck, parent: "equipment" },
-  { key: "uncertainty", label: "Uncertainty Budget", icon: Gauge, parent: "equipment" },
-  { key: "trend", label: "แนวโน้ม (Trend)", icon: TrendingUp, parent: "equipment" },
-  { key: "equipStatus", label: "สรุปสถานะเครื่องมือ", icon: ShieldCheck, parent: "equipment" },
-  { key: "actionImpact", label: "การดำเนินการ/ผลกระทบ", icon: FileWarning, parent: "equipment" },
-  { key: "approvalRecord", label: "บันทึกการอนุมัติ", icon: Stamp, parent: "equipment" },
+  // The former 8 separate sub-tabs (certificates, acceptance,
+  // intermediateCheck, uncertainty, trend, equipStatus, actionImpact,
+  // approvalRecord) are now one menu entry: pick an instrument first, then
+  // switch between those 8 as tabs scoped to that instrument — see
+  // CalibrationRecordsHub. Daily check is intentionally not part of this
+  // bundle and keeps its own separate entry above. Air-conditioning
+  // equipment (ไม่ได้สอบเทียบ) is filtered out of the instrument picker
+  // inside the hub itself.
+  { key: "calibrationRecords", label: "บันทึกการสอบเทียบ", icon: FileCheck2, parent: "equipment" },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
@@ -1687,29 +1688,16 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
           {!restrictToBooking && tab === "dailyCheck" && (
             <DailyCheckTab equipment={equipment} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialCheckId={equipDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
-          {!restrictToBooking && tab === "certificates" && (
-            <CertificateDataTab equipment={equipment} certificates={certificates} setCertificates={persist.certificates} notify={notify} currentDisplayName={currentDisplayName} />
-          )}
-          {!restrictToBooking && tab === "acceptance" && (
-            <AcceptanceCriteriaTab equipment={equipment} certificates={certificates} setCertificates={persist.certificates} notify={notify} currentDisplayName={currentDisplayName} />
-          )}
-          {!restrictToBooking && tab === "intermediateCheck" && (
-            <IntermediateCheckTab equipment={equipment} certificates={certificates} checks={intermediateChecks} setChecks={persist.intermediateChecks} notify={notify} currentDisplayName={currentDisplayName} />
-          )}
-          {!restrictToBooking && tab === "uncertainty" && (
-            <UncertaintyBudgetTab equipment={equipment} budgets={uncertaintyBudgets} setBudgets={persist.uncertaintyBudgets} notify={notify} />
-          )}
-          {!restrictToBooking && tab === "trend" && (
-            <TrendAnalysisTab equipment={equipment} certificates={certificates} notify={notify} />
-          )}
-          {!restrictToBooking && tab === "equipStatus" && (
-            <EquipmentStatusTab equipment={equipment} certificates={certificates} intermediateChecks={intermediateChecks} setEquipment={persist.equipment} notify={notify} />
-          )}
-          {!restrictToBooking && tab === "actionImpact" && (
-            <ActionImpactTab equipment={equipment} actionImpacts={actionImpacts} setActionImpacts={persist.actionImpacts} notify={notify} />
-          )}
-          {!restrictToBooking && tab === "approvalRecord" && (
-            <ApprovalRecordTab equipment={equipment} approvalRecords={approvalRecords} setApprovalRecords={persist.approvalRecords} notify={notify} />
+          {!restrictToBooking && tab === "calibrationRecords" && (
+            <CalibrationRecordsHub
+              equipment={equipment} setEquipment={persist.equipment}
+              certificates={certificates} setCertificates={persist.certificates}
+              intermediateChecks={intermediateChecks} setIntermediateChecks={persist.intermediateChecks}
+              uncertaintyBudgets={uncertaintyBudgets} setUncertaintyBudgets={persist.uncertaintyBudgets}
+              actionImpacts={actionImpacts} setActionImpacts={persist.actionImpacts}
+              approvalRecords={approvalRecords} setApprovalRecords={persist.approvalRecords}
+              notify={notify} currentDisplayName={currentDisplayName}
+            />
           )}
           {tab === "equipmentView" && (
             <EquipmentGuestView
@@ -3755,14 +3743,18 @@ function blankCertificate(instrumentId, certificateNo = "") {
     source: "manual",
   };
 }
-function CertificateDataTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "" }) {
+function CertificateDataTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", presetInstrumentId = null }) {
   // Drill-down: instrument list -> that instrument's certificates (grouped
   // by year) -> the calibration points inside one certificate. Sheet 02
   // itself is still stored as one row per point (Sheet 03/04/06 all read it
   // that way) — this only changes how it's browsed, so a lab with years of
   // history doesn't have to scroll a single flat table of every point ever
   // recorded.
-  const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
+  // presetInstrumentId: when this tab is embedded inside the calibration-
+  // records hub (instrument already chosen one level up), the instrument
+  // list here is skipped entirely and the back-to-instrument-list button is
+  // hidden, since "back" there means the hub's own instrument picker.
+  const [selectedInstrumentId, setSelectedInstrumentId] = useState(() => presetInstrumentId || null);
   const [selectedGroupKey, setSelectedGroupKey] = useState(null); // `${certificateNo}|||${calibrationDate}`
   const [q, setQ] = useState(""); // instrument search, level 1 only
   const [editing, setEditing] = useState(null);
@@ -4038,9 +4030,11 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     });
     return (
       <div>
-        <button style={{ ...S.ghostBtn, marginBottom: 12 }} onClick={() => setSelectedInstrumentId(null)}>
-          <ChevronLeft size={14} /> กลับไปเลือกเครื่องมือ
-        </button>
+        {!presetInstrumentId && (
+          <button style={{ ...S.ghostBtn, marginBottom: 12 }} onClick={() => setSelectedInstrumentId(null)}>
+            <ChevronLeft size={14} /> กลับไปเลือกเครื่องมือ
+          </button>
+        )}
         <div style={S.detailHead}>
           <div><h2 style={S.h2}>{instrument?.code} — {instrument?.name}</h2><p style={S.h2sub}>ประวัติใบรับรองสอบเทียบ จัดกลุ่มตามปี (พ.ศ.)</p></div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -4695,6 +4689,192 @@ function ApprovalRecordForm({ row, equipment, onCancel, onSave }) {
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.instrumentId || !f.subject} />
     </Modal>
+  );
+}
+
+/* ================= Calibration Records Hub =================
+   Replaces the old flat menu (8 separate sub-tabs, each listing every
+   instrument in a table) with: pick an instrument first, then flip between
+   the 8 record types (certificates, acceptance criteria, intermediate
+   check, uncertainty budget, trend, status summary, action/impact,
+   approval record) as tabs scoped to just that instrument. Air conditioners
+   aren't calibrated, so they never appear in the instrument picker here.
+   Daily check is deliberately NOT one of the 8 — it keeps its own separate
+   nav entry outside this hub. */
+const CALIBRATION_SUBTABS = [
+  { key: "certificates", label: "ใบรับรองสอบเทียบ", icon: FileCheck2 },
+  { key: "acceptance", label: "เกณฑ์ยอมรับผล", icon: BadgeCheck },
+  { key: "intermediateCheck", label: "ตรวจสอบระหว่างรอบ", icon: ClipboardCheck },
+  { key: "uncertainty", label: "Uncertainty Budget", icon: Gauge },
+  { key: "trend", label: "แนวโน้ม (Trend)", icon: TrendingUp },
+  { key: "equipStatus", label: "สรุปสถานะเครื่องมือ", icon: ShieldCheck },
+  { key: "actionImpact", label: "การดำเนินการ/ผลกระทบ", icon: FileWarning },
+  { key: "approvalRecord", label: "บันทึกการอนุมัติ", icon: Stamp },
+];
+// Sub-components below receive only the records that belong to the chosen
+// instrument, but their own setters (setCertificates, setChecks, ...)
+// expect to replace the *whole* collection — they were written to operate
+// on a flat, unscoped list. This wraps each setter so an update made while
+// scoped to one instrument gets merged back into the full collection
+// instead of silently discarding every other instrument's records.
+function makeScopedListSetter(fullList, setFullList, instrumentId) {
+  return (newScopedList) => {
+    const others = fullList.filter(x => x.instrumentId !== instrumentId);
+    setFullList([...others, ...newScopedList]);
+  };
+}
+// EquipmentStatusTab edits fields directly on the equipment record itself
+// (usageStatus, statusApprovedBy, ...) via setEquipment(equipment.map(...)).
+// Scoped to a single-instrument array, that map would run against just
+// that one item — this merges the edited item back into the full equipment
+// list by id instead of replacing the whole roster with it.
+function makeScopedEquipmentSetter(fullEquipment, setFullEquipment) {
+  return (newScopedEquipment) => {
+    const byId = Object.fromEntries(newScopedEquipment.map(e => [e.id, e]));
+    setFullEquipment(fullEquipment.map(e => (byId[e.id] ? byId[e.id] : e)));
+  };
+}
+function CalibrationRecordsHub({
+  equipment, setEquipment,
+  certificates, setCertificates,
+  intermediateChecks, setIntermediateChecks,
+  uncertaintyBudgets, setUncertaintyBudgets,
+  actionImpacts, setActionImpacts,
+  approvalRecords, setApprovalRecords,
+  notify, currentDisplayName = "",
+}) {
+  const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
+  const [subTab, setSubTab] = useState("certificates");
+  const [q, setQ] = useState("");
+
+  // เครื่องปรับอากาศ (air conditioners) aren't calibrated instruments, so
+  // they're excluded from this flow entirely.
+  const calibratable = useMemo(() => equipment.filter(e => e.type !== "เครื่องปรับอากาศ"), [equipment]);
+
+  // ---------------- Level 1: pick an instrument ----------------
+  if (!selectedInstrumentId) {
+    const rows = calibratable
+      .filter(e => (e.code + e.name + (e.type || "")).toLowerCase().includes(q.toLowerCase()))
+      .sort((a, b) => alphaCompare(a.code, b.code));
+    return (
+      <div>
+        <div style={S.detailHead}>
+          <div>
+            <h2 style={S.h2}>บันทึกการสอบเทียบ</h2>
+            <p style={S.h2sub}>เลือกเครื่องมือ เพื่อดูใบรับรองสอบเทียบ เกณฑ์ยอมรับผล ตรวจสอบระหว่างรอบ Uncertainty Budget แนวโน้ม สถานะ การดำเนินการ/ผลกระทบ และบันทึกการอนุมัติ ของเครื่องมือนั้น</p>
+          </div>
+        </div>
+        <div style={S.toolbar}>
+          <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ (รหัส / ชื่อ / ประเภท)" value={q} onChange={e => setQ(e.target.value)} /></div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
+          {rows.map(e => (
+            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => { setSelectedInstrumentId(e.id); setSubTab("certificates"); }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{e.code}</div>
+                  <div style={{ fontWeight: 700 }}>{e.name}</div>
+                </div>
+                <ChevronRight size={16} color="var(--muted)" />
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>{e.type}{e.location ? ` · ${e.location}` : ""}</div>
+            </div>
+          ))}
+          {rows.length === 0 && <EmptyState text="ไม่พบเครื่องมือ" />}
+        </div>
+      </div>
+    );
+  }
+
+  const instrument = calibratable.find(e => e.id === selectedInstrumentId);
+  const scopedEquipment = instrument ? [instrument] : [];
+  const scopedCertificates = certificates.filter(c => c.instrumentId === selectedInstrumentId);
+  const scopedChecks = intermediateChecks.filter(c => c.instrumentId === selectedInstrumentId);
+  const scopedBudgets = uncertaintyBudgets.filter(b => b.instrumentId === selectedInstrumentId);
+  const scopedActionImpacts = actionImpacts.filter(a => a.instrumentId === selectedInstrumentId);
+  const scopedApprovalRecords = approvalRecords.filter(a => a.instrumentId === selectedInstrumentId);
+
+  return (
+    <div>
+      <button style={{ ...S.ghostBtn, marginBottom: 12 }} onClick={() => setSelectedInstrumentId(null)}>
+        <ChevronLeft size={14} /> กลับไปเลือกเครื่องมือ
+      </button>
+      <div style={{ ...S.detailHead, marginBottom: 14 }}>
+        <div><h2 style={S.h2}>{instrument?.code} — {instrument?.name}</h2><p style={S.h2sub}>บันทึกการสอบเทียบของเครื่องมือนี้</p></div>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
+        {CALIBRATION_SUBTABS.map(t => {
+          const Icon = t.icon;
+          const active = subTab === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setSubTab(t.key)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                background: active ? "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)" : "#fff",
+                color: active ? "#fff" : "#4B5C72",
+                border: active ? "1px solid transparent" : "1px solid var(--line)",
+                borderRadius: 20, padding: "7px 12px", fontSize: 12.5, fontWeight: active ? 600 : 500,
+              }}
+            >
+              <Icon size={13} /> {t.label}
+            </button>
+          );
+        })}
+      </div>
+      {subTab === "certificates" && (
+        <CertificateDataTab
+          equipment={scopedEquipment} certificates={scopedCertificates}
+          setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
+          notify={notify} currentDisplayName={currentDisplayName} presetInstrumentId={selectedInstrumentId}
+        />
+      )}
+      {subTab === "acceptance" && (
+        <AcceptanceCriteriaTab
+          equipment={scopedEquipment} certificates={scopedCertificates}
+          setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
+          notify={notify} currentDisplayName={currentDisplayName}
+        />
+      )}
+      {subTab === "intermediateCheck" && (
+        <IntermediateCheckTab
+          equipment={scopedEquipment} checks={scopedChecks}
+          setChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
+          notify={notify} currentDisplayName={currentDisplayName}
+        />
+      )}
+      {subTab === "uncertainty" && (
+        <UncertaintyBudgetTab
+          equipment={scopedEquipment} budgets={scopedBudgets}
+          setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
+          notify={notify}
+        />
+      )}
+      {subTab === "trend" && (
+        <TrendAnalysisTab equipment={scopedEquipment} certificates={scopedCertificates} notify={notify} />
+      )}
+      {subTab === "equipStatus" && (
+        <EquipmentStatusTab
+          equipment={scopedEquipment} certificates={scopedCertificates} intermediateChecks={scopedChecks}
+          setEquipment={makeScopedEquipmentSetter(equipment, setEquipment)} notify={notify}
+        />
+      )}
+      {subTab === "actionImpact" && (
+        <ActionImpactTab
+          equipment={scopedEquipment} actionImpacts={scopedActionImpacts}
+          setActionImpacts={makeScopedListSetter(actionImpacts, setActionImpacts, selectedInstrumentId)}
+          notify={notify}
+        />
+      )}
+      {subTab === "approvalRecord" && (
+        <ApprovalRecordTab
+          equipment={scopedEquipment} approvalRecords={scopedApprovalRecords}
+          setApprovalRecords={makeScopedListSetter(approvalRecords, setApprovalRecords, selectedInstrumentId)}
+          notify={notify}
+        />
+      )}
+    </div>
   );
 }
 
