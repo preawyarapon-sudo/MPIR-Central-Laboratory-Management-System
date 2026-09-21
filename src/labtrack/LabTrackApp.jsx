@@ -6,7 +6,7 @@ import {
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
   LayoutGrid, ZoomIn, QrCode, Printer, FileCheck2, BadgeCheck,
   UploadCloud, Loader2, Sparkles, ClipboardCheck, Gauge, TrendingUp,
-  ShieldCheck, FileWarning, Stamp
+  ShieldCheck, FileWarning, Stamp, Check
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -4311,43 +4311,119 @@ function IntermediateCheckForm({ row, equipment, currentDisplayName, onCancel, o
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const instrument = equipment.find(e => e.id === f.instrumentId);
   const calc = calcIntermediateCheck(f, instrument);
-  return (
-    <Modal onClose={onCancel} title="บันทึกผลตรวจสอบระหว่างรอบ" wide>
-      <div style={S.formGrid} className="ltFormGrid">
+  const fmt = (v, d = 4) => (v != null ? v.toFixed(d) : "-");
+  const refPh = f.referenceValue !== "" && f.referenceValue != null ? `เช่น ${f.referenceValue}` : "เช่น 360.0";
+  const resultColor = calc.result === "PASS" ? "var(--green)" : calc.result === "WARNING" ? "var(--amber)" : calc.result === "FAIL" ? "var(--red)" : "var(--muted)";
+  const corr = Number(f.appliedCorrection);
+  const corrLooksBig = calc.mean != null && !!corr && Math.abs(corr) >= Math.abs(calc.mean) * 0.5;
+  const mono = { fontFamily: "var(--font-mono)" };
+  const stat = (label, value) => (
+    <div key={label} style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={WIZ_HINT}>{label}</div>
+      <div style={{ ...mono, fontSize: 14, fontWeight: 600, marginTop: 2 }}>{value}</div>
+    </div>
+  );
+
+  const steps = [
+    {
+      title: "ข้อมูลทั่วไป",
+      hint: "เลือกเครื่องมือและบอกว่าตรวจอะไร",
+      blocked: !f.instrumentId ? "เลือกเครื่องมือก่อนไปขั้นต่อไป" : null,
+      content: (<>
         <Field label="วันที่ตรวจสอบ"><input type="date" style={S.input} value={f.checkDate} onChange={set("checkDate")} /></Field>
         <Field label="เครื่องมือ">
           <select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>{equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}</select>
         </Field>
-        <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} /></Field>
+        <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} placeholder="เช่น Wavelength Accuracy" /></Field>
         <Field label="ประเภทการตรวจสอบ"><select style={S.input} value={f.checkType} onChange={set("checkType")}>{LK_CHKTYPE.map(t => <option key={t} value={t}>{t}</option>)}</select></Field>
-        <Field label="รายการตรวจสอบ"><input style={S.input} value={f.checkItem} onChange={set("checkItem")} /></Field>
-        <Field label="Check Standard ที่ใช้"><input style={S.input} value={f.checkStandard} onChange={set("checkStandard")} /></Field>
-        <Field label="รหัส Check Standard"><input style={S.input} value={f.checkStandardId} onChange={set("checkStandardId")} /></Field>
-        <Field label="ค่าอ้างอิง"><input type="number" step="any" style={S.input} value={f.referenceValue} onChange={set("referenceValue")} /></Field>
-        <Field label="U ของ Check Standard"><input type="number" step="any" style={S.input} value={f.uOfCheckStandard} onChange={set("uOfCheckStandard")} /></Field>
-        <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} /></Field>
+      </>),
+    },
+    {
+      title: "Check Standard",
+      hint: "สิ่งที่ใช้เทียบ และค่าจริงที่ทราบของมัน",
+      content: (<>
+        <Field label="รายการตรวจสอบ" full><input style={S.input} value={f.checkItem} onChange={set("checkItem")} placeholder="เช่น ความแม่นความยาวคลื่นที่ 360 nm" /></Field>
+        <Field label="Check Standard ที่ใช้"><input style={S.input} value={f.checkStandard} onChange={set("checkStandard")} placeholder="เช่น Holmium oxide filter" /></Field>
+        <Field label="รหัส Check Standard"><input style={S.input} value={f.checkStandardId} onChange={set("checkStandardId")} placeholder="เช่น CS-UV-001" /></Field>
+        <Field label="ค่าอ้างอิง">
+          <input type="number" step="any" style={S.input} value={f.referenceValue} onChange={set("referenceValue")} placeholder="เช่น 360" />
+          <span style={WIZ_HINT}>ค่าจริงของ Check Standard ตามใบรับรอง/ฉลาก</span>
+        </Field>
+        <Field label="U ของ Check Standard">
+          <input type="number" step="any" style={S.input} value={f.uOfCheckStandard} onChange={set("uOfCheckStandard")} placeholder="เช่น 0.3" />
+          <span style={WIZ_HINT}>ความไม่แน่นอนที่ระบุในใบรับรอง (ไม่ทราบเว้นว่างได้)</span>
+        </Field>
+        <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} placeholder="เช่น nm" /></Field>
+      </>),
+    },
+    {
+      title: "ค่าที่อ่านได้",
+      hint: "อ่านค่าซ้ำจากเครื่องมือ สูงสุด 5 ครั้ง (ใส่น้อยกว่า 5 ครั้งก็ได้)",
+      content: (<>
         {[1, 2, 3, 4, 5].map(n => (
-          <Field key={n} label={`ค่าอ่านครั้งที่ ${n}`}><input type="number" step="any" style={S.input} value={f[`reading${n}`]} onChange={set(`reading${n}`)} /></Field>
+          <Field key={n} label={`ค่าอ่านครั้งที่ ${n}`}><input type="number" step="any" style={S.input} value={f[`reading${n}`]} onChange={set(`reading${n}`)} placeholder={refPh} /></Field>
         ))}
-        <Field label="Correction ที่ใช้"><input type="number" step="any" style={S.input} value={f.appliedCorrection} onChange={set("appliedCorrection")} /></Field>
-        <div style={{ gridColumn: "1 / -1", background: "#F5F8F7", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, display: "flex", flexWrap: "wrap", gap: 16 }}>
-          <span>Mean: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.mean != null ? calc.mean.toFixed(4) : "-"}</b></span>
-          <span>%RSD: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.rsdPct != null ? calc.rsdPct.toFixed(2) : "-"}</b></span>
-          <span>Corrected Mean: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.correctedMean != null ? calc.correctedMean.toFixed(4) : "-"}</b></span>
-          <span>Bias: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.bias != null ? calc.bias.toFixed(4) : "-"}</b></span>
-          <span>LWL/UWL: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.lwl != null ? `${calc.lwl.toFixed(3)} / ${calc.uwl.toFixed(3)}` : "-"}</b></span>
-          <span>LAL/UAL: <b style={{ fontFamily: "var(--font-mono)" }}>{calc.lal != null ? `${calc.lal.toFixed(3)} / ${calc.ual.toFixed(3)}` : "-"}</b></span>
-          <span>ผล: <b>{calc.result}</b></span>
+        <Field label="Correction ที่ใช้">
+          <input type="number" step="any" style={S.input} value={f.appliedCorrection} onChange={set("appliedCorrection")} placeholder="เช่น 0" />
+          <span style={WIZ_HINT}>ค่าที่ “บวกเพิ่ม” เข้าค่าเฉลี่ย ไม่ใช่ค่าอ้างอิง ถ้าใบรับรองไม่ระบุให้ใส่ 0</span>
+        </Field>
+        {corrLooksBig && (
+          <div style={{ gridColumn: "1 / -1", fontSize: 12.5, color: "var(--amber)", background: "#FFF8EC", border: "1px solid #F3DDB5", borderRadius: 8, padding: "8px 10px" }}>
+            Correction ที่ใช้ ({f.appliedCorrection}) สูงมากเมื่อเทียบกับค่าเฉลี่ย ({fmt(calc.mean, 2)}) — ช่องนี้คือค่าที่บวกเพิ่มเข้าไป ไม่ใช่ค่าอ้างอิง ถ้าไม่มีให้ใส่ 0
+          </div>
+        )}
+        <div style={{ gridColumn: "1 / -1", display: "flex", flexWrap: "wrap", gap: 16, fontSize: 12.5 }}>
+          <span>Mean: <b style={mono}>{fmt(calc.mean)}</b></span>
+          <span>Corrected Mean: <b style={mono}>{fmt(calc.correctedMean)}</b></span>
+          <span>Bias: <b style={mono}>{fmt(calc.bias)}</b></span>
         </div>
-        <Field label="ผู้ตรวจสอบ"><input style={S.input} value={f.checkedBy} onChange={set("checkedBy")} /></Field>
-        <Field label="ผู้ทบทวน"><input style={S.input} value={f.reviewedBy} onChange={set("reviewedBy")} /></Field>
-        <Field label="การดำเนินการเมื่อไม่ผ่าน"><input style={S.input} value={f.actionOnFailure} onChange={set("actionOnFailure")} /></Field>
-        <Field label="เลขที่ CAR / NC"><input style={S.input} value={f.carNo} onChange={set("carNo")} /></Field>
-        <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.remarks} onChange={set("remarks")} /></Field>
-      </div>
-      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.instrumentId} />
-    </Modal>
-  );
+      </>),
+    },
+    {
+      title: "ผู้รับผิดชอบและหมายเหตุ",
+      hint: "ทุกช่องในขั้นนี้เว้นว่างได้",
+      content: (<>
+        <Field label="ผู้ตรวจสอบ"><input style={S.input} value={f.checkedBy} onChange={set("checkedBy")} placeholder="ชื่อ-นามสกุล" /></Field>
+        <Field label="ผู้ทบทวน"><input style={S.input} value={f.reviewedBy} onChange={set("reviewedBy")} placeholder="ชื่อ-นามสกุล" /></Field>
+        <Field label="การดำเนินการเมื่อไม่ผ่าน"><input style={S.input} value={f.actionOnFailure} onChange={set("actionOnFailure")} placeholder="เช่น หยุดใช้เครื่องและแจ้งผู้ดูแล" /></Field>
+        <Field label="เลขที่ CAR / NC">
+          <input style={S.input} value={f.carNo} onChange={set("carNo")} placeholder="เช่น CAR-2569-001" />
+          <span style={WIZ_HINT}>ใส่เมื่อมีการเปิดรายงานแก้ไข</span>
+        </Field>
+        <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.remarks} onChange={set("remarks")} placeholder="เช่น ตรวจหลังเปิดเครื่อง 30 นาที" /></Field>
+      </>),
+    },
+    {
+      title: "สรุปผล",
+      hint: "ระบบคำนวณให้อัตโนมัติ ตรวจดูแล้วกดบันทึก",
+      content: (
+        <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 13 }}>ผลการตรวจสอบ</span>
+            <span style={{ ...S.tag, borderColor: resultColor, color: resultColor, fontSize: 14, padding: "3px 12px" }}>{calc.result}</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
+            {stat("Mean", fmt(calc.mean))}
+            {stat("%RSD", fmt(calc.rsdPct, 2))}
+            {stat("Corrected Mean", fmt(calc.correctedMean))}
+            {stat("Bias", fmt(calc.bias))}
+            {stat("LWL / UWL (Warning)", calc.lwl != null ? `${calc.lwl.toFixed(3)} / ${calc.uwl.toFixed(3)}` : "-")}
+            {stat("LAL / UAL (Action)", calc.lal != null ? `${calc.lal.toFixed(3)} / ${calc.ual.toFixed(3)}` : "-")}
+          </div>
+          {calc.result === "-" && (
+            <div style={{ fontSize: 12.5, color: "var(--muted)" }}>ยังคำนวณไม่ได้ — กรอกค่าอ้างอิง (ขั้นที่ 2) และค่าที่อ่านได้ (ขั้นที่ 3) ก่อน</div>
+          )}
+          {calc.result === "ข้อมูลไม่ครบ" && (
+            <div style={{ fontSize: 12.5, color: "var(--amber)", background: "#FFF8EC", border: "1px solid #F3DDB5", borderRadius: 8, padding: "8px 10px" }}>
+              เครื่องมือนี้ยังไม่ได้ตั้ง Tolerance จึงยังไม่มี Warning/Action Limit — ตั้งได้ที่แท็บ “เกณฑ์ยอมรับผล” (ช่อง Tolerance/MPE) แล้วผลจะคำนวณให้เอง
+            </div>
+          )}
+        </div>
+      ),
+    },
+  ];
+
+  return <WizardModal title="บันทึกผลตรวจสอบระหว่างรอบ" steps={steps} onCancel={onCancel} onSave={() => onSave(f)} saveDisabled={!f.instrumentId} />;
 }
 
 /* ================= Sheet 05: Uncertainty Budget =================
@@ -4423,33 +4499,85 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, notify }) {
     </div>
   );
 }
+// Divisor that matches each distribution, so picking one fills the Divisor
+// field automatically (the person can still overwrite it, e.g. √n for a mean).
+const DIST_DIVISOR = { "Normal (k=1)": 1, "Normal (k=2)": 2, "Normal (k=3)": 3, "Rectangular": 1.732, "Triangular": 2.449 };
 function UncertaintyRowForm({ row, equipment, existingBudgetIds, onCancel, onSave }) {
   const [f, setF] = useState(row);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  return (
-    <Modal onClose={onCancel} title="Uncertainty Component" wide>
-      <div style={S.formGrid} className="ltFormGrid">
-        <Field label="Budget ID"><input style={S.input} list="budgetIds" value={f.budgetId} onChange={set("budgetId")} /><datalist id="budgetIds">{existingBudgetIds.map(id => <option key={id} value={id} />)}</datalist></Field>
+  const setDist = (e) => { const d = e.target.value; setF({ ...f, distribution: d, divisor: DIST_DIVISOR[d] ?? f.divisor }); };
+  const calc = calcUncertaintyRow(f);
+  const mono = { fontFamily: "var(--font-mono)" };
+
+  const steps = [
+    {
+      title: "กลุ่ม Budget",
+      hint: "ทุกองค์ประกอบของงานเดียวกันใช้ Budget ID เดียวกัน ระบบจะรวมให้เอง",
+      blocked: !f.budgetId ? "กรอก Budget ID ก่อนไปขั้นต่อไป" : null,
+      content: (<>
+        <Field label="Budget ID">
+          <input style={S.input} list="budgetIds" value={f.budgetId} onChange={set("budgetId")} placeholder="เช่น UB-WL-01" />
+          <datalist id="budgetIds">{existingBudgetIds.map(id => <option key={id} value={id} />)}</datalist>
+          <span style={WIZ_HINT}>เพิ่มเข้ากลุ่มเดิม: เลือก ID เดิมจากรายการที่ขึ้นมา</span>
+        </Field>
         <Field label="เครื่องมือ"><select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>{equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}</select></Field>
-        <Field label="วิธีทดสอบ"><input style={S.input} value={f.testMethod} onChange={set("testMethod")} /></Field>
-        <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} /></Field>
-        <Field label="ชื่อองค์ประกอบความไม่แน่นอน"><input style={S.input} value={f.componentName} onChange={set("componentName")} /></Field>
-        <Field label="สัญลักษณ์"><input style={S.input} value={f.symbol} onChange={set("symbol")} /></Field>
-        <Field label="ค่าที่ใช้"><input type="number" step="any" style={S.input} value={f.value} onChange={set("value")} /></Field>
-        <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} /></Field>
-        <Field label="การแจกแจงความน่าจะเป็น"><select style={S.input} value={f.distribution} onChange={set("distribution")}>{LK_DIST.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
-        <Field label="Divisor"><input type="number" step="any" style={S.input} value={f.divisor} onChange={set("divisor")} /></Field>
-        <Field label="Sensitivity coefficient (c)"><input type="number" step="any" style={S.input} value={f.sensitivityCoefficient} onChange={set("sensitivityCoefficient")} /></Field>
-        <Field label="Degrees of freedom"><input style={S.input} value={f.degreesOfFreedom} onChange={set("degreesOfFreedom")} /></Field>
-        <Field label="แหล่งข้อมูล"><input style={S.input} value={f.dataSource} onChange={set("dataSource")} /></Field>
+        <Field label="วิธีทดสอบ"><input style={S.input} value={f.testMethod} onChange={set("testMethod")} placeholder="เช่น วิธีตรวจสอบภายใน" /></Field>
+        <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} placeholder="เช่น Wavelength Accuracy" /></Field>
+      </>),
+    },
+    {
+      title: "แหล่งความไม่แน่นอน",
+      hint: "1 แหล่งต่อ 1 แถว เช่น ความซ้ำ (Repeatability), มาตรฐานอ้างอิง, ความละเอียดของเครื่อง",
+      blocked: !f.componentName ? "กรอกชื่อองค์ประกอบก่อนไปขั้นต่อไป" : null,
+      content: (<>
+        <Field label="ชื่อองค์ประกอบความไม่แน่นอน"><input style={S.input} value={f.componentName} onChange={set("componentName")} placeholder="เช่น Repeatability" /></Field>
+        <Field label="สัญลักษณ์"><input style={S.input} value={f.symbol} onChange={set("symbol")} placeholder="เช่น u1" /></Field>
+        <Field label="ค่าที่ใช้">
+          <input type="number" step="any" style={S.input} value={f.value} onChange={set("value")} placeholder="เช่น 0.1483" />
+          <span style={WIZ_HINT}>ตัวเลขดิบ ยังไม่ต้องหารด้วย Divisor (ระบบหารให้)</span>
+        </Field>
+        <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} placeholder="เช่น nm" /></Field>
+      </>),
+    },
+    {
+      title: "แปลงเป็นค่ามาตรฐาน (u)",
+      hint: "เลือกการแจกแจง ระบบใส่ Divisor ให้ แก้เองได้",
+      content: (<>
+        <Field label="การแจกแจงความน่าจะเป็น"><select style={S.input} value={f.distribution} onChange={setDist}>{LK_DIST.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
+        <Field label="Divisor">
+          <input type="number" step="any" style={S.input} value={f.divisor} onChange={set("divisor")} placeholder="เช่น 2" />
+          <span style={WIZ_HINT}>ค่าเฉลี่ยของ n ครั้ง ใช้ Normal (k=1) แล้วใส่ √n เช่น 2.236 เมื่อ n = 5</span>
+        </Field>
+        <Field label="Sensitivity coefficient (c)"><input type="number" step="any" style={S.input} value={f.sensitivityCoefficient} onChange={set("sensitivityCoefficient")} placeholder="เช่น 1" /></Field>
+        <Field label="Degrees of freedom"><input style={S.input} value={f.degreesOfFreedom} onChange={set("degreesOfFreedom")} placeholder="เช่น 4" /></Field>
+        <div style={{ gridColumn: "1 / -1", background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, lineHeight: 1.7 }}>
+          {calc.u != null ? (<>
+            <div>u = {f.value} ÷ {f.divisor} = <b style={mono}>{calc.u.toFixed(5)}</b></div>
+            <div>Contribution = |c| × u = <b style={mono}>{calc.contribution != null ? calc.contribution.toFixed(5) : "-"}</b></div>
+          </>) : <span style={{ color: "var(--muted)" }}>กรอก “ค่าที่ใช้” (ขั้นที่ 2) และ Divisor เพื่อดูค่า u</span>}
+        </div>
+      </>),
+    },
+    {
+      title: "ข้อมูลประกอบและ Budget รวม",
+      hint: "ทุกช่องในขั้นนี้เว้นว่างได้",
+      content: (<>
+        <Field label="แหล่งข้อมูล"><input style={S.input} value={f.dataSource} onChange={set("dataSource")} placeholder="เช่น ใบรับรองสอบเทียบเลขที่ CAL-001" /></Field>
         <Field label="วันที่ทบทวน"><input type="date" style={S.input} value={f.reviewDate} onChange={set("reviewDate")} /></Field>
-        <Field label="ผู้อนุมัติ"><input style={S.input} value={f.approvedBy} onChange={set("approvedBy")} /></Field>
-        <Field label="Coverage factor k (รวมทั้ง Budget)"><input type="number" step="any" style={S.input} value={f.combinedK} onChange={set("combinedK")} /></Field>
-        <Field label="ค่าที่วัดได้ (สำหรับ % สัมพัทธ์)"><input type="number" step="any" style={S.input} value={f.measuredValue} onChange={set("measuredValue")} /></Field>
-      </div>
-      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.budgetId || !f.componentName} />
-    </Modal>
-  );
+        <Field label="ผู้อนุมัติ"><input style={S.input} value={f.approvedBy} onChange={set("approvedBy")} placeholder="ชื่อ-นามสกุล" /></Field>
+        <Field label="Coverage factor k (รวมทั้ง Budget)">
+          <input type="number" step="any" style={S.input} value={f.combinedK} onChange={set("combinedK")} placeholder="เช่น 2" />
+          <span style={WIZ_HINT}>ระบบใช้ค่าของแถวที่อยู่บนสุดของ Budget นี้ในตาราง</span>
+        </Field>
+        <Field label="ค่าที่วัดได้ (สำหรับ % สัมพัทธ์)">
+          <input type="number" step="any" style={S.input} value={f.measuredValue} onChange={set("measuredValue")} placeholder="เช่น 360" />
+          <span style={WIZ_HINT}>ไม่ใส่ก็ได้ ใช้แสดง U เป็น % ของค่านี้ (ใช้ค่าของแถวบนสุดเช่นกัน)</span>
+        </Field>
+      </>),
+    },
+  ];
+
+  return <WizardModal title="Uncertainty Component" steps={steps} onCancel={onCancel} onSave={() => onSave(f)} saveDisabled={!f.budgetId || !f.componentName} />;
 }
 
 /* ================= Sheet 06: Trend / Drift Analysis (fully computed) ================= */
@@ -9298,6 +9426,94 @@ function ModalFooter({ onCancel, onSave, disabled, extra }) {
       <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
       <button style={{ ...S.primaryBtn, opacity: disabled ? 0.5 : 1 }} disabled={disabled} onClick={onSave}>บันทึก</button>
     </div>
+  );
+}
+/* ---------- Step-by-step form ("wizard") ----------
+   Splits a long form into small cards. The person fills one card, presses
+   "ถัดไป" (or Enter in the last field of the card) and lands on the next one;
+   the final card shows "บันทึก". Each step is { title, hint?, content, blocked? }:
+   `content` is ordinary <Field> JSX built by the calling form (all state stays
+   in the caller, so nothing is lost when moving between cards) and `blocked`
+   is a message that holds "ถัดไป" back until a required field is filled. */
+const WIZ_HINT = { fontSize: 11.5, color: "var(--muted)", lineHeight: 1.5 };
+function WizardModal({ title, steps, onCancel, onSave, saveDisabled = false }) {
+  const [idx, setIdx] = useState(0);
+  const topRef = useRef(null);
+  const cardRef = useRef(null);
+  const moved = useRef(false);
+  const last = steps.length - 1;
+  const step = steps[idx];
+  const firstBlocked = steps.findIndex(s => s.blocked);
+
+  useEffect(() => {
+    if (!moved.current) return; // don't steal focus when the form first opens
+    topRef.current?.scrollIntoView?.({ block: "nearest" });
+    cardRef.current?.querySelector("input, select, textarea")?.focus?.({ preventScroll: true });
+  }, [idx]);
+
+  function go(n) {
+    if (n < 0 || n > last || n === idx) return;
+    if (n > idx && firstBlocked !== -1 && n > firstBlocked) return; // can't skip past an unfinished required step
+    moved.current = true;
+    setIdx(n);
+  }
+  // Enter moves to the next field in the card; Enter in the card's last field
+  // moves to the next card. Textareas keep their normal new-line behaviour.
+  function onKey(e) {
+    if (e.key !== "Enter" || e.nativeEvent?.isComposing) return;
+    if (e.target.tagName !== "INPUT") return;
+    e.preventDefault();
+    const fields = Array.from(cardRef.current.querySelectorAll("input, select, textarea")).filter(el => !el.disabled);
+    const i = fields.indexOf(e.target);
+    if (i >= 0 && i < fields.length - 1) fields[i + 1].focus();
+    else if (idx < last && !step.blocked) go(idx + 1);
+  }
+
+  // Overlay click / X: once the person has moved past the first card, confirm
+  // before throwing the half-filled form away. The "ยกเลิก" button always closes.
+  const guardedClose = () => { if (idx === 0 || window.confirm("ยังกรอกไม่เสร็จ ต้องการปิดและทิ้งข้อมูลที่กรอกไว้หรือไม่?")) onCancel(); };
+  return (
+    <Modal onClose={guardedClose} title={title} wide>
+      <div ref={topRef}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }} aria-label="ขั้นตอนการกรอกข้อมูล">
+          {steps.map((s, i) => {
+            const done = i < idx, cur = i === idx, active = done || cur;
+            return (
+              <Fragment key={i}>
+                {i > 0 && <div style={{ flex: 1, height: 2, minWidth: 8, background: i <= idx ? "var(--teal)" : "var(--line)" }} />}
+                <button type="button" onClick={() => go(i)} title={s.title} aria-label={`ขั้นที่ ${i + 1} ${s.title}`} aria-current={cur ? "step" : undefined}
+                  style={{
+                    width: 28, height: 28, borderRadius: "50%", padding: 0, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 12.5, fontWeight: 600, background: active ? "var(--teal)" : "#fff", color: active ? "#fff" : "var(--muted)",
+                    border: `1px solid ${active ? "var(--teal)" : "var(--line)"}`, boxShadow: cur ? "0 0 0 3px #E9F1FB" : "none",
+                  }}>
+                  {done ? <Check size={14} /> : i + 1}
+                </button>
+              </Fragment>
+            );
+          })}
+        </div>
+        <div ref={cardRef} onKeyDown={onKey} style={{ background: "#F8FBFE", border: "1px solid var(--line)", borderRadius: 12, padding: "16px 16px 18px" }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
+            <div>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 15 }}>{step.title}</div>
+              {step.hint && <div style={{ ...WIZ_HINT, marginTop: 2 }}>{step.hint}</div>}
+            </div>
+            <span style={{ ...WIZ_HINT, flexShrink: 0 }}>{idx + 1} / {steps.length}</span>
+          </div>
+          <div style={S.formGrid} className="ltFormGrid">{step.content}</div>
+        </div>
+        {step.blocked && <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 8 }}>{step.blocked}</div>}
+        <div style={S.modalFoot}>
+          <button type="button" style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+          <div style={{ flex: 1 }} />
+          {idx > 0 && <button type="button" style={{ ...S.ghostBtn, display: "flex", alignItems: "center", gap: 4 }} onClick={() => go(idx - 1)}><ChevronLeft size={15} /> ย้อนกลับ</button>}
+          {idx < last
+            ? <button type="button" style={{ ...S.primaryBtn, opacity: step.blocked ? 0.5 : 1 }} disabled={!!step.blocked} onClick={() => go(idx + 1)}>ถัดไป <ChevronRight size={15} /></button>
+            : <button type="button" style={{ ...S.primaryBtn, opacity: saveDisabled ? 0.5 : 1 }} disabled={saveDisabled} onClick={onSave}>บันทึก</button>}
+        </div>
+      </div>
+    </Modal>
   );
 }
 function Tag({ children, color }) {
