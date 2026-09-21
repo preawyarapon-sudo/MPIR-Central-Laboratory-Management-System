@@ -470,6 +470,30 @@ function beYear(dateStr) {
   const y = new Date(dateStr + "T00:00:00").getFullYear();
   return isNaN(y) ? "" : y + 543;
 }
+// Collapses Sheet 02's "one row per calibration point" records back into
+// one row per physical certificate (same certificateNo + calibrationDate),
+// for any view that should browse by certificate rather than by point —
+// a 6-point certificate is one card to scan, not six identical-looking rows.
+function groupCertsByCertNoDate(certs) {
+  const map = new Map();
+  certs.forEach(c => {
+    const key = `${c.certificateNo || ""}|||${c.calibrationDate || ""}`;
+    if (!map.has(key)) map.set(key, { key, certificateNo: c.certificateNo, calibrationDate: c.calibrationDate, provider: c.provider, points: [] });
+    map.get(key).points.push(c);
+  });
+  return [...map.values()];
+}
+// The status a certificate group should show at a glance: worst-first, so
+// a certificate isn't shown as "Approved" while one of its points is still
+// a Draft.
+function worstRecordStatus(points) {
+  if (points.some(p => p.recordStatus === "Draft")) return "Draft";
+  if (points.some(p => p.recordStatus === "Verified" || !p.recordStatus)) return "Verified";
+  return "Approved";
+}
+function recordStatusColor(status) {
+  return status === "Approved" ? "var(--green)" : status === "Verified" ? "var(--teal)" : "var(--amber)";
+}
 // RPN = Severity × Occurrence × Detectability (Sheet 01, cols 27-30), with
 // the risk band the workbook implies (low/med/high) from the 1-5×1-5×1-5
 // range. Missing any factor leaves RPN blank rather than guessing.
@@ -3732,7 +3756,15 @@ function blankCertificate(instrumentId, certificateNo = "") {
   };
 }
 function CertificateDataTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "" }) {
-  const [q, setQ] = useState("");
+  // Drill-down: instrument list -> that instrument's certificates (grouped
+  // by year) -> the calibration points inside one certificate. Sheet 02
+  // itself is still stored as one row per point (Sheet 03/04/06 all read it
+  // that way) — this only changes how it's browsed, so a lab with years of
+  // history doesn't have to scroll a single flat table of every point ever
+  // recorded.
+  const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
+  const [selectedGroupKey, setSelectedGroupKey] = useState(null); // `${certificateNo}|||${calibrationDate}`
+  const [q, setQ] = useState(""); // instrument search, level 1 only
   const [editing, setEditing] = useState(null);
   const [uploadFor, setUploadFor] = useState(null); // instrument to attach an uploaded PDF to
   const [busy, setBusy] = useState(false);
@@ -3745,10 +3777,6 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   const [apiKey, setApiKey] = useState("");
 
   const instrumentName = (id) => { const e = equipment.find(x => x.id === id); return e ? `${e.code} — ${e.name}` : id; };
-  const filtered = certificates
-    .filter(c => (c.certificateNo + instrumentName(c.instrumentId) + c.parameter + c.provider).toLowerCase().includes(q.toLowerCase()))
-    .slice()
-    .sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || ""));
 
   function upsert(row) {
     if (certificates.find(c => c.id === row.id)) setCertificates(certificates.map(c => c.id === row.id ? row : c));
@@ -3862,34 +3890,227 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     }
   }
 
-  return (
-    <div>
-      <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ใบรับรองสอบเทียบ (Certificate Data)</h2><p style={S.h2sub}>Sheet 02 — หนึ่งแถวต่อหนึ่งจุดสอบเทียบ รองรับอัปโหลด PDF ให้ AI ช่วยกรอกอัตโนมัติ</p></div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={S.primaryBtn} onClick={() => setUploadFor(equipment[0]?.id || "")}><UploadCloud size={15} /> อัปโหลด PDF ใบรับรอง</button>
-          <button style={S.ghostBtn} onClick={() => setEditing(blankCertificate(equipment[0]?.id || ""))}><Plus size={15} /> กรอกด้วยตนเอง</button>
+  // Shared by level 2 & 3 — the PDF-upload / paste-import modal, scoped to
+  // whichever instrument was picked at level 1 (uploadFor still selects the
+  // exact instrument in case that ever needs to change mid-upload).
+  const uploadModal = uploadFor !== null && (
+    <Modal onClose={() => !busy && (setUploadFor(null), setErrorMsg(""))} title="อัปโหลด PDF ใบรับรองสอบเทียบ">
+      <Field label="เครื่องมือที่ใบรับรองนี้เป็นของ">
+        <select style={S.input} value={uploadFor} onChange={e => setUploadFor(e.target.value)}>
+          {equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
+        </select>
+      </Field>
+      <Field label="ไฟล์ PDF ใบรับรอง" full>
+        <input type="file" accept="application/pdf" disabled={busy}
+          onChange={e => { setErrorMsg(""); if (e.target.files[0]) handlePdfUpload(e.target.files[0], uploadFor); }} />
+      </Field>
+      {busy && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 12.5, marginTop: 10 }}>
+          <Loader2 size={15} className="ltSpin" /> {progress || "กำลังอ่านค่าจากใบรับรอง..."}
+        </div>
+      )}
+      {errorMsg && (
+        <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, background: "#FDF1F1", border: "1px solid var(--red)", fontSize: 12.5, color: "var(--red)" }}>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>อ่าน PDF ไม่สำเร็จ</div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, wordBreak: "break-word" }}>{errorMsg}</div>
+          <div style={{ color: "var(--muted)", marginTop: 5 }}>กรอกด้วยตนเองได้จากปุ่ม "กรอกด้วยตนเอง" ในหน้านี้</div>
+        </div>
+      )}
+      <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.65 }}>
+        รองรับใบรับรองที่เป็นภาพสแกน และไฟล์เดียวที่มีหลายใบรับรอง (เช่น AT102/26 + AT105/26 ในไฟล์เดียว) โดยจะอ่านทีละหน้า<br />
+        ระบบบันทึกทุกจุดที่อ่านได้ทันทีโดยไม่หยุดให้ตรวจสอบก่อน — แถวที่ข้อมูลไม่ครบจะขึ้นสถานะ "Draft" พร้อมระบุช่องที่ขาดไว้ในคอลัมน์ "รายการที่ขาด"
+      </div>
+
+      <Field label="Anthropic API key (ใส่เฉพาะกรณีขึ้น Failed to fetch)" full>
+        <input style={S.input} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+          placeholder="sk-ant-api03-... — เว้นว่างได้ถ้าแอปรันในที่ที่ต่อ API ให้อยู่แล้ว" autoComplete="off" />
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.6 }}>
+          ต้องเป็น API key จาก <b>console.anthropic.com</b> (ขึ้นต้นด้วย sk-ant-api03-...) เท่านั้น — คนละอย่างกับรหัสผ่าน
+          หรือ session ของแอป Claude / claude.ai และบัญชี Console ต้องผูก billing ไว้แล้วคีย์จึงจะเรียกได้
+          คีย์ใช้เฉพาะในเบราว์เซอร์นี้ ไม่ได้บันทึกลงระบบ และจะหายเมื่อปิดหน้าต่าง
+          — ถ้าไม่สะดวกตั้งค่านี้ ใช้ช่อง "วางข้อมูลที่ดึงมาแล้ว" ด้านล่างแทนได้ ไม่ต้องมีคีย์เลย
+        </div>
+      </Field>
+
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
+        <button style={{ ...S.smallBtn, marginBottom: showPaste ? 8 : 0 }} onClick={() => setShowPaste(v => !v)}>
+          {showPaste ? "ซ่อน" : "หรือ วางข้อความ/ข้อมูลที่ดึงมาแล้ว (ไม่ต้องใช้ API ไม่มีค่าใช้จ่าย)"}
+        </button>
+        {showPaste && (
+          <>
+            <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+                <input type="radio" checked={pasteMode === "text"} onChange={() => setPasteMode("text")} /> วางข้อความจาก Word (แปลงจาก PDF สแกนด้วย OCR)
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+                <input type="radio" checked={pasteMode === "json"} onChange={() => setPasteMode("json")} /> วาง JSON (จากที่ขอให้ Claude ช่วยดึงในแชต)
+              </label>
+            </div>
+            {pasteMode === "text" ? (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
+                แปลงไฟล์ PDF สแกนเป็น Word (เมนู OCR ของ Word หรือ Google Docs ก็ได้) แล้วคัดลอกทั้งบล็อกข้อมูลหัวใบรับรองและตารางผลการสอบเทียบ (รวมบรรทัดชื่อตาราง เช่น "Wavelength Accuracy by Using...") มาวางที่นี่ทั้งหมด — ปรับให้เข้ากับรูปแบบใบรับรอง Analytical Technology Co.,Ltd. ที่ใช้อยู่
+              </div>
+            ) : (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
+                ส่งไฟล์ PDF ให้ Claude ในหน้าแชต ขอให้ตอบกลับเป็น JSON ตามรูปแบบนี้ แล้วนำมาวางที่นี่
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, marginTop: 5, color: "var(--ink)" }}>
+                  {'{"cert":"AT102/26","provider":"...","calDate":"2026-07-15","points":[["พารามิเตอร์","ช่วง",จุด,"หน่วย",ค่าอ้างอิง,ค่าที่อ่านได้,Error,Correction,U,k]]}'}
+                </div>
+              </div>
+            )}
+            <textarea
+              style={{ ...S.input, minHeight: 160, fontFamily: "var(--font-mono)", fontSize: 11.5 }}
+              value={pasteText} onChange={e => setPasteText(e.target.value)}
+              placeholder={pasteMode === "text" ? "วางข้อความทั้งก้อนที่คัดลอกจาก Word ที่นี่" : "วาง JSON ที่นี่ (รองรับทั้งใบเดียวและหลายใบในรูปแบบ array)"}
+            />
+            <button style={{ ...S.primaryBtn, marginTop: 8 }} disabled={!pasteText.trim()}
+              onClick={() => handlePasteImport(uploadFor)}>
+              <Sparkles size={14} /> นำเข้าจากข้อมูลที่วาง
+            </button>
+          </>
+        )}
+      </div>
+      <ModalFooter onCancel={() => !busy && setUploadFor(null)} onSave={() => setUploadFor(null)} disabled={busy} />
+    </Modal>
+  );
+
+  // ---------------- Level 1: pick an instrument ----------------
+  if (!selectedInstrumentId) {
+    const rows = equipment
+      .filter(e => (e.code + e.name + (e.type || "")).toLowerCase().includes(q.toLowerCase()))
+      .map(e => {
+        const certs = certificates.filter(c => c.instrumentId === e.id);
+        const groups = groupCertsByCertNoDate(certs).sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || ""));
+        return { e, certCount: groups.length, pointCount: certs.length, latest: groups[0] };
+      })
+      .sort((a, b) => alphaCompare(a.e.code, b.e.code));
+    return (
+      <div>
+        <div style={S.detailHead}>
+          <div><h2 style={S.h2}>ใบรับรองสอบเทียบ (Certificate Data)</h2><p style={S.h2sub}>Sheet 02 — เลือกเครื่องมือเพื่อดูหรือกรอกใบรับรองของเครื่องมือนั้น</p></div>
+        </div>
+        <div style={S.toolbar}>
+          <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ (รหัส / ชื่อ / ประเภท)" value={q} onChange={e => setQ(e.target.value)} /></div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
+          {rows.map(({ e, certCount, pointCount, latest }) => (
+            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => setSelectedInstrumentId(e.id)}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{e.code}</div>
+                  <div style={{ fontWeight: 700 }}>{e.name}</div>
+                </div>
+                <ChevronRight size={16} color="var(--muted)" />
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+                {certCount > 0 ? `${certCount} ใบรับรอง · ${pointCount} จุดสอบเทียบ` : "ยังไม่มีใบรับรอง"}
+              </div>
+              {latest && (
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 3 }}>
+                  ล่าสุด: {fmtDate(latest.calibrationDate)} · {latest.certificateNo || "-"}
+                </div>
+              )}
+            </div>
+          ))}
+          {rows.length === 0 && <EmptyState text="ไม่พบเครื่องมือ" />}
         </div>
       </div>
-      <div style={S.toolbar}>
-        <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเลขที่ใบรับรอง / เครื่องมือ / พารามิเตอร์" value={q} onChange={e => setQ(e.target.value)} /></div>
+    );
+  }
+
+  const instrument = equipment.find(e => e.id === selectedInstrumentId);
+  const certsForInstrument = certificates.filter(c => c.instrumentId === selectedInstrumentId);
+
+  // ---------------- Level 2: this instrument's certificates, by year ----------------
+  if (!selectedGroupKey) {
+    const groups = groupCertsByCertNoDate(certsForInstrument).sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || ""));
+    const byYear = new Map();
+    groups.forEach(g => {
+      const y = g.calibrationDate ? beYear(g.calibrationDate) : "ไม่ระบุปี";
+      if (!byYear.has(y)) byYear.set(y, []);
+      byYear.get(y).push(g);
+    });
+    const years = [...byYear.keys()];
+    years.sort((a, b) => {
+      if (a === "ไม่ระบุปี") return 1;
+      if (b === "ไม่ระบุปี") return -1;
+      return b - a;
+    });
+    return (
+      <div>
+        <button style={{ ...S.ghostBtn, marginBottom: 12 }} onClick={() => setSelectedInstrumentId(null)}>
+          <ChevronLeft size={14} /> กลับไปเลือกเครื่องมือ
+        </button>
+        <div style={S.detailHead}>
+          <div><h2 style={S.h2}>{instrument?.code} — {instrument?.name}</h2><p style={S.h2sub}>ประวัติใบรับรองสอบเทียบ จัดกลุ่มตามปี (พ.ศ.)</p></div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={S.primaryBtn} onClick={() => setUploadFor(selectedInstrumentId)}><UploadCloud size={15} /> อัปโหลด PDF ใบรับรอง</button>
+            <button style={S.ghostBtn} onClick={() => setEditing(blankCertificate(selectedInstrumentId))}><Plus size={15} /> กรอกด้วยตนเอง</button>
+          </div>
+        </div>
+        {groups.length === 0 && <EmptyState text="ยังไม่มีใบรับรองสำหรับเครื่องมือนี้ — เริ่มจากปุ่มด้านบนได้เลย" />}
+        {years.map(y => (
+          <div key={y} style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)", margin: "4px 0 6px" }}>
+              {y === "ไม่ระบุปี" ? y : `ปี พ.ศ. ${y}`}
+            </div>
+            <div style={S.tableWrap}>
+              <table style={S.table}>
+                <thead><tr>{["เลขที่ใบรับรอง", "หน่วยงานสอบเทียบ", "วันที่สอบเทียบ", "จำนวนจุด", "สถานะ", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {byYear.get(y).map(g => {
+                    const worst = worstRecordStatus(g.points);
+                    return (
+                      <tr key={g.key} style={{ ...S.tr, cursor: "pointer" }} onClick={() => setSelectedGroupKey(g.key)}>
+                        <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{g.certificateNo || "-"}</td>
+                        <td style={S.td}>{g.provider || "-"}</td>
+                        <td style={S.td}>{fmtDate(g.calibrationDate)}</td>
+                        <td style={S.td}>{g.points.length} จุด</td>
+                        <td style={S.td}><span style={{ ...S.tag, borderColor: recordStatusColor(worst), color: recordStatusColor(worst) }}>{worst}</span></td>
+                        <td style={S.td}><ChevronRight size={14} color="var(--muted)" /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+        {editing && <CertificateForm row={editing} equipment={equipment} onCancel={() => setEditing(null)} onSave={upsert} />}
+        {uploadModal}
+      </div>
+    );
+  }
+
+  // ---------------- Level 3: calibration points inside one certificate ----------------
+  const [gCertNo, gCalDate] = selectedGroupKey.split("|||");
+  const pointsForGroup = certsForInstrument.filter(c => (c.certificateNo || "") === gCertNo && (c.calibrationDate || "") === gCalDate);
+  return (
+    <div>
+      <button style={{ ...S.ghostBtn, marginBottom: 12 }} onClick={() => setSelectedGroupKey(null)}>
+        <ChevronLeft size={14} /> กลับไปดูรายการใบรับรอง
+      </button>
+      <div style={S.detailHead}>
+        <div>
+          <h2 style={S.h2}>{gCertNo || "ใบรับรอง"}</h2>
+          <p style={S.h2sub}>{instrument?.code} — {instrument?.name} · สอบเทียบ {fmtDate(gCalDate)} · {pointsForGroup.length} จุด</p>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={S.ghostBtn} onClick={() => setEditing({ ...blankCertificate(selectedInstrumentId, gCertNo), calibrationDate: gCalDate, provider: pointsForGroup[0]?.provider || "" })}>
+            <Plus size={15} /> เพิ่มจุดสอบเทียบ
+          </button>
+        </div>
       </div>
       <div style={S.tableWrap}>
         <table style={S.table}>
-          <thead><tr>
-            {["เครื่องมือ", "เลขที่ใบรับรอง", "หน่วยงานสอบเทียบ", "วันที่สอบเทียบ", "พารามิเตอร์ / จุด", "Error", "U (k=2)", "สถานะ", "ที่มา", ""].map(h => <th key={h} style={S.th}>{h}</th>)}
-          </tr></thead>
+          <thead><tr>{["พารามิเตอร์ / จุด", "Error", "U (k=2)", "สถานะ", "ที่มา", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>
-            {filtered.map(c => (
+            {pointsForGroup.map(c => (
               <tr key={c.id} style={S.tr}>
-                <td style={S.td}>{instrumentName(c.instrumentId)}</td>
-                <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{c.certificateNo || "-"}</td>
-                <td style={S.td}>{c.provider || "-"}</td>
-                <td style={S.td}>{fmtDate(c.calibrationDate)}</td>
                 <td style={S.td}>{c.parameter} {c.calibrationPoint !== "" ? `@ ${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : ""}</td>
                 <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{c.reportedError !== "" ? c.reportedError : "-"}</td>
                 <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{c.reportedU !== "" ? c.reportedU : "-"}</td>
-                <td style={S.td}><span style={{ ...S.tag, borderColor: c.recordStatus === "Approved" ? "var(--green)" : c.recordStatus === "Verified" ? "var(--teal)" : "var(--amber)", color: c.recordStatus === "Approved" ? "var(--green)" : c.recordStatus === "Verified" ? "var(--teal)" : "var(--amber)" }}>{c.recordStatus}</span></td>
+                <td style={S.td}><span style={{ ...S.tag, borderColor: recordStatusColor(c.recordStatus), color: recordStatusColor(c.recordStatus) }}>{c.recordStatus}</span></td>
                 <td style={S.td}>{c.source === "pdf-ai" ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal-dark)" }}><Sparkles size={12} /> AI</span> : "กรอกเอง"}</td>
                 <td style={S.td}>
                   <div style={{ display: "flex", gap: 4 }}>
@@ -3899,91 +4120,11 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td style={S.td} colSpan={10}><div style={S.emptyState}>ยังไม่มีข้อมูลใบรับรอง</div></td></tr>}
+            {pointsForGroup.length === 0 && <tr><td style={S.td} colSpan={6}><EmptyState text="ไม่มีจุดสอบเทียบในใบรับรองนี้" /></td></tr>}
           </tbody>
         </table>
       </div>
       {editing && <CertificateForm row={editing} equipment={equipment} onCancel={() => setEditing(null)} onSave={upsert} />}
-      {uploadFor !== null && (
-        <Modal onClose={() => !busy && (setUploadFor(null), setErrorMsg(""))} title="อัปโหลด PDF ใบรับรองสอบเทียบ">
-          <Field label="เครื่องมือที่ใบรับรองนี้เป็นของ">
-            <select style={S.input} value={uploadFor} onChange={e => setUploadFor(e.target.value)}>
-              {equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
-            </select>
-          </Field>
-          <Field label="ไฟล์ PDF ใบรับรอง" full>
-            <input type="file" accept="application/pdf" disabled={busy}
-              onChange={e => { setErrorMsg(""); if (e.target.files[0]) handlePdfUpload(e.target.files[0], uploadFor); }} />
-          </Field>
-          {busy && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 12.5, marginTop: 10 }}>
-              <Loader2 size={15} className="ltSpin" /> {progress || "กำลังอ่านค่าจากใบรับรอง..."}
-            </div>
-          )}
-          {errorMsg && (
-            <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, background: "#FDF1F1", border: "1px solid var(--red)", fontSize: 12.5, color: "var(--red)" }}>
-              <div style={{ fontWeight: 700, marginBottom: 3 }}>อ่าน PDF ไม่สำเร็จ</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, wordBreak: "break-word" }}>{errorMsg}</div>
-              <div style={{ color: "var(--muted)", marginTop: 5 }}>กรอกด้วยตนเองได้จากปุ่ม "กรอกด้วยตนเอง" ในหน้านี้</div>
-            </div>
-          )}
-          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.65 }}>
-            รองรับใบรับรองที่เป็นภาพสแกน และไฟล์เดียวที่มีหลายใบรับรอง (เช่น AT102/26 + AT105/26 ในไฟล์เดียว) โดยจะอ่านทีละหน้า<br />
-            ระบบบันทึกทุกจุดที่อ่านได้ทันทีโดยไม่หยุดให้ตรวจสอบก่อน — แถวที่ข้อมูลไม่ครบจะขึ้นสถานะ "Draft" พร้อมระบุช่องที่ขาดไว้ในคอลัมน์ "รายการที่ขาด"
-          </div>
-
-          <Field label="Anthropic API key (ใส่เฉพาะกรณีขึ้น Failed to fetch)" full>
-            <input style={S.input} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-              placeholder="sk-ant-api03-... — เว้นว่างได้ถ้าแอปรันในที่ที่ต่อ API ให้อยู่แล้ว" autoComplete="off" />
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.6 }}>
-              ต้องเป็น API key จาก <b>console.anthropic.com</b> (ขึ้นต้นด้วย sk-ant-api03-...) เท่านั้น — คนละอย่างกับรหัสผ่าน
-              หรือ session ของแอป Claude / claude.ai และบัญชี Console ต้องผูก billing ไว้แล้วคีย์จึงจะเรียกได้
-              คีย์ใช้เฉพาะในเบราว์เซอร์นี้ ไม่ได้บันทึกลงระบบ และจะหายเมื่อปิดหน้าต่าง
-              — ถ้าไม่สะดวกตั้งค่านี้ ใช้ช่อง "วางข้อมูลที่ดึงมาแล้ว" ด้านล่างแทนได้ ไม่ต้องมีคีย์เลย
-            </div>
-          </Field>
-
-          <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
-            <button style={{ ...S.smallBtn, marginBottom: showPaste ? 8 : 0 }} onClick={() => setShowPaste(v => !v)}>
-              {showPaste ? "ซ่อน" : "หรือ วางข้อความ/ข้อมูลที่ดึงมาแล้ว (ไม่ต้องใช้ API ไม่มีค่าใช้จ่าย)"}
-            </button>
-            {showPaste && (
-              <>
-                <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
-                    <input type="radio" checked={pasteMode === "text"} onChange={() => setPasteMode("text")} /> วางข้อความจาก Word (แปลงจาก PDF สแกนด้วย OCR)
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
-                    <input type="radio" checked={pasteMode === "json"} onChange={() => setPasteMode("json")} /> วาง JSON (จากที่ขอให้ Claude ช่วยดึงในแชต)
-                  </label>
-                </div>
-                {pasteMode === "text" ? (
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
-                    แปลงไฟล์ PDF สแกนเป็น Word (เมนู OCR ของ Word หรือ Google Docs ก็ได้) แล้วคัดลอกทั้งบล็อกข้อมูลหัวใบรับรองและตารางผลการสอบเทียบ (รวมบรรทัดชื่อตาราง เช่น "Wavelength Accuracy by Using...") มาวางที่นี่ทั้งหมด — ปรับให้เข้ากับรูปแบบใบรับรอง Analytical Technology Co.,Ltd. ที่ใช้อยู่
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.6 }}>
-                    ส่งไฟล์ PDF ให้ Claude ในหน้าแชต ขอให้ตอบกลับเป็น JSON ตามรูปแบบนี้ แล้วนำมาวางที่นี่
-                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, marginTop: 5, color: "var(--ink)" }}>
-                      {'{"cert":"AT102/26","provider":"...","calDate":"2026-07-15","points":[["พารามิเตอร์","ช่วง",จุด,"หน่วย",ค่าอ้างอิง,ค่าที่อ่านได้,Error,Correction,U,k]]}'}
-                    </div>
-                  </div>
-                )}
-                <textarea
-                  style={{ ...S.input, minHeight: 160, fontFamily: "var(--font-mono)", fontSize: 11.5 }}
-                  value={pasteText} onChange={e => setPasteText(e.target.value)}
-                  placeholder={pasteMode === "text" ? "วางข้อความทั้งก้อนที่คัดลอกจาก Word ที่นี่" : "วาง JSON ที่นี่ (รองรับทั้งใบเดียวและหลายใบในรูปแบบ array)"}
-                />
-                <button style={{ ...S.primaryBtn, marginTop: 8 }} disabled={!pasteText.trim()}
-                  onClick={() => handlePasteImport(uploadFor)}>
-                  <Sparkles size={14} /> นำเข้าจากข้อมูลที่วาง
-                </button>
-              </>
-            )}
-          </div>
-          <ModalFooter onCancel={() => !busy && setUploadFor(null)} onSave={() => setUploadFor(null)} disabled={busy} />
-        </Modal>
-      )}
     </div>
   );
 }
