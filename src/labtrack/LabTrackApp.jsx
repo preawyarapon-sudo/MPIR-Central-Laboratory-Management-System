@@ -4574,6 +4574,22 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
           <button style={{ ...S.primaryBtn, opacity: dirty ? 1 : 0.5 }} disabled={!dirty} onClick={save}><Check size={15} /> บันทึก</button>
         </div>
       </div>
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: "6px 18px",
+        background: "#F5F8F7", border: "1px solid var(--line)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 12.5,
+      }}>
+        <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "var(--teal-dark)", marginBottom: 2 }}>
+          <BookOpen size={13} /> ดึงจากหน้า "เครื่องมือ" (แก้ไขได้ที่หน้านั้น ไม่ใช่ที่นี่)
+        </div>
+        <div><span style={{ color: "var(--muted)" }}>รหัส</span><div style={{ fontFamily: "var(--font-mono)" }}>{f.code || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>ชื่อเครื่องมือ</span><div style={{ fontWeight: 600 }}>{f.name || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>ประเภท</span><div>{f.type || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>ยี่ห้อ / รุ่น</span><div>{[f.brand, f.model].filter(Boolean).join(" / ") || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>หมายเลขเครื่อง (S/N)</span><div>{f.serialNo || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>ตำแหน่งที่ตั้ง</span><div>{f.location || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>สอบเทียบล่าสุด</span><div>{f.lastCalibration ? fmtDate(f.lastCalibration) : "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>รอบสอบเทียบ (เดือน)</span><div>{f.intervalMonths || "-"}</div></div>
+      </div>
       <div style={S.formGrid} className="ltFormGrid">
         {gaps.length > 0 && banner("warn", <><FileWarning size={14} color="var(--amber)" /><span><strong>ยังไม่ได้กำหนด:</strong> {gaps.join(", ")}</span></>)}
         {suggestion && criteriaEmpty && banner("info", <>
@@ -4671,10 +4687,11 @@ const CALIBRATION_GUIDE_SHEETS = [
     code: "01", name: "ข้อมูลเครื่องมือ (Instrument Master)",
     purpose: "ทะเบียนกลางของเครื่องมือ พร้อมเกณฑ์ Tolerance/MPE, Decision Rule และคะแนนความเสี่ยง — ใช้เป็นฐานให้ทุก Sheet อื่นคำนวณ",
     fields: [
-      { label: "รหัส / ชื่อ / ประเภท / ยี่ห้อ / รุ่น / Serial / Asset No. / สถานที่ / ผู้รับผิดชอบ / กลุ่ม / ขอบข่าย / วิธีทดสอบ / พารามิเตอร์ / หน่วย / ช่วงใช้งาน / ความละเอียด", kind: "input" },
+      { label: "รหัส / ชื่อ / ประเภท / ยี่ห้อ / รุ่น / Serial No. / ตำแหน่งที่ตั้ง / สอบเทียบล่าสุด / รอบสอบเทียบ (เดือน)", kind: "linked", note: "ดึงมาจากหน้า \"เครื่องมือ\" โดยอัตโนมัติ (เครื่องมือตัวเดียวกัน) — แก้ไขได้ที่หน้านั้น ไม่ต้องกรอกซ้ำใน Sheet 01" },
+      { label: "ผู้รับผิดชอบ (Custodian) / เลขทรัพย์สิน (Asset No.) / กลุ่มเครื่องมือ / ขอบข่ายการใช้งาน / วิธีทดสอบที่เกี่ยวข้อง / พารามิเตอร์ที่วัด / หน่วย / ช่วงใช้งาน / ความละเอียด", kind: "input" },
       { label: "Tolerance / MPE, ชนิดของเกณฑ์ (absolute / % of reading / % of full scale), แหล่งอ้างอิงเกณฑ์, เอกสารอ้างอิง, Decision Rule ที่อนุมัติ, ความถี่สอบเทียบ, ความถี่ Daily/Intermediate Check", kind: "input", note: "ต้องอนุมัติโดย Technical Manager ก่อนใช้จริง" },
       { label: "Severity / Occurrence / Detectability (1–5)", kind: "input" },
-      { label: "วันที่สอบเทียบล่าสุด", kind: "auto", note: "ดึงจากใบรับรอง (Sheet 02) ที่มีวันที่ล่าสุดของเครื่องมือนี้ — ถ้ายังไม่มีใบรับรองในระบบ ใช้ \"วันที่สอบเทียบล่าสุด (กรอกเอง)\" แทน" },
+      { label: "วันที่สอบเทียบล่าสุด (auto)", kind: "auto", note: "ดึงจากใบรับรอง (Sheet 02) ที่มีวันที่ล่าสุดของเครื่องมือนี้ — ถ้ายังไม่มีใบรับรองในระบบ ใช้ \"วันที่สอบเทียบล่าสุด (กรอกเอง)\" แทน" },
       { label: "วันครบกำหนดถัดไป / วันคงเหลือ", kind: "auto", note: "วันครบกำหนด = วันที่สอบเทียบล่าสุด + ความถี่สอบเทียบ (เดือน); วันคงเหลือ = วันครบกำหนด − วันนี้" },
       { label: "RPN (Risk Priority Number)", kind: "auto", note: "RPN = Severity × Occurrence × Detectability. ระดับความเสี่ยง: ≥64 สูง (High) · ≥27 ปานกลาง (Medium) · ต่ำกว่านั้น ต่ำ (Low)" },
       { label: "ความถี่ที่แนะนำตามความเสี่ยง", kind: "auto", note: "แนะนำจากระดับความเสี่ยง (RPN) — เป็นข้อเสนอ ไม่บังคับใช้แทนความถี่ที่อนุมัติ" },
@@ -4788,15 +4805,18 @@ const CALIBRATION_GUIDE_SHEETS = [
 ];
 function GuideFieldRow({ f }) {
   const isAuto = f.kind === "auto";
+  const isLinked = f.kind === "linked";
+  const label = isAuto ? "คำนวณอัตโนมัติ" : isLinked ? "ดึงจากหน้าเครื่องมือ" : "กรอกเอง";
+  const color = isAuto ? "var(--green)" : isLinked ? "var(--teal-dark)" : "#9A7B12";
+  const bg = isAuto ? "rgba(46,157,110,0.12)" : isLinked ? "rgba(11,79,108,0.10)" : "rgba(230,180,40,0.18)";
+  const border = isAuto ? "var(--green)" : isLinked ? "var(--teal-dark)" : "#E6B428";
   return (
     <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
       <span style={{
         flexShrink: 0, marginTop: 1, fontSize: 10, fontWeight: 700, borderRadius: 20, padding: "2px 8px",
-        color: isAuto ? "var(--green)" : "#9A7B12",
-        background: isAuto ? "rgba(46,157,110,0.12)" : "rgba(230,180,40,0.18)",
-        border: `1px solid ${isAuto ? "var(--green)" : "#E6B428"}`,
+        color, background: bg, border: `1px solid ${border}`, whiteSpace: "nowrap",
       }}>
-        {isAuto ? "คำนวณอัตโนมัติ" : "กรอกเอง"}
+        {label}
       </span>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{f.label}</div>
