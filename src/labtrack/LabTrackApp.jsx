@@ -3739,7 +3739,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                 <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{c.reportedError !== "" ? c.reportedError : "-"}</td>
                 <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{c.reportedU !== "" ? c.reportedU : "-"}</td>
                 <td style={S.td}><span style={{ ...S.tag, borderColor: recordStatusColor(c.recordStatus), color: recordStatusColor(c.recordStatus) }}>{c.recordStatus}</span></td>
-                <td style={S.td}>{c.source === "pdf-ai" ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal-dark)" }}><Sparkles size={12} /> AI</span> : "กรอกเอง"}</td>
+                <td style={S.td}>{c.source === "pdf-ai" ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal-dark)" }}><Sparkles size={12} /></span> : "กรอกเอง"}</td>
                 <td style={S.td}>
                   <div style={{ display: "flex", gap: 4 }}>
                     <button style={S.iconBtnSm} onClick={() => setEditing(c)}><Pencil size={13} /></button>
@@ -3760,9 +3760,13 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
 function CertificateForm({ row, equipment, onCancel, onSave }) {
   const [f, setF] = useState(row);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  return (
-    <Modal onClose={onCancel} title="ข้อมูลใบรับรองสอบเทียบ" wide>
-      <div style={S.formGrid} className="ltFormGrid">
+
+  const steps = [
+    {
+      title: "ข้อมูลใบรับรอง",
+      hint: "เลือกเครื่องมือและกรอกรายละเอียดของใบรับรอง",
+      blocked: !f.instrumentId ? "เลือกเครื่องมือก่อนไปขั้นต่อไป" : (!f.certificateNo ? "กรอกเลขที่ใบรับรองก่อนไปขั้นต่อไป" : null),
+      content: (<>
         <Field label="เครื่องมือ">
           <select style={S.input} value={f.instrumentId} onChange={set("instrumentId")}>
             {equipment.slice().sort((a, b) => alphaCompare(a.code, b.code)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
@@ -3776,6 +3780,12 @@ function CertificateForm({ row, equipment, onCancel, onSave }) {
         </Field>
         <Field label="วันที่สอบเทียบ"><input type="date" style={S.input} value={f.calibrationDate} onChange={set("calibrationDate")} /></Field>
         <Field label="วันที่ออกใบรับรอง"><input type="date" style={S.input} value={f.issueDate} onChange={set("issueDate")} /></Field>
+      </>),
+    },
+    {
+      title: "วิธีการและสภาวะแวดล้อม",
+      hint: "วิธีการสอบเทียบ มาตรฐานอ้างอิง และสภาวะขณะสอบเทียบ (เว้นว่างได้)",
+      content: (<>
         <Field label="วิธีการสอบเทียบ"><input style={S.input} value={f.calibrationMethod} onChange={set("calibrationMethod")} /></Field>
         <Field label="มาตรฐานอ้างอิงที่ใช้"><input style={S.input} value={f.referenceStandardUsed} onChange={set("referenceStandardUsed")} /></Field>
         <Field label="ความสอบกลับได้ทางมาตรวิทยา">
@@ -3784,7 +3794,12 @@ function CertificateForm({ row, equipment, onCancel, onSave }) {
         </Field>
         <Field label="อุณหภูมิขณะสอบเทียบ (°C)"><input type="number" step="any" style={S.input} value={f.temperatureC} onChange={set("temperatureC")} /></Field>
         <Field label="ความชื้นสัมพัทธ์ (%RH)"><input type="number" step="any" style={S.input} value={f.humidityRH} onChange={set("humidityRH")} /></Field>
-        <div style={{ gridColumn: "1 / -1", fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)", marginTop: 4 }}>จุดสอบเทียบ (Calibration Point)</div>
+      </>),
+    },
+    {
+      title: "จุดสอบเทียบ (Calibration Point)",
+      hint: "พารามิเตอร์ ช่วง และค่าที่วัดได้ของจุดนี้",
+      content: (<>
         <Field label="พารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} /></Field>
         <Field label="ช่วง / Range ID"><input style={S.input} value={f.rangeId} onChange={set("rangeId")} /></Field>
         <Field label="จุดสอบเทียบ (Nominal)"><input type="number" step="any" style={S.input} value={f.calibrationPoint} onChange={set("calibrationPoint")} /></Field>
@@ -3799,26 +3814,45 @@ function CertificateForm({ row, equipment, onCancel, onSave }) {
             {LK_ADJ.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
         </Field>
+      </>),
+    },
+    {
+      title: "ความไม่แน่นอน (Uncertainty)",
+      hint: "ค่า U ที่รายงานในใบรับรองของจุดนี้",
+      content: (<>
         <Field label="รูปแบบ U ที่รายงาน">
           <select style={S.input} value={f.uReportedAs} onChange={set("uReportedAs")}>{LK_UTYPE.map(u => <option key={u} value={u}>{u}</option>)}</select>
         </Field>
         <Field label="ค่า U ที่รายงาน"><input type="number" step="any" style={S.input} value={f.reportedU} onChange={set("reportedU")} /></Field>
         <Field label="Coverage factor k"><input type="number" step="any" style={S.input} value={f.coverageFactor} onChange={set("coverageFactor")} /></Field>
         <Field label="Coverage probability (%)"><input type="number" step="any" style={S.input} value={f.coverageProbabilityPct} onChange={set("coverageProbabilityPct")} /></Field>
+      </>),
+    },
+    {
+      title: "ข้อกำหนดและข้อจำกัด",
+      hint: "คำแถลงความสอดคล้องและหมายเหตุจากผู้สอบเทียบ (เว้นว่างได้)",
+      content: (<>
         <Field label="Statement of Conformity จากผู้สอบเทียบ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.providerStatementOfConformity} onChange={set("providerStatementOfConformity")} /></Field>
         <Field label="Decision Rule ของผู้สอบเทียบ" full><input style={S.input} value={f.providerDecisionRule} onChange={set("providerDecisionRule")} /></Field>
         <Field label="ข้อจำกัด / หมายเหตุในใบรับรอง" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.limitationsNotes} onChange={set("limitationsNotes")} /></Field>
         <Field label="รายการที่ขาด (Missing Items)"><input style={S.input} value={f.missingItems} onChange={set("missingItems")} /></Field>
+      </>),
+    },
+    {
+      title: "สถานะ Record และไฟล์แนบ",
+      hint: "ทบทวนสถานะและแนบลิงก์ไฟล์ PDF ของใบรับรอง",
+      content: (<>
         <Field label="สถานะ Record">
           <select style={S.input} value={f.recordStatus} onChange={set("recordStatus")}>{LK_RECSTAT.map(s => <option key={s} value={s}>{s}</option>)}</select>
         </Field>
         <Field label="ผู้ทบทวน"><input style={S.input} value={f.reviewedBy} onChange={set("reviewedBy")} /></Field>
         <Field label="วันที่ทบทวน"><input type="date" style={S.input} value={f.reviewDate} onChange={set("reviewDate")} /></Field>
         <Field label="ลิงก์ไฟล์ PDF ใบรับรอง" full><input style={S.input} value={f.pdfLink} onChange={set("pdfLink")} placeholder="https://..." /></Field>
-      </div>
-      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.instrumentId || !f.certificateNo} />
-    </Modal>
-  );
+      </>),
+    },
+  ];
+
+  return <WizardModal title="ข้อมูลใบรับรองสอบเทียบ" steps={steps} onCancel={onCancel} onSave={() => onSave(f)} saveDisabled={!f.instrumentId || !f.certificateNo} />;
 }
 
 /* ================= Sheet 03 + Sheet 06: Calibration Results & Trend (calculated) =================
