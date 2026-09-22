@@ -4526,21 +4526,36 @@ const SHEET01_KEYS = [
 ];
 function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates = [], notify }) {
   const pick = (e) => Object.fromEntries(SHEET01_KEYS.map(k => [k, e?.[k] ?? ""]));
+  // Default view is a read-only summary list — this data is filled in once
+  // per instrument and mostly just referenced afterward. Editing happens in
+  // a separate card (Modal): pressing "แก้ไข" seeds the draft `f` from the
+  // saved record, and Save/Cancel inside that card decide whether it sticks.
+  const [editing, setEditing] = useState(false);
   const [f, setF] = useState(() => ({ ...instrument }));
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const dirty = JSON.stringify(pick(f)) !== JSON.stringify(pick(instrument));
   const suggestion = useMemo(() => suggestCriteriaByType(f.type, equipment, f.id), [f.type, equipment, f.id]);
   const criteriaEmpty = !f.tolerance && !f.decisionRule && (f.severity == null || f.severity === "") && (f.occurrence == null || f.occurrence === "") && (f.detectability == null || f.detectability === "");
-  const gaps = calibCriteriaGaps(f);
-  const isRefractometer = f.type === "Refractometer";
+  const gaps = calibCriteriaGaps(instrument);
+  // Draft-based (used only inside the edit card, since these react live to
+  // in-progress edits of Tolerance/brixMin/brixMax before Save is pressed).
+  const isRefractometerDraft = f.type === "Refractometer";
   const legacyLo = numOrNull(f.brixMin), legacyHi = numOrNull(f.brixMax);
-  const legacyBrix = isRefractometer && numOrNull(f.tolerance) == null && legacyLo != null && legacyHi != null;
+  const legacyBrix = isRefractometerDraft && numOrNull(f.tolerance) == null && legacyLo != null && legacyHi != null;
   const legacySymmetric = legacyBrix && Math.abs((legacyLo + legacyHi) / 2 - REFRACTOMETER_STD_BRIX) < 1e-9;
-  const brixLimits = isRefractometer ? deriveCheckLimits(f, REFRACTOMETER_STD_BRIX) : null;
-  const generalLimits = !isRefractometer && numOrNull(f.tolerance) != null ? true : false;
-  const calSummary = latestCalibrationSummary(f, certificates);
-  const { rpn, level } = calcRPN(f.severity, f.occurrence, f.detectability);
+  const { rpn: draftRpn, level: draftLevel } = calcRPN(f.severity, f.occurrence, f.detectability);
+  // Saved-record-based (used for the read-only summary and the "used where"
+  // notes, so they always reflect what's actually stored, not an open draft).
+  const isRefractometer = instrument.type === "Refractometer";
+  const brixLimits = isRefractometer ? deriveCheckLimits(instrument, REFRACTOMETER_STD_BRIX) : null;
+  const generalLimits = !isRefractometer && numOrNull(instrument.tolerance) != null;
+  const calSummary = latestCalibrationSummary(instrument, certificates);
+  const { rpn, level } = calcRPN(instrument.severity, instrument.occurrence, instrument.detectability);
 
+  function openEdit() {
+    setF({ ...instrument });
+    setEditing(true);
+  }
   function applySuggestion() {
     if (!suggestion) return;
     const { sourceCode, ...vals } = suggestion;
@@ -4556,6 +4571,7 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
     const patch = pick(f);
     setEquipment(equipment.map(e => e.id === f.id ? { ...e, ...patch } : e));
     notify("บันทึกข้อมูลเครื่องมือ (Sheet 01) แล้ว");
+    setEditing(false);
   }
   const banner = (tone, children) => (
     <div style={{
@@ -4564,9 +4580,9 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
       borderRadius: 8, padding: "8px 11px",
     }}>{children}</div>
   );
-  // Section dividers group the ~20 fields below into a readable master-data
-  // form (fill in once per instrument, then it's just referenced) instead of
-  // one long undifferentiated grid.
+  // Section dividers group the ~20 fields into a readable master-data list
+  // (in both the read-only summary and the edit card) instead of one long
+  // undifferentiated block.
   const sectionHead = (icon, title, first) => (
     <div style={{
       gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, fontWeight: 700,
@@ -4574,15 +4590,24 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
       paddingTop: first ? 0 : 16, borderTop: first ? "none" : "1px dashed var(--line)",
     }}>{icon} {title}</div>
   );
+  // One read-only label/value pair for the summary list.
+  const item = (label, value) => (
+    <div><span style={{ color: "var(--muted)" }}>{label}</span><div style={{ fontWeight: 500, marginTop: 1 }}>{value === "" || value == null ? "-" : value}</div></div>
+  );
+  const toleranceText = instrument.tolerance != null && instrument.tolerance !== ""
+    ? `± ${instrument.tolerance} (${instrument.toleranceType || "absolute"})` : "-";
+  const hasRange = (instrument.workingRangeMin ?? "") !== "" || (instrument.workingRangeMax ?? "") !== "";
+  const rangeText = hasRange ? `${instrument.workingRangeMin ?? "-"} – ${instrument.workingRangeMax ?? "-"}` : "-";
+  const decisionRuleText = LK_RULE.find(r => r.key === instrument.decisionRule)?.label || instrument.decisionRule || "-";
+  const severityText = SEVERITY_SCALE.find(s => String(s.v) === String(instrument.severity))?.short || "-";
+  const occurrenceText = OCCURRENCE_SCALE.find(s => String(s.v) === String(instrument.occurrence))?.short || "-";
+  const detectabilityText = DETECTABILITY_SCALE.find(s => String(s.v) === String(instrument.detectability))?.short || "-";
 
   return (
     <div>
       <div style={S.detailHead}>
         <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ (Sheet 01)</h2><p style={S.h2sub}>กรอกครั้งเดียวต่อเครื่องมือ แล้ว Tolerance, Decision Rule และ Risk score เหล่านี้จะถูกใช้คำนวณ Sheet 03, Sheet 04, Sheet 07 และเกณฑ์ผ่าน/ไม่ผ่านของ Daily check ให้อัตโนมัติทุกครั้ง</p></div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={S.ghostBtn} disabled={!dirty} onClick={() => setF({ ...f, ...pick(instrument) })}>ยกเลิกการแก้ไข</button>
-          <button style={{ ...S.primaryBtn, opacity: dirty ? 1 : 0.5 }} disabled={!dirty} onClick={save}><Check size={15} /> บันทึก</button>
-        </div>
+        <button style={S.primaryBtn} onClick={openEdit}><Pencil size={14} /> แก้ไข</button>
       </div>
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: "6px 18px",
@@ -4591,94 +4616,56 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
         <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "var(--teal-dark)", marginBottom: 2 }}>
           <BookOpen size={13} /> ดึงจากหน้า "เครื่องมือ" (แก้ไขได้ที่หน้านั้น ไม่ใช่ที่นี่)
         </div>
-        <div><span style={{ color: "var(--muted)" }}>รหัส</span><div style={{ fontFamily: "var(--font-mono)" }}>{f.code || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>ชื่อเครื่องมือ</span><div style={{ fontWeight: 600 }}>{f.name || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>ประเภท</span><div>{f.type || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>ยี่ห้อ / รุ่น</span><div>{[f.brand, f.model].filter(Boolean).join(" / ") || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>หมายเลขเครื่อง (S/N)</span><div>{f.serialNo || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>ตำแหน่งที่ตั้ง</span><div>{f.location || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>สอบเทียบล่าสุด</span><div>{f.lastCalibration ? fmtDate(f.lastCalibration) : "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>รอบสอบเทียบ (เดือน)</span><div>{f.intervalMonths || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>รหัส</span><div style={{ fontFamily: "var(--font-mono)" }}>{instrument.code || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>ชื่อเครื่องมือ</span><div style={{ fontWeight: 600 }}>{instrument.name || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>ประเภท</span><div>{instrument.type || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>ยี่ห้อ / รุ่น</span><div>{[instrument.brand, instrument.model].filter(Boolean).join(" / ") || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>หมายเลขเครื่อง (S/N)</span><div>{instrument.serialNo || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>ตำแหน่งที่ตั้ง</span><div>{instrument.location || "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>สอบเทียบล่าสุด</span><div>{instrument.lastCalibration ? fmtDate(instrument.lastCalibration) : "-"}</div></div>
+        <div><span style={{ color: "var(--muted)" }}>รอบสอบเทียบ (เดือน)</span><div>{instrument.intervalMonths || "-"}</div></div>
       </div>
-      <div style={S.formGrid} className="ltFormGrid">
-        {gaps.length > 0 && banner("warn", <><FileWarning size={14} color="var(--amber)" /><span><strong>ยังไม่ได้กำหนด:</strong> {gaps.join(", ")}</span></>)}
-        {suggestion && criteriaEmpty && banner("info", <>
-          <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
-          <span style={{ flex: 1 }}>พบเกณฑ์ที่ตั้งไว้แล้วสำหรับเครื่องมือประเภท "{f.type}" (จาก {suggestion.sourceCode}) — ใช้เป็นค่าเริ่มต้นได้เลย</span>
-          <button type="button" style={S.smallBtn} onClick={applySuggestion}>ใช้ค่านี้</button>
-        </>)}
-        {legacyBrix && banner("info", <>
-          <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
-          {legacySymmetric ? (
-            <>
-              <span style={{ flex: 1 }}>เครื่องนี้มีเกณฑ์ %Brix แบบเดิม ({legacyLo} – {legacyHi}) — แปลงเป็น Tolerance ±{round4((legacyHi - legacyLo) / 2)} °Brix เพื่อให้เกณฑ์ผูกกับบันทึกการสอบเทียบ</span>
-              <button type="button" style={S.smallBtn} onClick={importLegacyBrix}>แปลงเป็น Tolerance</button>
-            </>
-          ) : (
-            <span style={{ flex: 1 }}>เกณฑ์ %Brix แบบเดิม ({legacyLo} – {legacyHi}) ไม่สมมาตรรอบ {REFRACTOMETER_STD_BRIX} — กรอก Tolerance ด้านล่างเองเพื่อให้ Daily check ใช้ค่าจากบันทึกการสอบเทียบ</span>
-          )}
-        </>)}
 
+      {gaps.length > 0 && (
+        <div style={{ display: "grid", marginBottom: 14 }}>
+          {banner("warn", <><FileWarning size={14} color="var(--amber)" /><span style={{ flex: 1 }}><strong>ยังไม่ได้กำหนด:</strong> {gaps.join(", ")}</span><button type="button" style={S.smallBtn} onClick={openEdit}>กรอกตอนนี้</button></>)}
+        </div>
+      )}
+
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: "14px 18px",
+        background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10, padding: "14px 16px", fontSize: 12.5,
+      }} className="ltFormGrid">
         {sectionHead(<User size={13} />, "ผู้รับผิดชอบและขอบข่าย", true)}
-        <Field label="ผู้รับผิดชอบ (Custodian)"><input style={S.input} value={f.custodian || ""} onChange={set("custodian")} /></Field>
-        <Field label="เลขทรัพย์สิน (Asset No.)"><input style={S.input} value={f.assetNo || ""} onChange={set("assetNo")} /></Field>
-        <Field label="กลุ่มเครื่องมือ (A/B/C)"><input style={S.input} value={f.riskGroup || ""} onChange={set("riskGroup")} placeholder="A / B / C" /></Field>
-        <Field label="ขอบข่ายการใช้งาน"><input style={S.input} value={f.scopeOfUse || ""} onChange={set("scopeOfUse")} /></Field>
-        <Field label="วิธีทดสอบที่เกี่ยวข้อง"><input style={S.input} value={f.relatedTestMethod || ""} onChange={set("relatedTestMethod")} /></Field>
+        {item("ผู้รับผิดชอบ (Custodian)", instrument.custodian)}
+        {item("เลขทรัพย์สิน (Asset No.)", instrument.assetNo)}
+        {item("กลุ่มเครื่องมือ (A/B/C)", instrument.riskGroup)}
+        {item("ขอบข่ายการใช้งาน", instrument.scopeOfUse)}
+        {item("วิธีทดสอบที่เกี่ยวข้อง", instrument.relatedTestMethod)}
 
         {sectionHead(<Gauge size={13} />, "ข้อกำหนดการวัด")}
-        <Field label="พารามิเตอร์ที่วัด"><input style={S.input} value={f.measuredParameter || ""} onChange={set("measuredParameter")} /></Field>
-        <Field label="หน่วย"><input style={S.input} value={f.calUnit || ""} onChange={set("calUnit")} /></Field>
-        <Field label="ช่วงใช้งานจริง — ต่ำสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMin ?? ""} onChange={set("workingRangeMin")} /></Field>
-        <Field label="ช่วงใช้งานจริง — สูงสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMax ?? ""} onChange={set("workingRangeMax")} /></Field>
-        <Field label="ความละเอียด (Resolution)"><input style={S.input} value={f.resolution || ""} onChange={set("resolution")} /></Field>
+        {item("พารามิเตอร์ที่วัด", instrument.measuredParameter)}
+        {item("หน่วย", instrument.calUnit)}
+        {item("ช่วงใช้งานจริง", rangeText)}
+        {item("ความละเอียด (Resolution)", instrument.resolution)}
 
         {sectionHead(<ShieldCheck size={13} />, "เกณฑ์การยอมรับ (Acceptance Criteria)")}
-        <Field label="เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)"><input type="number" step="any" style={S.input} value={f.tolerance ?? ""} onChange={set("tolerance")} /></Field>
-        <Field label="ชนิดของเกณฑ์">
-          <select style={S.input} value={f.toleranceType || "absolute"} onChange={set("toleranceType")}>
-            {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </Field>
-        <Field label="แหล่งอ้างอิงของเกณฑ์">
-          <input style={S.input} list="basisOptions" value={f.basisOfCriteria || ""} onChange={set("basisOfCriteria")} />
-          <datalist id="basisOptions">{LK_BASIS.map(b => <option key={b} value={b} />)}</datalist>
-        </Field>
-        <Field label="เอกสารอ้างอิงของเกณฑ์"><input style={S.input} value={f.referenceDocument || ""} onChange={set("referenceDocument")} /></Field>
-        <Field label="Decision Rule ที่อนุมัติ">
-          <select style={S.input} value={f.decisionRule || "simple"} onChange={set("decisionRule")}>
-            {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
-          </select>
-        </Field>
-        {f.decisionRule === "guardband" && (
-          <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.guardBandFactor ?? ""} onChange={set("guardBandFactor")} placeholder="เช่น 1" /></Field>
-        )}
+        {item("เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)", toleranceText)}
+        {item("แหล่งอ้างอิงของเกณฑ์", instrument.basisOfCriteria)}
+        {item("เอกสารอ้างอิงของเกณฑ์", instrument.referenceDocument)}
+        {item("Decision Rule ที่อนุมัติ", decisionRuleText)}
+        {instrument.decisionRule === "guardband" && item("Guard band factor (g)", instrument.guardBandFactor)}
 
         {sectionHead(<TrendingUp size={13} />, "การประเมินความเสี่ยง (Risk Assessment)")}
-        <Field label="ความถี่ Daily/Intermediate Check"><input style={S.input} value={f.checkFrequency || ""} onChange={set("checkFrequency")} placeholder="เช่น ทุกวัน, ทุกสัปดาห์" /></Field>
-        <Field label="Severity — ผลกระทบหากเครื่องมือคลาดเคลื่อน">
-          <ScoreSelect value={f.severity} onChange={v => setF({ ...f, severity: v })} scale={SEVERITY_SCALE} />
-        </Field>
-        <Field label="Occurrence — ความถี่ที่เคยเกิดปัญหา">
-          <ScoreSelect value={f.occurrence} onChange={v => setF({ ...f, occurrence: v })} scale={OCCURRENCE_SCALE} />
-        </Field>
-        <Field label="Detectability — ความยากในการตรวจพบ">
-          <ScoreSelect value={f.detectability} onChange={v => setF({ ...f, detectability: v })} scale={DETECTABILITY_SCALE} />
-        </Field>
-        <Field label="RPN / ระดับความเสี่ยง (คำนวณอัตโนมัติ)">
-          <div style={{ ...S.input, background: "#F5F8F7", display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontFamily: "var(--font-mono)" }}>{rpn ?? "-"}</span><span style={{ color: "var(--muted)" }}>{level}</span>
-          </div>
-        </Field>
+        {item("ความถี่ Daily/Intermediate Check", instrument.checkFrequency)}
+        {item("Severity", severityText)}
+        {item("Occurrence", occurrenceText)}
+        {item("Detectability", detectabilityText)}
+        {item("RPN / ระดับความเสี่ยง", rpn != null ? `${rpn} · ${level}` : "-")}
 
         {sectionHead(<Stamp size={13} />, "สถานะและการอนุมัติ")}
-        <Field label="สถานะเครื่องมือปัจจุบัน">
-          <select style={S.input} value={f.currentStatus || ""} onChange={set("currentStatus")}>
-            <option value="">- ยังไม่ระบุ -</option>
-            {LK_CURRENT_STATUS.map(st => <option key={st} value={st}>{st}</option>)}
-          </select>
-        </Field>
-        <Field label="ผู้อนุมัติให้ใช้งาน"><input style={S.input} value={f.authorizedBy || ""} onChange={set("authorizedBy")} /></Field>
+        {item("สถานะเครื่องมือปัจจุบัน", instrument.currentStatus)}
+        {item("ผู้อนุมัติให้ใช้งาน", instrument.authorizedBy)}
       </div>
 
       <div style={{ ...S.notesBox, marginTop: 14, fontSize: 12.5, lineHeight: 1.7 }}>
@@ -4690,6 +4677,91 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
         )}
         <div>• ผลสอบเทียบล่าสุด: {calSummary ? <><b>{calSummary.decision}</b> (รอบ {fmtDate(calSummary.date)})</> : "ยังไม่มีใบรับรอง"}</div>
       </div>
+
+      {editing && (
+        <Modal onClose={() => setEditing(false)} title="แก้ไขข้อมูลเครื่องมือ (Sheet 01)" xwide>
+          <div style={S.formGrid} className="ltFormGrid">
+            {suggestion && criteriaEmpty && banner("info", <>
+              <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>พบเกณฑ์ที่ตั้งไว้แล้วสำหรับเครื่องมือประเภท "{f.type}" (จาก {suggestion.sourceCode}) — ใช้เป็นค่าเริ่มต้นได้เลย</span>
+              <button type="button" style={S.smallBtn} onClick={applySuggestion}>ใช้ค่านี้</button>
+            </>)}
+            {legacyBrix && banner("info", <>
+              <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
+              {legacySymmetric ? (
+                <>
+                  <span style={{ flex: 1 }}>เครื่องนี้มีเกณฑ์ %Brix แบบเดิม ({legacyLo} – {legacyHi}) — แปลงเป็น Tolerance ±{round4((legacyHi - legacyLo) / 2)} °Brix เพื่อให้เกณฑ์ผูกกับบันทึกการสอบเทียบ</span>
+                  <button type="button" style={S.smallBtn} onClick={importLegacyBrix}>แปลงเป็น Tolerance</button>
+                </>
+              ) : (
+                <span style={{ flex: 1 }}>เกณฑ์ %Brix แบบเดิม ({legacyLo} – {legacyHi}) ไม่สมมาตรรอบ {REFRACTOMETER_STD_BRIX} — กรอก Tolerance ด้านล่างเองเพื่อให้ Daily check ใช้ค่าจากบันทึกการสอบเทียบ</span>
+              )}
+            </>)}
+
+            {sectionHead(<User size={13} />, "ผู้รับผิดชอบและขอบข่าย", true)}
+            <Field label="ผู้รับผิดชอบ (Custodian)"><input style={S.input} value={f.custodian || ""} onChange={set("custodian")} /></Field>
+            <Field label="เลขทรัพย์สิน (Asset No.)"><input style={S.input} value={f.assetNo || ""} onChange={set("assetNo")} /></Field>
+            <Field label="กลุ่มเครื่องมือ (A/B/C)"><input style={S.input} value={f.riskGroup || ""} onChange={set("riskGroup")} placeholder="A / B / C" /></Field>
+            <Field label="ขอบข่ายการใช้งาน"><input style={S.input} value={f.scopeOfUse || ""} onChange={set("scopeOfUse")} /></Field>
+            <Field label="วิธีทดสอบที่เกี่ยวข้อง"><input style={S.input} value={f.relatedTestMethod || ""} onChange={set("relatedTestMethod")} /></Field>
+
+            {sectionHead(<Gauge size={13} />, "ข้อกำหนดการวัด")}
+            <Field label="พารามิเตอร์ที่วัด"><input style={S.input} value={f.measuredParameter || ""} onChange={set("measuredParameter")} /></Field>
+            <Field label="หน่วย"><input style={S.input} value={f.calUnit || ""} onChange={set("calUnit")} /></Field>
+            <Field label="ช่วงใช้งานจริง — ต่ำสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMin ?? ""} onChange={set("workingRangeMin")} /></Field>
+            <Field label="ช่วงใช้งานจริง — สูงสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMax ?? ""} onChange={set("workingRangeMax")} /></Field>
+            <Field label="ความละเอียด (Resolution)"><input style={S.input} value={f.resolution || ""} onChange={set("resolution")} /></Field>
+
+            {sectionHead(<ShieldCheck size={13} />, "เกณฑ์การยอมรับ (Acceptance Criteria)")}
+            <Field label="เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)"><input type="number" step="any" style={S.input} value={f.tolerance ?? ""} onChange={set("tolerance")} /></Field>
+            <Field label="ชนิดของเกณฑ์">
+              <select style={S.input} value={f.toleranceType || "absolute"} onChange={set("toleranceType")}>
+                {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="แหล่งอ้างอิงของเกณฑ์">
+              <input style={S.input} list="basisOptions" value={f.basisOfCriteria || ""} onChange={set("basisOfCriteria")} />
+              <datalist id="basisOptions">{LK_BASIS.map(b => <option key={b} value={b} />)}</datalist>
+            </Field>
+            <Field label="เอกสารอ้างอิงของเกณฑ์"><input style={S.input} value={f.referenceDocument || ""} onChange={set("referenceDocument")} /></Field>
+            <Field label="Decision Rule ที่อนุมัติ">
+              <select style={S.input} value={f.decisionRule || "simple"} onChange={set("decisionRule")}>
+                {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+              </select>
+            </Field>
+            {f.decisionRule === "guardband" && (
+              <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.guardBandFactor ?? ""} onChange={set("guardBandFactor")} placeholder="เช่น 1" /></Field>
+            )}
+
+            {sectionHead(<TrendingUp size={13} />, "การประเมินความเสี่ยง (Risk Assessment)")}
+            <Field label="ความถี่ Daily/Intermediate Check"><input style={S.input} value={f.checkFrequency || ""} onChange={set("checkFrequency")} placeholder="เช่น ทุกวัน, ทุกสัปดาห์" /></Field>
+            <Field label="Severity — ผลกระทบหากเครื่องมือคลาดเคลื่อน">
+              <ScoreSelect value={f.severity} onChange={v => setF({ ...f, severity: v })} scale={SEVERITY_SCALE} />
+            </Field>
+            <Field label="Occurrence — ความถี่ที่เคยเกิดปัญหา">
+              <ScoreSelect value={f.occurrence} onChange={v => setF({ ...f, occurrence: v })} scale={OCCURRENCE_SCALE} />
+            </Field>
+            <Field label="Detectability — ความยากในการตรวจพบ">
+              <ScoreSelect value={f.detectability} onChange={v => setF({ ...f, detectability: v })} scale={DETECTABILITY_SCALE} />
+            </Field>
+            <Field label="RPN / ระดับความเสี่ยง (คำนวณอัตโนมัติ)">
+              <div style={{ ...S.input, background: "#F5F8F7", display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontFamily: "var(--font-mono)" }}>{draftRpn ?? "-"}</span><span style={{ color: "var(--muted)" }}>{draftLevel}</span>
+              </div>
+            </Field>
+
+            {sectionHead(<Stamp size={13} />, "สถานะและการอนุมัติ")}
+            <Field label="สถานะเครื่องมือปัจจุบัน">
+              <select style={S.input} value={f.currentStatus || ""} onChange={set("currentStatus")}>
+                <option value="">- ยังไม่ระบุ -</option>
+                {LK_CURRENT_STATUS.map(st => <option key={st} value={st}>{st}</option>)}
+              </select>
+            </Field>
+            <Field label="ผู้อนุมัติให้ใช้งาน"><input style={S.input} value={f.authorizedBy || ""} onChange={set("authorizedBy")} /></Field>
+          </div>
+          <ModalFooter onCancel={() => setEditing(false)} onSave={save} disabled={!dirty} />
+        </Modal>
+      )}
     </div>
   );
 }
