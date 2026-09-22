@@ -6,7 +6,7 @@ import {
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
   LayoutGrid, ZoomIn, QrCode, Printer, FileCheck2, BadgeCheck,
   Sparkles, ClipboardCheck, Gauge, TrendingUp,
-  ShieldCheck, FileWarning, Stamp, Check
+  ShieldCheck, FileWarning, Stamp, Check, BookOpen, ChevronDown, ChevronUp
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -4660,6 +4660,190 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
   );
 }
 
+/* ================= Calibration record guide (help modal) =================
+   Read-only reference for "บันทึกการสอบเทียบ": for every sheet, which
+   columns are typed in by hand (Input) vs filled by the app itself
+   (Auto-calculated), and the formula behind each auto value. Kept as data
+   (not prose) so it's easy to keep in sync with MPIR_DOC / the calc
+   functions above if a formula changes. */
+const CALIBRATION_GUIDE_SHEETS = [
+  {
+    code: "01", name: "ข้อมูลเครื่องมือ (Instrument Master)",
+    purpose: "ทะเบียนกลางของเครื่องมือ พร้อมเกณฑ์ Tolerance/MPE, Decision Rule และคะแนนความเสี่ยง — ใช้เป็นฐานให้ทุก Sheet อื่นคำนวณ",
+    fields: [
+      { label: "รหัส / ชื่อ / ประเภท / ยี่ห้อ / รุ่น / Serial / Asset No. / สถานที่ / ผู้รับผิดชอบ / กลุ่ม / ขอบข่าย / วิธีทดสอบ / พารามิเตอร์ / หน่วย / ช่วงใช้งาน / ความละเอียด", kind: "input" },
+      { label: "Tolerance / MPE, ชนิดของเกณฑ์ (absolute / % of reading / % of full scale), แหล่งอ้างอิงเกณฑ์, เอกสารอ้างอิง, Decision Rule ที่อนุมัติ, ความถี่สอบเทียบ, ความถี่ Daily/Intermediate Check", kind: "input", note: "ต้องอนุมัติโดย Technical Manager ก่อนใช้จริง" },
+      { label: "Severity / Occurrence / Detectability (1–5)", kind: "input" },
+      { label: "วันที่สอบเทียบล่าสุด", kind: "auto", note: "ดึงจากใบรับรอง (Sheet 02) ที่มีวันที่ล่าสุดของเครื่องมือนี้ — ถ้ายังไม่มีใบรับรองในระบบ ใช้ \"วันที่สอบเทียบล่าสุด (กรอกเอง)\" แทน" },
+      { label: "วันครบกำหนดถัดไป / วันคงเหลือ", kind: "auto", note: "วันครบกำหนด = วันที่สอบเทียบล่าสุด + ความถี่สอบเทียบ (เดือน); วันคงเหลือ = วันครบกำหนด − วันนี้" },
+      { label: "RPN (Risk Priority Number)", kind: "auto", note: "RPN = Severity × Occurrence × Detectability. ระดับความเสี่ยง: ≥64 สูง (High) · ≥27 ปานกลาง (Medium) · ต่ำกว่านั้น ต่ำ (Low)" },
+      { label: "ความถี่ที่แนะนำตามความเสี่ยง", kind: "auto", note: "แนะนำจากระดับความเสี่ยง (RPN) — เป็นข้อเสนอ ไม่บังคับใช้แทนความถี่ที่อนุมัติ" },
+      { label: "คีย์ค้นหา (Lookup Key)", kind: "auto", note: "รหัสเครื่องมือ + พารามิเตอร์ ต่อกันอัตโนมัติ ใช้ค้นหา/จับคู่ข้ามชีต" },
+    ],
+  },
+  {
+    code: "02", name: "ใบรับรองสอบเทียบ (Certificate Data)",
+    purpose: "หนึ่งแถวต่อหนึ่งจุดสอบเทียบ (Calibration Point) ถอดจากใบรับรองจริง — ตรวจความครบถ้วนอัตโนมัติ",
+    fields: [
+      { label: "เลขที่ใบรับรอง, หน่วยงาน/สถานะรับรอง 17025, วันที่สอบเทียบ/ออกใบรับรอง, วิธีการ, มาตรฐานอ้างอิง, ความสอบกลับได้, อุณหภูมิ/ความชื้น", kind: "input" },
+      { label: "พารามิเตอร์, จุดสอบเทียบ (Nominal), หน่วย, รูปแบบที่รายงาน, ค่าอ้างอิง (Reference), ค่าที่อ่านได้ (Indication)", kind: "input" },
+      { label: "Error / Correction ที่รายงานในใบรับรอง, สถานะการปรับแก้, รูปแบบ/ค่า U ที่รายงาน, Coverage factor k, Coverage probability", kind: "input" },
+      { label: "Statement of Conformity และ Decision Rule ของผู้สอบเทียบ, ข้อจำกัด/หมายเหตุ, ลิงก์ไฟล์ PDF", kind: "input" },
+      { label: "Error ที่ใช้งาน (Derived Error)", kind: "auto", note: "ใช้ Reported Error ถ้ามี; ถ้าไม่มีใช้ Indication − Reference; ถ้ามีแต่ Correction ใช้ Error = −Correction" },
+      { label: "Relative Error (%)", kind: "auto", note: "= Error ÷ |ค่าที่ใช้เทียบ| × 100" },
+      { label: "U (absolute)", kind: "auto", note: "ถ้ารายงานเป็น % of reading จะแปลงเป็นค่าจริง = |Indication หรือ Reference| × U% ; ถ้ารายงานเป็นค่าจริงอยู่แล้วใช้ตรงๆ" },
+      { label: "u_cal = U/k", kind: "auto" },
+      { label: "ผลการตรวจสอบความครบถ้วน / รายการที่ขาด", kind: "auto", note: "ตรวจว่าช่องที่จำเป็นสำหรับคำนวณ Sheet 03 (Error, U, Tolerance ฯลฯ) ครบหรือไม่" },
+      { label: "รอบการสอบเทียบ (พ.ศ.)", kind: "auto", note: "แปลงจากวันที่สอบเทียบ (ค.ศ. + 543)" },
+      { label: "ผู้ทบทวน / วันที่ทบทวน / สถานะ Record (Draft → Verified → Approved)", kind: "input", note: "อัปเดตตามขั้นตอนทบทวนของห้องแล็บ" },
+    ],
+  },
+  {
+    code: "03", name: "ผลสอบเทียบ & แนวโน้ม (Acceptance Criteria)",
+    purpose: "เทียบผลจากใบรับรอง (Sheet 02) กับเกณฑ์ที่อนุมัติ (Sheet 01) แล้วตัดสิน PASS/FAIL ตาม Decision Rule — ทุกคอลัมน์คำนวณอัตโนมัติ ยกเว้นลายเซ็นผู้ประเมิน/ผู้อนุมัติ",
+    fields: [
+      { label: "Error, |Error|, U (k=2), u_cal, Applied Tolerance, ชนิด/แหล่งอ้างอิงของเกณฑ์, Applied Decision Rule", kind: "auto", note: "ดึงมาจาก Sheet 01 + Sheet 02 โดยตรง" },
+      { label: "Guard band factor (g)", kind: "input", note: "กรอกที่เครื่องมือ (Sheet 01) — ค่าเริ่มต้น = 1 ถ้าไม่ได้ตั้ง" },
+      { label: "Guard band (w) / เกณฑ์ยอมรับที่ใช้จริง (Acceptance Limit)", kind: "auto", note: "w = g × U; ขึ้นกับ Decision Rule — Simple: Limit = Tolerance | Conservative: Limit = Tolerance − U | Guard band: Limit = Tolerance − g×U" },
+      { label: "Tolerance Utilization (%)", kind: "auto", note: "= |Error| ÷ Tolerance × 100" },
+      { label: "TUR (Test Uncertainty Ratio)", kind: "auto", note: "= Tolerance ÷ U (k=2) — ค่าข้อมูลประกอบ ไม่ใช้ตัดสินผ่าน/ไม่ผ่าน" },
+      { label: "En (Normalized Error)", kind: "auto", note: "= Error ÷ (2 × U) — สูตรอย่างง่าย สมมติว่าความไม่แน่นอนของค่าอ้างอิงน้อยมาก" },
+      { label: "ผลการตัดสิน (Decision)", kind: "auto", note: "Simple: |Error| ≤ Tolerance → PASS, ไม่งั้น FAIL | Conservative: |Error|+U ≤ Tolerance → PASS | Guard band: |Error| ≤ Limit → PASS, ≤ Tolerance → CONDITIONAL PASS, เกิน → FAIL. กรณี FAIL แต่ |Error| ≤ Tolerance×1.1 จะลดเป็น WARNING (near-miss) แทน" },
+      { label: "เหตุผล/เงื่อนไข (Rationale)", kind: "auto", note: "ข้อความอธิบายว่าใช้สูตรไหนเทียบกับอะไร" },
+      { label: "ผู้ประเมิน/วันที่ประเมิน, ผู้อนุมัติเกณฑ์ (Technical Manager)/วันที่อนุมัติ", kind: "input" },
+    ],
+  },
+  {
+    code: "04", name: "Daily / Intermediate Check",
+    purpose: "ตรวจสอบระหว่างรอบสอบเทียบ — เกณฑ์เตือน/ดำเนินการคำนวณจาก Tolerance ของ Sheet 01",
+    fields: [
+      { label: "วันที่ตรวจสอบ, พารามิเตอร์, ประเภท/รายการตรวจสอบ, Check Standard และรหัส, ค่าอ้างอิง, U ของ Check Standard, หน่วย", kind: "input" },
+      { label: "ค่าอ่านครั้งที่ 1–5", kind: "input" },
+      { label: "Correction ที่ใช้ (Applied Correction)", kind: "input", note: "ปกติดึงจาก Correction ล่าสุดในใบรับรอง แต่แก้ไขเองได้" },
+      { label: "ค่าเฉลี่ย (Mean)", kind: "auto", note: "= ค่าเฉลี่ยของค่าอ่านที่กรอก (สูงสุด 5 ค่า)" },
+      { label: "ส่วนเบี่ยงเบนมาตรฐาน (SD) / %RSD", kind: "auto", note: "SD = ส่วนเบี่ยงเบนมาตรฐานตัวอย่าง (n−1) ของค่าอ่าน; %RSD = SD ÷ |Mean| × 100" },
+      { label: "ค่าเฉลี่ยหลังแก้ค่า (Corrected Mean)", kind: "auto", note: "= Mean + Applied Correction" },
+      { label: "Bias / Relative Bias (%)", kind: "auto", note: "Bias = Corrected Mean − ค่าอ้างอิง; Relative Bias % = Bias ÷ |ค่าอ้างอิง| × 100" },
+      { label: "Tolerance ที่ใช้, LWL/UWL (Warning), LAL/UAL (Action)", kind: "auto", note: "Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance" },
+      { label: "ผลการประเมิน (Result)", kind: "auto", note: "Corrected Mean เกิน Action limit → FAIL | เกิน Warning limit → WARNING | อยู่ในช่วง → PASS" },
+      { label: "ผู้ตรวจสอบ/ผู้ทบทวน, การดำเนินการเมื่อไม่ผ่าน, เลขที่ CAR/NC, หมายเหตุ", kind: "input" },
+    ],
+  },
+  {
+    code: "05", name: "Uncertainty Budget",
+    purpose: "รวบรวมองค์ประกอบความไม่แน่นอนของการวัด แยกตาม Budget ID เพื่อรวมเป็น Combined/Expanded Uncertainty",
+    fields: [
+      { label: "Budget ID, เครื่องมือ, วิธีทดสอบ, พารามิเตอร์, ชื่อองค์ประกอบ, สัญลักษณ์, ค่าที่ใช้, หน่วย, การแจกแจง, Divisor, Sensitivity coefficient (c), แหล่งข้อมูล", kind: "input", note: "Sensitivity coefficient เว้นว่างได้ (ระบบใช้ค่า 1 โดยปริยาย)" },
+      { label: "Standard uncertainty u(xi)", kind: "auto", note: "= ค่าที่ใช้ ÷ Divisor" },
+      { label: "Contribution / Contribution²", kind: "auto", note: "Contribution = |c| × u(xi); Contribution² = Contribution ยกกำลังสอง" },
+      { label: "% Contribution", kind: "auto", note: "= Contribution² ของแถวนั้น ÷ ผลรวม Contribution² ทุกแถวใน Budget เดียวกัน × 100" },
+      { label: "uc (Combined standard uncertainty)", kind: "auto", note: "= √(ผลรวม Contribution² ของทุกแถวใน Budget ID เดียวกัน)" },
+      { label: "k (coverage factor)", kind: "input", note: "ค่าเริ่มต้น 2 ถ้าไม่ได้กรอก" },
+      { label: "U (Expanded uncertainty)", kind: "auto", note: "= uc × k" },
+      { label: "U สัมพัทธ์ (%)", kind: "auto", note: "= U ÷ ค่าที่วัดได้ (ที่กรอกไว้สำหรับคิด % สัมพัทธ์) × 100" },
+      { label: "ผู้อนุมัติ / วันที่ทบทวน", kind: "input" },
+    ],
+  },
+  {
+    code: "06", name: "แนวโน้ม (Trend & Drift Analysis)",
+    purpose: "เทียบผลสอบเทียบข้ามรอบของจุดเดียวกัน (เครื่องมือ+พารามิเตอร์+จุดสอบเทียบ) เพื่อดูอัตราการเลื่อนและคาดการณ์ล่วงหน้า — คำนวณอัตโนมัติทั้งหมด",
+    fields: [
+      { label: "Error, Correction, U (k=2), Tolerance ที่ใช้, Tolerance Utilization (%), ปี/วันที่สอบเทียบ (พ.ศ.)", kind: "auto", note: "ดึงจากใบรับรองแต่ละรอบของจุดสอบเทียบนั้น" },
+      { label: "Drift จากรอบก่อนหน้า", kind: "auto", note: "= Error รอบนี้ − Error รอบก่อนหน้า (จุดแรกของประวัติจะยังไม่มีค่านี้)" },
+      { label: "จำนวนปีระหว่างรอบ", kind: "auto", note: "= (วันที่สอบเทียบรอบนี้ − รอบก่อนหน้า) ÷ 365.25 วัน" },
+      { label: "อัตราการเลื่อนต่อปี (Drift Rate)", kind: "auto", note: "= Drift ÷ จำนวนปีระหว่างรอบ" },
+      { label: "Error คาดการณ์รอบถัดไป", kind: "auto", note: "= Error ปัจจุบัน + Drift Rate × จำนวนปีระหว่างรอบ (ประมาณเชิงเส้น)" },
+      { label: "จำนวนปีที่คาดว่าจะหลุดเกณฑ์", kind: "auto", note: "= (Tolerance − |Error|) ÷ |Drift Rate| — ยิ่งน้อยยิ่งต้องจับตา" },
+      { label: "สัญญาณแนวโน้ม (Trend Flag)", kind: "auto", note: "|Drift Rate| < 2% ของ Tolerance → คงที่ (Stable); มากกว่านั้นและเป็นบวก → เพิ่มขึ้น; เป็นลบ → ลดลง" },
+      { label: "ข้อเสนอการปรับความถี่สอบเทียบ, ผู้ทบทวน", kind: "input" },
+    ],
+  },
+  {
+    code: "07", name: "สรุปสถานะเครื่องมือ (Equipment Status)",
+    purpose: "สรุปภาพรวมต่อเครื่องมือ 1 แถว จากผลสอบเทียบรอบล่าสุด (Sheet 03) และผลตรวจสอบระหว่างรอบ 90 วันล่าสุด (Sheet 04)",
+    fields: [
+      { label: "วันที่สอบเทียบล่าสุด / วันครบกำหนดถัดไป / วันคงเหลือ / RPN", kind: "auto", note: "ดึงจาก Sheet 01 ตรงๆ" },
+      { label: "สถานะรอบสอบเทียบ", kind: "auto", note: "ปกติ / ใกล้ถึงรอบ / เลยกำหนด ตามวันคงเหลือเทียบเกณฑ์เตือนของระบบ" },
+      { label: "ผลการสอบเทียบโดยรวม (Overall Decision)", kind: "auto", note: "ผลที่แย่ที่สุดในบรรดาทุกจุดของใบรับรองรอบล่าสุด (ลำดับความรุนแรง: PASS < INCOMPLETE DATA/CONDITIONAL < WARNING < FAIL)" },
+      { label: "Tolerance Utilization สูงสุด", kind: "auto", note: "ค่าสูงสุดของ % Utilization ในบรรดาจุดสอบเทียบรอบล่าสุด" },
+      { label: "จำนวนจุดที่ FAIL/CONDITIONAL", kind: "auto" },
+      { label: "จำนวน Check ไม่ผ่านใน 90 วัน", kind: "auto", note: "นับ Intermediate Check ที่ผลคำนวณเป็น FAIL รวมกับ Daily Check ที่บันทึกผลไม่ผ่าน ภายใน 90 วันล่าสุด" },
+      { label: "สถานะการใช้งาน, ข้อความบนป้ายสถานะ, ผู้อนุมัติ, วันที่อนุมัติ, หมายเหตุ", kind: "input", note: "เป็นการตัดสินใจของห้องปฏิบัติการ ไม่ใช่ผลคำนวณ — ต้องมีผู้อนุมัติกำกับทุกครั้ง" },
+    ],
+  },
+  {
+    code: "08", name: "การดำเนินการ & ผลกระทบ (Action / Impact)",
+    purpose: "บันทึกเมื่อผลสอบเทียบ/ตรวจสอบไม่ผ่านเกณฑ์ และประเมินผลกระทบย้อนหลังต่อผลทดสอบที่รายงานไปแล้ว (ISO/IEC 17025:2017 ข้อ 7.10, 8.7)",
+    fields: [
+      { label: "ทุกคอลัมน์ในชีตนี้", kind: "input", note: "เป็นบันทึกเชิงคุณภาพ/ขั้นตอนดำเนินการ (CAR/NC) — ไม่มีสูตรคำนวณ กรอกโดยผู้รับผิดชอบและผู้ทบทวนตามลำดับ" },
+    ],
+  },
+  {
+    code: "09", name: "บันทึกการอนุมัติ (Approval Record)",
+    purpose: "บันทึกการทบทวน/อนุมัติเกณฑ์ Decision Rule การใช้ Correction ความถี่ตรวจสอบ และการอนุมัติให้ใช้งานเครื่องมือ",
+    fields: [
+      { label: "ทุกคอลัมน์ในชีตนี้", kind: "input", note: "เป็นลายเซ็น/บันทึกอนุมัติ — ไม่มีสูตรคำนวณ" },
+    ],
+  },
+];
+function GuideFieldRow({ f }) {
+  const isAuto = f.kind === "auto";
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+      <span style={{
+        flexShrink: 0, marginTop: 1, fontSize: 10, fontWeight: 700, borderRadius: 20, padding: "2px 8px",
+        color: isAuto ? "var(--green)" : "#9A7B12",
+        background: isAuto ? "rgba(46,157,110,0.12)" : "rgba(230,180,40,0.18)",
+        border: `1px solid ${isAuto ? "var(--green)" : "#E6B428"}`,
+      }}>
+        {isAuto ? "คำนวณอัตโนมัติ" : "กรอกเอง"}
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{f.label}</div>
+        {f.note && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, fontFamily: isAuto ? "var(--font-mono)" : "inherit" }}>{f.note}</div>}
+      </div>
+    </div>
+  );
+}
+function CalibrationGuideModal({ onClose }) {
+  const [openCode, setOpenCode] = useState("01");
+  return (
+    <Modal title="คู่มือบันทึกการสอบเทียบ — ช่องกรอกเองและช่องคำนวณอัตโนมัติ" onClose={onClose} xwide>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#E9F1FB", border: "1px solid #CFE6F5", borderRadius: 10, padding: "10px 13px", marginBottom: 14, fontSize: 12, color: "var(--teal-dark)" }}>
+        <Sparkles size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+        <span>แต่ละเครื่องมือมีชีตย่อย 9 ชุดตามลำดับด้านล่าง (01–09) เรียงตามลำดับการใช้งานจริง: ตั้งเกณฑ์ (01) → บันทึกใบรับรอง (02) → ระบบตัดสินผ่าน/ไม่ผ่านให้เอง (03) → ตรวจสอบระหว่างรอบ (04) → Uncertainty Budget (05) → ดูแนวโน้ม (06) → สรุปสถานะ (07) → บันทึกการแก้ไข/ผลกระทบถ้ามี (08) → อนุมัติ (09). แตะหัวข้อเพื่อขยาย/ย่อ</span>
+      </div>
+      {CALIBRATION_GUIDE_SHEETS.map(sheet => {
+        const isOpen = openCode === sheet.code;
+        return (
+          <div key={sheet.code} style={{ border: "1px solid var(--line)", borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
+            <button
+              onClick={() => setOpenCode(isOpen ? "" : sheet.code)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 10, textAlign: "left",
+                background: isOpen ? "#F5F8F7" : "#fff", border: "none", padding: "11px 14px", cursor: "pointer",
+              }}
+            >
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", flexShrink: 0 }}>Sheet {sheet.code}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{sheet.name}</span>
+              {isOpen ? <ChevronUp size={16} color="var(--muted)" /> : <ChevronDown size={16} color="var(--muted)" />}
+            </button>
+            {isOpen && (
+              <div style={{ padding: "0 14px 12px" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>{sheet.purpose}</div>
+                {sheet.fields.map((f, i) => <GuideFieldRow key={i} f={f} />)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div style={{ marginTop: 4, fontSize: 11, color: "var(--muted)" }}>
+        อ้างอิงโครงสร้างจากแบบฟอร์ม MPIR Calibration Record (RDI-LF-070) — ค่า Tolerance และ Decision Rule ที่ตั้งไว้เป็นข้อเสนอตั้งต้น ต้องได้รับอนุมัติจาก Technical Manager ก่อนใช้ตัดสินผลจริง
+      </div>
+    </Modal>
+  );
+}
+
 function CalibrationRecordsHub({
   equipment, setEquipment,
   certificates, setCertificates,
@@ -4675,6 +4859,7 @@ function CalibrationRecordsHub({
   const [q, setQ] = useState("");
   const [critFilter, setCritFilter] = useState("all"); // "all" | "missing" | "complete"
   const [showGrid, setShowGrid] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
 
   // เครื่องปรับอากาศ (air conditioners) aren't calibrated instruments, so
   // they're excluded from this flow entirely.
@@ -4699,7 +4884,11 @@ function CalibrationRecordsHub({
             <h2 style={S.h2}>บันทึกการสอบเทียบ</h2>
             <p style={S.h2sub}>เลือกเครื่องมือ เพื่อกรอกข้อมูลเครื่องมือ/เกณฑ์การสอบเทียบ (Sheet 01) ดูใบรับรองสอบเทียบ ผลสอบเทียบและแนวโน้ม ตรวจสอบระหว่างรอบ Uncertainty Budget สถานะ การดำเนินการ/ผลกระทบ และบันทึกการอนุมัติ ของเครื่องมือนั้น</p>
           </div>
+          <button style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => setShowGuide(true)}>
+            <BookOpen size={13} /> คู่มือ
+          </button>
         </div>
+        {showGuide && <CalibrationGuideModal onClose={() => setShowGuide(false)} />}
         {criteriaStats.missing > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, color: "var(--ink)" }}>
             <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
