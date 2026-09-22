@@ -4522,7 +4522,7 @@ const SHEET01_KEYS = [
   "custodian", "assetNo", "riskGroup", "scopeOfUse", "relatedTestMethod", "measuredParameter", "calUnit",
   "workingRangeMin", "workingRangeMax", "resolution", "tolerance", "toleranceType", "basisOfCriteria",
   "referenceDocument", "decisionRule", "guardBandFactor", "checkFrequency", "severity", "occurrence",
-  "detectability", "currentStatus", "authorizedBy", "certificateFileLink", "brixMin", "brixMax",
+  "detectability", "currentStatus", "authorizedBy", "brixMin", "brixMax",
 ];
 function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates = [], notify }) {
   const pick = (e) => Object.fromEntries(SHEET01_KEYS.map(k => [k, e?.[k] ?? ""]));
@@ -4564,11 +4564,21 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
       borderRadius: 8, padding: "8px 11px",
     }}>{children}</div>
   );
+  // Section dividers group the ~20 fields below into a readable master-data
+  // form (fill in once per instrument, then it's just referenced) instead of
+  // one long undifferentiated grid.
+  const sectionHead = (icon, title, first) => (
+    <div style={{
+      gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, fontWeight: 700,
+      color: "var(--teal-dark)", marginTop: first ? 0 : 6, marginBottom: -2,
+      paddingTop: first ? 0 : 16, borderTop: first ? "none" : "1px dashed var(--line)",
+    }}>{icon} {title}</div>
+  );
 
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ (Sheet 01)</h2><p style={S.h2sub}>Tolerance, Decision Rule และ Risk score ที่กรอกที่นี่ใช้คำนวณ Sheet 03, Sheet 04, Sheet 07 และเกณฑ์ผ่าน/ไม่ผ่านของ Daily check โดยอัตโนมัติ</p></div>
+        <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ (Sheet 01)</h2><p style={S.h2sub}>กรอกครั้งเดียวต่อเครื่องมือ แล้ว Tolerance, Decision Rule และ Risk score เหล่านี้จะถูกใช้คำนวณ Sheet 03, Sheet 04, Sheet 07 และเกณฑ์ผ่าน/ไม่ผ่านของ Daily check ให้อัตโนมัติทุกครั้ง</p></div>
         <div style={{ display: "flex", gap: 8 }}>
           <button style={S.ghostBtn} disabled={!dirty} onClick={() => setF({ ...f, ...pick(instrument) })}>ยกเลิกการแก้ไข</button>
           <button style={{ ...S.primaryBtn, opacity: dirty ? 1 : 0.5 }} disabled={!dirty} onClick={save}><Check size={15} /> บันทึก</button>
@@ -4609,16 +4619,21 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
           )}
         </>)}
 
+        {sectionHead(<User size={13} />, "ผู้รับผิดชอบและขอบข่าย", true)}
         <Field label="ผู้รับผิดชอบ (Custodian)"><input style={S.input} value={f.custodian || ""} onChange={set("custodian")} /></Field>
         <Field label="เลขทรัพย์สิน (Asset No.)"><input style={S.input} value={f.assetNo || ""} onChange={set("assetNo")} /></Field>
         <Field label="กลุ่มเครื่องมือ (A/B/C)"><input style={S.input} value={f.riskGroup || ""} onChange={set("riskGroup")} placeholder="A / B / C" /></Field>
         <Field label="ขอบข่ายการใช้งาน"><input style={S.input} value={f.scopeOfUse || ""} onChange={set("scopeOfUse")} /></Field>
         <Field label="วิธีทดสอบที่เกี่ยวข้อง"><input style={S.input} value={f.relatedTestMethod || ""} onChange={set("relatedTestMethod")} /></Field>
+
+        {sectionHead(<Gauge size={13} />, "ข้อกำหนดการวัด")}
         <Field label="พารามิเตอร์ที่วัด"><input style={S.input} value={f.measuredParameter || ""} onChange={set("measuredParameter")} /></Field>
         <Field label="หน่วย"><input style={S.input} value={f.calUnit || ""} onChange={set("calUnit")} /></Field>
         <Field label="ช่วงใช้งานจริง — ต่ำสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMin ?? ""} onChange={set("workingRangeMin")} /></Field>
         <Field label="ช่วงใช้งานจริง — สูงสุด"><input type="number" step="any" style={S.input} value={f.workingRangeMax ?? ""} onChange={set("workingRangeMax")} /></Field>
         <Field label="ความละเอียด (Resolution)"><input style={S.input} value={f.resolution || ""} onChange={set("resolution")} /></Field>
+
+        {sectionHead(<ShieldCheck size={13} />, "เกณฑ์การยอมรับ (Acceptance Criteria)")}
         <Field label="เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)"><input type="number" step="any" style={S.input} value={f.tolerance ?? ""} onChange={set("tolerance")} /></Field>
         <Field label="ชนิดของเกณฑ์">
           <select style={S.input} value={f.toleranceType || "absolute"} onChange={set("toleranceType")}>
@@ -4638,6 +4653,8 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
         {f.decisionRule === "guardband" && (
           <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.guardBandFactor ?? ""} onChange={set("guardBandFactor")} placeholder="เช่น 1" /></Field>
         )}
+
+        {sectionHead(<TrendingUp size={13} />, "การประเมินความเสี่ยง (Risk Assessment)")}
         <Field label="ความถี่ Daily/Intermediate Check"><input style={S.input} value={f.checkFrequency || ""} onChange={set("checkFrequency")} placeholder="เช่น ทุกวัน, ทุกสัปดาห์" /></Field>
         <Field label="Severity — ผลกระทบหากเครื่องมือคลาดเคลื่อน">
           <ScoreSelect value={f.severity} onChange={v => setF({ ...f, severity: v })} scale={SEVERITY_SCALE} />
@@ -4653,6 +4670,8 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
             <span style={{ fontFamily: "var(--font-mono)" }}>{rpn ?? "-"}</span><span style={{ color: "var(--muted)" }}>{level}</span>
           </div>
         </Field>
+
+        {sectionHead(<Stamp size={13} />, "สถานะและการอนุมัติ")}
         <Field label="สถานะเครื่องมือปัจจุบัน">
           <select style={S.input} value={f.currentStatus || ""} onChange={set("currentStatus")}>
             <option value="">- ยังไม่ระบุ -</option>
@@ -4660,7 +4679,6 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
           </select>
         </Field>
         <Field label="ผู้อนุมัติให้ใช้งาน"><input style={S.input} value={f.authorizedBy || ""} onChange={set("authorizedBy")} /></Field>
-        <Field label="ลิงก์ไฟล์ใบรับรอง" full><input style={S.input} value={f.certificateFileLink || ""} onChange={set("certificateFileLink")} placeholder="https://..." /></Field>
       </div>
 
       <div style={{ ...S.notesBox, marginTop: 14, fontSize: 12.5, lineHeight: 1.7 }}>
@@ -8245,7 +8263,6 @@ const MPIR_DOC = {
         "ความถี่ที่แนะนำตามความเสี่ยง\nRisk-based Frequency",
         "สถานะเครื่องมือปัจจุบัน\nCurrent Status",
         "ผู้อนุมัติให้ใช้งาน\nAuthorized By",
-        "ลิงก์ไฟล์ใบรับรอง\nCertificate File Link",
         "หมายเหตุ\nRemarks",
         "คีย์ค้นหา (รหัสเครื่องมือ + พารามิเตอร์)\nLookup Key",
         "วันที่สอบเทียบล่าสุด กรณีไม่มีใบรับรองในระบบ\nManual Last Calibration"
@@ -8822,7 +8839,6 @@ function mpirInstrumentMasterRows(equipment) {
       "Risk Level": level || "",
       "Current Status": e.currentStatus || "",
       "Authorized By": e.authorizedBy || "",
-      "Certificate File Link": e.certFileLink || "",
       "Remarks": e.notes || "",
       "Lookup Key": `${e.code || ""}|${e.measuredParameter || ""}`,
       "Manual Last Calibration": e.manualLastCalibration || "",
