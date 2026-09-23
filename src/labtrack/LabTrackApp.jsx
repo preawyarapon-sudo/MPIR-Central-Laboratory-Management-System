@@ -3845,7 +3845,9 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           </button>
         )}
         <div style={S.detailHead}>
-          <div><h2 style={S.h2}>{instrument?.code} — {instrument?.name}</h2><p style={S.h2sub}>ประวัติใบรับรองสอบเทียบ จัดกลุ่มตามปี (พ.ศ.)</p></div>
+          <div>{presetInstrumentId
+            ? <><h2 style={S.h2}>ใบรับรองสอบเทียบ</h2><p style={S.h2sub}>ประวัติใบรับรอง จัดกลุ่มตามปี (พ.ศ.) · คลิกใบรับรองเพื่อดู/เพิ่มจุดสอบเทียบ</p></>
+            : <><h2 style={S.h2}>{instrument?.code} — {instrument?.name}</h2><p style={S.h2sub}>ประวัติใบรับรองสอบเทียบ จัดกลุ่มตามปี (พ.ศ.)</p></>}</div>
           <div style={{ display: "flex", gap: 8 }}>
             <button style={S.primaryBtn} onClick={() => setUploadFor(selectedInstrumentId)}><ClipboardList size={15} /> นำเข้าใบรับรอง (วางข้อความ)</button>
             <button style={S.ghostBtn} onClick={() => setEditing({ row: { ...blankCertificate(selectedInstrumentId), reviewedBy: currentDisplayName, reviewDate: todayISO() }, mode: "full" })}><Plus size={15} /> กรอกด้วยตนเอง</button>
@@ -4190,7 +4192,23 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
   }).filter(g => g.points.length);
   const mono = { fontFamily: "var(--font-mono)" };
   const fx = (v, d = 4) => (v != null ? v.toFixed(d) : "-");
-  const HEAD = ["พารามิเตอร์ / จุด", "Error", "U", "Tolerance ที่ใช้", "Utilization %", "TUR", "ผลการตัดสิน", "Drift จากรอบก่อน", "อัตราเลื่อน/ปี", "คาดการณ์รอบถัดไป", "ปีที่คาดว่าหลุดเกณฑ์", "แนวโน้ม"];
+  const [detail, setDetail] = useState(false);
+  const HEAD = detail
+    ? ["พารามิเตอร์ / จุด", "Error", "U", "Tolerance", "ใช้ไปของเกณฑ์", "TUR", "ผลตัดสิน", "Drift จากรอบก่อน", "อัตราเลื่อน/ปี", "คาดการณ์รอบถัดไป", "ปีที่คาดว่าหลุดเกณฑ์", "แนวโน้ม"]
+    : ["พารามิเตอร์ / จุด", "Error", "Tolerance", "ใช้ไปของเกณฑ์", "ผลตัดสิน", "แนวโน้ม"];
+  // Utilization as a small bar — easier to scan than a column of percentages.
+  const utilBar = (pct) => {
+    if (pct == null) return "-";
+    const color = pct > 100 ? "var(--red)" : pct >= 70 ? "var(--amber)" : "var(--green)";
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 110 }}>
+        <div style={{ flex: 1, height: 6, background: "#EEF2F6", borderRadius: 3, overflow: "hidden" }}>
+          <div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: color }} />
+        </div>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color }}>{pct}%</span>
+      </div>
+    );
+  };
 
   function sign(g, field, clear = false) {
     let name = "";
@@ -4218,13 +4236,16 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ผลสอบเทียบและแนวโน้ม (Acceptance &amp; Trend)</h2><p style={S.h2sub}>Sheet 03 + 06 — คำนวณอัตโนมัติจากใบรับรอง (Sheet 02) เทียบ Tolerance ใน Sheet 01 และดูการเลื่อนของค่าข้ามรอบ; ไม่ต้องกรอกอะไร ยกเว้นลงชื่อผู้ประเมิน/ผู้อนุมัติ ครั้งเดียวต่อใบรับรอง (ชี้เมาส์ที่ผลตัดสินเพื่อดูเหตุผล)</p></div>
+        <div><h2 style={S.h2}>ผลสอบเทียบและแนวโน้ม (Acceptance &amp; Trend)</h2><p style={S.h2sub}>คำนวณอัตโนมัติ ไม่ต้องกรอก · ลงชื่อประเมิน/อนุมัติครั้งเดียวต่อใบรับรอง · ชี้ที่ผลตัดสินเพื่อดูเหตุผล</p></div>
       </div>
       <div style={S.toolbar}>
         <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเลขที่ใบรับรอง / พารามิเตอร์ / จุด" value={q} onChange={e => setQ(e.target.value)} /></div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer", whiteSpace: "nowrap" }}>
+          <input type="checkbox" checked={detail} onChange={e => setDetail(e.target.checked)} /> แสดงค่าละเอียด (U, TUR, Drift, คาดการณ์)
+        </label>
       </div>
       <div style={{ ...S.tableWrap, overflowX: "auto" }}>
-        <table style={{ ...S.table, minWidth: 1100 }}>
+        <table style={{ ...S.table, minWidth: detail ? 1100 : 640 }}>
           <thead><tr>{HEAD.map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
           <tbody>
             {filtered.map(g => {
@@ -4264,15 +4285,17 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                       <tr key={c.id} style={S.tr}>
                         <td style={S.td}>{calPointLabel(c) || "-"}</td>
                         <td style={{ ...S.td, ...mono }} title={errorSourceLabel(c)}>{fx(tr?.error ?? derivedErrorOf(c))}</td>
-                        <td style={{ ...S.td, ...mono }}>{U != null ? round4(U) : "-"}</td>
-                        <td style={{ ...S.td, ...mono }}>{ev.tol != null ? ev.tol.toFixed(4) : <span style={{ fontFamily: "inherit", color: "var(--amber)" }}>ยังไม่ตั้งค่าใน Sheet 01</span>}</td>
-                        <td style={{ ...S.td, ...mono }}>{ev.utilizationPct != null ? `${ev.utilizationPct}%` : "-"}</td>
-                        <td style={{ ...S.td, ...mono }}>{ev.tur != null ? ev.tur.toFixed(2) : "-"}</td>
+                        {detail && <td style={{ ...S.td, ...mono }}>{U != null ? round4(U) : "-"}</td>}
+                        <td style={{ ...S.td, ...mono }}>{ev.tol != null ? `± ${round4(ev.tol)}` : <span style={{ fontFamily: "inherit", color: "var(--amber)" }}>ยังไม่ตั้ง</span>}</td>
+                        <td style={S.td}>{utilBar(ev.utilizationPct)}</td>
+                        {detail && <td style={{ ...S.td, ...mono }}>{ev.tur != null ? ev.tur.toFixed(2) : "-"}</td>}
                         <td style={S.td}><span title={ev.rationale} style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[ev.decision], color: CALIB_DECISION_COLOR[ev.decision] }}>{ev.decision}</span></td>
-                        <td style={{ ...S.td, ...mono }}>{fx(tr?.drift)}</td>
-                        <td style={{ ...S.td, ...mono }}>{fx(tr?.driftRate)}</td>
-                        <td style={{ ...S.td, ...mono }}>{fx(tr?.projected)}</td>
-                        <td style={{ ...S.td, ...mono }}>{fx(tr?.yearsToOOT, 1)}</td>
+                        {detail && <>
+                          <td style={{ ...S.td, ...mono }}>{fx(tr?.drift)}</td>
+                          <td style={{ ...S.td, ...mono }}>{fx(tr?.driftRate)}</td>
+                          <td style={{ ...S.td, ...mono }}>{fx(tr?.projected)}</td>
+                          <td style={{ ...S.td, ...mono }}>{fx(tr?.yearsToOOT, 1)}</td>
+                        </>}
                         <td style={{ ...S.td, fontSize: 11.5, color: "var(--muted)" }}>
                           {tr?.flag || "-"}
                           {proposal && proposal !== "คงรอบเดิม" && <div style={{ color: "var(--amber)", marginTop: 2 }}>{proposal}</div>}
@@ -4362,12 +4385,12 @@ function IntermediateCheckTab({ equipment, checks, setChecks, dailyChecks = [], 
     if (!g) { g = { key, round: r, instrument: byId[row.instrumentId], rows: [] }; groups.push(g); }
     g.rows.push({ row, calc: calcIntermediateCheck(row, byId[row.instrumentId]) });
   });
-  const COLS = ["วันที่", "พารามิเตอร์", "ประเภท", "ค่าเฉลี่ยหลังแก้ค่า", "Bias", "LWL/UWL", "LAL/UAL", "ผล", ""];
+  const COLS = ["วันที่", "พารามิเตอร์", "ค่าเฉลี่ยหลังแก้ค่า", "Bias", "ช่วงยอมรับ (Action)", "ผล", ""];
   const mono = { fontFamily: "var(--font-mono)" };
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Intermediate / Performance Check)</h2><p style={S.h2sub}>Sheet 04 — Warning/Action Limit คำนวณจาก Tolerance ใน Sheet 01 และล็อกไว้ ณ วันบันทึก (แก้ Tolerance ภายหลังไม่กระทบผลย้อนหลัง) · จัดกลุ่มตามรอบใบรับรอง · ครั้งถัดไประบบดึงการตั้งค่าจากครั้งก่อนให้ กรอกแค่ค่าที่อ่านได้</p></div>
+        <div><h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Intermediate / Performance Check)</h2><p style={S.h2sub}>เกณฑ์คิดจาก Tolerance และล็อกไว้ ณ วันบันทึก · ครั้งถัดไปกรอกแค่ค่าที่อ่านได้</p></div>
         <button style={S.primaryBtn} onClick={() => setEditing(newCheck())}><Plus size={15} /> บันทึกผลตรวจสอบ</button>
       </div>
       {(() => {
@@ -4397,7 +4420,7 @@ function IntermediateCheckTab({ equipment, checks, setChecks, dailyChecks = [], 
         </div>
       )}
       <div style={{ ...S.tableWrap, overflowX: "auto" }}>
-        <table style={{ ...S.table, minWidth: 820 }}>
+        <table style={{ ...S.table, minWidth: 680 }}>
           <thead><tr>{COLS.map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
           <tbody>
             {groups.map(g => {
@@ -4427,12 +4450,10 @@ function IntermediateCheckTab({ equipment, checks, setChecks, dailyChecks = [], 
                     return (
                       <tr key={row.id} style={S.tr}>
                         <td style={S.td}>{fmtDate(row.checkDate)}</td>
-                        <td style={S.td}>{row.parameter}{row.checkItem ? <div style={{ fontSize: 11, color: "var(--muted)" }}>{row.checkItem}</div> : null}</td>
-                        <td style={S.td}>{row.checkType}</td>
+                        <td style={S.td}>{row.parameter}<div style={{ fontSize: 11, color: "var(--muted)" }}>{[row.checkType !== "Intermediate Check" ? row.checkType : "", row.checkItem].filter(Boolean).join(" · ")}</div></td>
                         <td style={{ ...S.td, ...mono }}>{calc.correctedMean != null ? calc.correctedMean.toFixed(4) : "-"}</td>
                         <td style={{ ...S.td, ...mono }}>{calc.bias != null ? calc.bias.toFixed(4) : "-"}</td>
-                        <td style={{ ...S.td, ...mono, fontSize: 11 }}>{calc.lwl != null ? `${calc.lwl.toFixed(3)} / ${calc.uwl.toFixed(3)}` : "-"}</td>
-                        <td style={{ ...S.td, ...mono, fontSize: 11 }}>{calc.lal != null ? `${calc.lal.toFixed(3)} / ${calc.ual.toFixed(3)}` : "-"}</td>
+                        <td style={{ ...S.td, ...mono, fontSize: 11.5 }} title={calc.lwl != null ? `Warning: ${calc.lwl.toFixed(3)} – ${calc.uwl.toFixed(3)}` : ""}>{calc.lal != null ? `${calc.lal.toFixed(3)} – ${calc.ual.toFixed(3)}` : "-"}</td>
                         <td style={S.td}>
                           <span title={row.criteriaAt ? `เกณฑ์ ณ วันบันทึก: ${criteriaText(row.criteriaAt)}` : "ยังไม่ล็อกเกณฑ์ — ใช้ Tolerance ปัจจุบัน"} style={{ ...S.tag, borderColor: color, color }}>{calc.result}</span>
                           {changed && <div style={{ fontSize: 10.5, color: "var(--amber)", marginTop: 2 }}>🔒 เกณฑ์เดิม ±{row.criteriaAt.tolerance}</div>}
@@ -4642,7 +4663,7 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>Uncertainty Budget</h2><p style={S.h2sub}>Sheet 05 — องค์ประกอบความไม่แน่นอนแยกตาม Budget ID; uc และ U คำนวณรวมต่อกลุ่มอัตโนมัติ</p></div>
+        <div><h2 style={S.h2}>Uncertainty Budget</h2><p style={S.h2sub}>แต่ละกลุ่ม (Budget ID) รวม uc และ U ให้อัตโนมัติ</p></div>
         <button style={S.primaryBtn} onClick={() => setEditing(newBudget())}><Plus size={15} /> สร้าง Budget ใหม่</button>
       </div>
       {Object.keys(groups).length === 0 && <div style={S.tableWrap}><div style={{ ...S.emptyState, padding: 24 }}>ยังไม่มี Uncertainty Budget</div></div>}
@@ -4950,7 +4971,7 @@ function ActionImpactTab({ equipment, actionImpacts, setActionImpacts, certifica
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>การดำเนินการและการประเมินผลกระทบ</h2><p style={S.h2sub}>Sheet 08 — ตาม ISO/IEC 17025:2017 ข้อ 7.10 และ 8.7 · รายการใหม่จะเติมปัญหาที่พบล่าสุด (ผลสอบเทียบ/Check ที่ไม่ผ่าน) ให้อัตโนมัติ</p></div>
+        <div><h2 style={S.h2}>การดำเนินการและการประเมินผลกระทบ</h2><p style={S.h2sub}>บันทึกเมื่อผลไม่ผ่านเกณฑ์ (ISO/IEC 17025 ข้อ 7.10, 8.7)</p></div>
         <button style={S.primaryBtn} onClick={() => setEditing({ ...proposal, responsiblePerson: currentDisplayName })}><Plus size={15} /> บันทึกรายการใหม่</button>
       </div>
       {proposal.description && !sorted.some(a => a.description === proposal.description) && (
@@ -5078,7 +5099,7 @@ function ApprovalRecordTab({ equipment, approvalRecords, setApprovalRecords, cer
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>บันทึกการทบทวนและอนุมัติ</h2><p style={S.h2sub}>Sheet 09 — หลักฐานอนุมัติเกณฑ์การยอมรับ, Decision Rule, การใช้ Correction และการอนุมัติให้ใช้งานเครื่องมือ</p></div>
+        <div><h2 style={S.h2}>บันทึกการทบทวนและอนุมัติ</h2><p style={S.h2sub}>อนุมัติเกณฑ์, Decision Rule, Correction และการใช้งานเครื่องมือ</p></div>
         <button style={S.primaryBtn} onClick={() => setEditing(newRecord())}><Plus size={15} /> บันทึกการอนุมัติใหม่</button>
       </div>
       <div style={S.tableWrap}>
@@ -5295,24 +5316,17 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ (Sheet 01)</h2><p style={S.h2sub}>กรอกครั้งเดียวต่อเครื่องมือ แล้ว Tolerance, Decision Rule และ Risk score เหล่านี้จะถูกใช้คำนวณ Sheet 03, Sheet 04, Sheet 07 และเกณฑ์ผ่าน/ไม่ผ่านของ Daily check ให้อัตโนมัติทุกครั้ง</p></div>
+        <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ (Sheet 01)</h2><p style={S.h2sub}>กรอกครั้งเดียวต่อเครื่องมือ — ใช้ตัดสินผลในทุกชีท</p></div>
         <button style={S.primaryBtn} onClick={openEdit}><Pencil size={14} /> แก้ไข</button>
       </div>
-      <div style={{
-        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: "6px 18px",
-        background: "#F5F8F7", border: "1px solid var(--line)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 12.5,
-      }}>
-        <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "var(--teal-dark)", marginBottom: 2 }}>
-          <BookOpen size={13} /> ดึงจากหน้า "เครื่องมือ" (แก้ไขได้ที่หน้านั้น ไม่ใช่ที่นี่)
-        </div>
-        <div><span style={{ color: "var(--muted)" }}>รหัส</span><div style={{ fontFamily: "var(--font-mono)" }}>{instrument.code || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>ชื่อเครื่องมือ</span><div style={{ fontWeight: 600 }}>{instrument.name || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>ประเภท</span><div>{instrument.type || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>ยี่ห้อ / รุ่น</span><div>{[instrument.brand, instrument.model].filter(Boolean).join(" / ") || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>หมายเลขเครื่อง (S/N)</span><div>{instrument.serialNo || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>ตำแหน่งที่ตั้ง</span><div>{instrument.location || "-"}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>สอบเทียบล่าสุด (อัปเดตจากใบรับรองล่าสุดอัตโนมัติ)</span><div>{instrument.lastCalibration ? fmtDate(instrument.lastCalibration) : "-"}{instrument.nextDue ? ` → ครบกำหนด ${fmtDate(instrument.nextDue)}` : ""}</div></div>
-        <div><span style={{ color: "var(--muted)" }}>รอบสอบเทียบ (เดือน)</span><div>{instrument.intervalMonths || "-"}</div></div>
+      {/* Identity is edited on the Equipment page — one quiet line, not a block. */}
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, display: "flex", flexWrap: "wrap", gap: "2px 12px" }}>
+        <span>{instrument.type || "-"}</span>
+        {(instrument.brand || instrument.model) && <span>{[instrument.brand, instrument.model].filter(Boolean).join(" ")}</span>}
+        {instrument.serialNo && <span>S/N {instrument.serialNo}</span>}
+        {instrument.location && <span>ตำแหน่ง {instrument.location}</span>}
+        <span>รอบสอบเทียบ {instrument.intervalMonths ? `${instrument.intervalMonths} เดือน` : "ยังไม่ตั้ง"}</span>
+        <span style={{ fontStyle: "italic" }}>(แก้ข้อมูลเหล่านี้ที่หน้า "เครื่องมือ")</span>
       </div>
 
       {gaps.length > 0 && (
@@ -5321,49 +5335,69 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
         </div>
       )}
 
-      <div style={{
-        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: "14px 18px",
-        background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10, padding: "14px 16px", fontSize: 12.5,
-      }} className="ltFormGrid">
-        {sectionHead(<User size={13} />, "ผู้รับผิดชอบและขอบข่าย", true)}
-        {item("ผู้รับผิดชอบ (Custodian)", instrument.custodian)}
-        {item("เลขทรัพย์สิน (Asset No.)", instrument.assetNo)}
-        {item("กลุ่มเครื่องมือ (A/B/C)", instrument.riskGroup)}
-        {item("ขอบข่ายการใช้งาน", instrument.scopeOfUse)}
-        {item("วิธีทดสอบที่เกี่ยวข้อง", instrument.relatedTestMethod)}
+      {(() => {
+        // Label/value rows grouped in cards, most-used section first; empty
+        // values read "ยังไม่กรอก" instead of a wall of dashes.
+        const sections = [
+          { icon: <ShieldCheck size={13} />, title: "เกณฑ์การยอมรับ", rows: [
+            ["Tolerance / MPE", toleranceText !== "-" ? toleranceText : ""],
+            ["Decision Rule", decisionRuleText !== "-" ? decisionRuleText : ""],
+            ...(instrument.decisionRule === "guardband" ? [["Guard band factor (g)", instrument.guardBandFactor]] : []),
+            ["แหล่งอ้างอิงของเกณฑ์", instrument.basisOfCriteria],
+            ["เอกสารอ้างอิง", instrument.referenceDocument],
+          ] },
+          { icon: <Gauge size={13} />, title: "ข้อกำหนดการวัด", rows: [
+            ["พารามิเตอร์ที่วัด", instrument.measuredParameter],
+            ["หน่วย", instrument.calUnit],
+            ["ช่วงใช้งานจริง", rangeText !== "-" ? rangeText : ""],
+            ["ความละเอียด", instrument.resolution],
+          ] },
+          { icon: <TrendingUp size={13} />, title: "ความเสี่ยง", rows: [
+            ["RPN / ระดับ", rpn != null ? `${rpn} · ${level}` : ""],
+            ["Severity", severityText !== "-" ? severityText : ""],
+            ["Occurrence", occurrenceText !== "-" ? occurrenceText : ""],
+            ["Detectability", detectabilityText !== "-" ? detectabilityText : ""],
+            ["ความถี่ Daily/Intermediate Check", instrument.checkFrequency],
+          ] },
+          { icon: <User size={13} />, title: "ผู้รับผิดชอบและขอบข่าย", rows: [
+            ["ผู้รับผิดชอบ", instrument.custodian],
+            ["เลขทรัพย์สิน", instrument.assetNo],
+            ["กลุ่มเครื่องมือ (A/B/C)", instrument.riskGroup],
+            ["ขอบข่ายการใช้งาน", instrument.scopeOfUse],
+            ["วิธีทดสอบที่เกี่ยวข้อง", instrument.relatedTestMethod],
+          ] },
+        ];
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
+            {sections.map(sec => (
+              <div key={sec.title} style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10, padding: "10px 14px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)", marginBottom: 6 }}>{sec.icon} {sec.title}</div>
+                {sec.rows.map(([label, value]) => {
+                  const empty = value === "" || value == null;
+                  return (
+                    <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "5px 0", borderTop: "1px solid #EEF2F6", fontSize: 12.5 }}>
+                      <span style={{ color: "var(--muted)" }}>{label}</span>
+                      <span style={{ textAlign: "right", fontWeight: empty ? 400 : 500, color: empty ? "#B4BFCC" : "var(--ink)" }}>{empty ? "ยังไม่กรอก" : value}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
-        {sectionHead(<Gauge size={13} />, "ข้อกำหนดการวัด")}
-        {item("พารามิเตอร์ที่วัด", instrument.measuredParameter)}
-        {item("หน่วย", instrument.calUnit)}
-        {item("ช่วงใช้งานจริง", rangeText)}
-        {item("ความละเอียด (Resolution)", instrument.resolution)}
-
-        {sectionHead(<ShieldCheck size={13} />, "เกณฑ์การยอมรับ (Acceptance Criteria)")}
-        {item("เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)", toleranceText)}
-        {item("แหล่งอ้างอิงของเกณฑ์", instrument.basisOfCriteria)}
-        {item("เอกสารอ้างอิงของเกณฑ์", instrument.referenceDocument)}
-        {item("Decision Rule ที่อนุมัติ", decisionRuleText)}
-        {instrument.decisionRule === "guardband" && item("Guard band factor (g)", instrument.guardBandFactor)}
-
-        {sectionHead(<TrendingUp size={13} />, "การประเมินความเสี่ยง (Risk Assessment)")}
-        {item("ความถี่ Daily/Intermediate Check", instrument.checkFrequency)}
-        {item("Severity", severityText)}
-        {item("Occurrence", occurrenceText)}
-        {item("Detectability", detectabilityText)}
-        {item("RPN / ระดับความเสี่ยง", rpn != null ? `${rpn} · ${level}` : "-")}
-
-      </div>
-
-      <div style={{ ...S.notesBox, marginTop: 14, fontSize: 12.5, lineHeight: 1.7 }}>
-        <div style={{ fontWeight: 700, color: "var(--teal-dark)", marginBottom: 4 }}>ค่านี้ถูกนำไปใช้ที่ไหนบ้าง</div>
-        <div>• Sheet 03: ตัดสินผลสอบเทียบด้วย Tolerance และ Decision Rule ของเครื่องมือนี้</div>
-        <div>• Sheet 04: Warning Limit = ค่าอ้างอิง ± ⅔ Tolerance, Action Limit = ค่าอ้างอิง ± Tolerance{generalLimits ? "" : " (ยังไม่มี Tolerance จึงยังคำนวณไม่ได้)"}</div>
-        {isRefractometer && (
-          <div>• Daily check (Refractometer): เกณฑ์ %Brix = {REFRACTOMETER_STD_BRIX} ± Tolerance {brixLimits ? <b style={{ fontFamily: "var(--font-mono)" }}>→ {brixLimits.lal} – {brixLimits.ual} °Brix</b> : "(ยังไม่ได้ตั้ง Tolerance)"}</div>
-        )}
-        <div>• แก้ Tolerance/Decision Rule ที่นี่ ไม่กระทบผลย้อนหลัง: บันทึก Sheet 04 ล็อกเกณฑ์ ณ วันบันทึก และใบรับรองล็อกเกณฑ์เมื่อลงชื่อผู้ประเมิน (Sheet 03)</div>
-        <div>• ผลสอบเทียบล่าสุด: {calSummary ? <><b>{calSummary.decision}</b> (รอบ {fmtDate(calSummary.date)})</> : "ยังไม่มีใบรับรอง"}</div>
-      </div>
+      <details style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.7 }}>
+        <summary style={{ cursor: "pointer", color: "var(--teal-dark)", fontWeight: 600 }}>ค่าเหล่านี้ถูกนำไปใช้ที่ไหนบ้าง</summary>
+        <div style={{ ...S.notesBox, marginTop: 8 }}>
+          <div>• ผลสอบเทียบ (Sheet 03): ตัดสินด้วย Tolerance และ Decision Rule นี้</div>
+          <div>• ตรวจสอบระหว่างรอบ (Sheet 04): Warning = ค่าอ้างอิง ± ⅔ Tolerance, Action = ค่าอ้างอิง ± Tolerance{generalLimits ? "" : " (ยังไม่มี Tolerance จึงยังคำนวณไม่ได้)"}</div>
+          {isRefractometer && (
+            <div>• Daily check (Refractometer): เกณฑ์ %Brix = {REFRACTOMETER_STD_BRIX} ± Tolerance {brixLimits ? <b style={{ fontFamily: "var(--font-mono)" }}>→ {brixLimits.lal} – {brixLimits.ual} °Brix</b> : "(ยังไม่ได้ตั้ง Tolerance)"}</div>
+          )}
+          <div>• แก้ค่าที่นี่ไม่กระทบผลย้อนหลัง: Sheet 04 ล็อกเกณฑ์ ณ วันบันทึก, ใบรับรองล็อกเมื่อลงชื่อผู้ประเมิน</div>
+        </div>
+      </details>
 
       {editing && (
         <Modal onClose={() => setEditing(false)} title="แก้ไขข้อมูลเครื่องมือ (Sheet 01)" xwide>
@@ -5655,6 +5689,10 @@ function CalibrationRecordsHub({
 }) {
   const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
   const [subTab, setSubTab] = useState("certificates"); // "instrument" | "certificates" | "checks" | "actions"
+  // Each page holds two sheets, but only one is shown at a time — stacking
+  // both made every page long and hard to scan.
+  const [innerView, setInnerView] = useState({ certificates: "list", checks: "ic", actions: "ai" });
+  const setInner = (tab, v) => setInnerView(prev => ({ ...prev, [tab]: v }));
   const [q, setQ] = useState("");
   const [critFilter, setCritFilter] = useState("all"); // "all" | "missing" | "complete"
   const [showGrid, setShowGrid] = useState(false);
@@ -5824,52 +5862,100 @@ function CalibrationRecordsHub({
           certificates={scopedCertificates} notify={notify}
         />
       </>)}
-      {subTab === "certificates" && (
-        <CertificateDataTab
-          equipment={scopedEquipment} certificates={scopedCertificates}
-          setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName} presetInstrumentId={selectedInstrumentId}
-          onSyncDates={syncDates}
-          listFooter={scopedCertificates.length > 0 && (
-            <HubSection>
-              <CalibrationResultsTab
-                equipment={scopedEquipment} certificates={scopedCertificates}
-                setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
-                notify={notify} currentDisplayName={currentDisplayName}
-              />
-            </HubSection>
+      {subTab === "certificates" && (() => {
+        const groupsN = new Set(scopedCertificates.map(c => `${c.certificateNo}|${c.calibrationDate}`)).size;
+        const lastSum = latestCalibrationSummary(instrument, scopedCertificates);
+        return (<>
+          <SubSwitch value={innerView.certificates} onChange={v => setInner("certificates", v)} options={[
+            { key: "list", label: "ใบรับรอง", badge: groupsN || null },
+            { key: "results", label: "ผลตัดสิน & แนวโน้ม", badge: lastSum && lastSum.decision !== "PASS" ? lastSum.decision : null, tone: lastSum ? CALIB_DECISION_COLOR[lastSum.decision] : undefined },
+          ]} />
+          {innerView.certificates === "list" ? (
+            <CertificateDataTab
+              equipment={scopedEquipment} certificates={scopedCertificates}
+              setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
+              notify={notify} currentDisplayName={currentDisplayName} presetInstrumentId={selectedInstrumentId}
+              onSyncDates={syncDates}
+            />
+          ) : (
+            <CalibrationResultsTab
+              equipment={scopedEquipment} certificates={scopedCertificates}
+              setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
+              notify={notify} currentDisplayName={currentDisplayName}
+            />
           )}
-        />
-      )}
-      {subTab === "checks" && (<>
-        <IntermediateCheckTab
-          equipment={scopedEquipment} checks={scopedChecks} dailyChecks={scopedDailyChecks} certificates={scopedCertificates}
-          setChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName}
-        />
-        <HubSection>
-          <UncertaintyBudgetTab
-            equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
-            setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
-            notify={notify}
-          />
-        </HubSection>
-      </>)}
-      {subTab === "actions" && (<>
-        <ActionImpactTab
-          equipment={scopedEquipment} actionImpacts={scopedActionImpacts}
-          certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
-          setActionImpacts={makeScopedListSetter(actionImpacts, setActionImpacts, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName}
-        />
-        <HubSection>
-          <ApprovalRecordTab
-            equipment={scopedEquipment} approvalRecords={scopedApprovalRecords} certificates={scopedCertificates}
-            setApprovalRecords={makeScopedListSetter(approvalRecords, setApprovalRecords, selectedInstrumentId)}
-            notify={notify} currentDisplayName={currentDisplayName}
-          />
-        </HubSection>
-      </>)}
+        </>);
+      })()}
+      {subTab === "checks" && (() => {
+        const failIc = scopedChecks.filter(c => calcIntermediateCheck(c, instrument).result === "FAIL").length;
+        const budgetsN = new Set(scopedBudgets.map(b => b.budgetId)).size;
+        return (<>
+          <SubSwitch value={innerView.checks} onChange={v => setInner("checks", v)} options={[
+            { key: "ic", label: "ตรวจสอบระหว่างรอบ", badge: failIc ? `FAIL ${failIc}` : (scopedChecks.length || null), tone: failIc ? "var(--red)" : undefined },
+            { key: "ub", label: "Uncertainty Budget", badge: budgetsN || null },
+          ]} />
+          {innerView.checks === "ic" ? (
+            <IntermediateCheckTab
+              equipment={scopedEquipment} checks={scopedChecks} dailyChecks={scopedDailyChecks} certificates={scopedCertificates}
+              setChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
+              notify={notify} currentDisplayName={currentDisplayName}
+            />
+          ) : (
+            <UncertaintyBudgetTab
+              equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
+              setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
+              notify={notify}
+            />
+          )}
+        </>);
+      })()}
+      {subTab === "actions" && (() => {
+        const openN = scopedActionImpacts.filter(a => a.actionStatus !== "ปิดเรื่อง").length;
+        return (<>
+          <SubSwitch value={innerView.actions} onChange={v => setInner("actions", v)} options={[
+            { key: "ai", label: "การดำเนินการ / ผลกระทบ", badge: openN ? `เปิดอยู่ ${openN}` : null, tone: openN ? "var(--amber)" : undefined },
+            { key: "ap", label: "บันทึกการอนุมัติ", badge: scopedApprovalRecords.length || null },
+          ]} />
+          {innerView.actions === "ai" ? (
+            <ActionImpactTab
+              equipment={scopedEquipment} actionImpacts={scopedActionImpacts}
+              certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
+              setActionImpacts={makeScopedListSetter(actionImpacts, setActionImpacts, selectedInstrumentId)}
+              notify={notify} currentDisplayName={currentDisplayName}
+            />
+          ) : (
+            <ApprovalRecordTab
+              equipment={scopedEquipment} approvalRecords={scopedApprovalRecords} certificates={scopedCertificates}
+              setApprovalRecords={makeScopedListSetter(approvalRecords, setApprovalRecords, selectedInstrumentId)}
+              notify={notify} currentDisplayName={currentDisplayName}
+            />
+          )}
+        </>);
+      })()}
+    </div>
+  );
+}
+
+// Second-level switch inside a hub page (segmented control).
+function SubSwitch({ value, onChange, options }) {
+  return (
+    <div style={{ display: "inline-flex", background: "#EEF2F6", borderRadius: 10, padding: 3, gap: 2, marginBottom: 16, flexWrap: "wrap" }}>
+      {options.map(o => {
+        const active = value === o.key;
+        return (
+          <button key={o.key} type="button" onClick={() => onChange(o.key)} style={{
+            display: "flex", alignItems: "center", gap: 6, border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13,
+            fontWeight: active ? 600 : 500, background: active ? "#fff" : "transparent", color: active ? "var(--ink)" : "#5B6B80",
+            boxShadow: active ? "0 1px 3px rgba(15,40,70,0.12)" : "none", cursor: "pointer",
+          }}>
+            {o.label}
+            {o.badge != null && o.badge !== "" && (
+              <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 10, padding: "1px 7px", background: o.tone ? "#fff" : "#E1E8F0",
+                color: o.tone || "#5B6B80", border: o.tone ? `1px solid ${o.tone}` : "1px solid transparent" }}>{o.badge}</span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
