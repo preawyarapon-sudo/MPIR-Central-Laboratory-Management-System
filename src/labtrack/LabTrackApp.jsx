@@ -3587,7 +3587,7 @@ function blankCertificate(instrumentId, certificateNo = "") {
     source: "manual",
   };
 }
-function CertificateDataTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", presetInstrumentId = null, onSyncDates = null }) {
+function CertificateDataTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", presetInstrumentId = null, onSyncDates = null, listFooter = null }) {
   // Drill-down: instrument list -> that instrument's certificates (grouped
   // by year) -> the calibration points inside one certificate. Sheet 02
   // itself is still stored as one row per point (Sheet 03/04/06 all read it
@@ -3883,6 +3883,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
         ))}
         {formEl}
         {uploadModal}
+        {listFooter}
       </div>
     );
   }
@@ -5165,15 +5166,14 @@ function ApprovalRecordForm({ row, equipment, certificates = [], onCancel, onSav
    aren't calibrated, so they never appear in the instrument picker here.
    Daily check is deliberately NOT part of this bundle — it keeps its own
    separate nav entry outside this hub. */
+// Four pages instead of eight: sheets that describe the same thing are
+// shown together, in the order a lab works through a calibration cycle.
+// (The Excel export still writes all nine MPIR sheets separately.)
 const CALIBRATION_SUBTABS = [
-  { key: "instrumentMaster", label: "ข้อมูลเครื่องมือ (Sheet 01)", icon: Wrench },
-  { key: "certificates", label: "ใบรับรองสอบเทียบ", icon: FileCheck2 },
-  { key: "acceptance", label: "ผลสอบเทียบ & แนวโน้ม", icon: BadgeCheck },
-  { key: "intermediateCheck", label: "ตรวจสอบระหว่างรอบ", icon: ClipboardCheck },
-  { key: "uncertainty", label: "Uncertainty Budget", icon: Gauge },
-  { key: "equipStatus", label: "สรุปสถานะเครื่องมือ", icon: ShieldCheck },
-  { key: "actionImpact", label: "การดำเนินการ/ผลกระทบ", icon: FileWarning },
-  { key: "approvalRecord", label: "บันทึกการอนุมัติ", icon: Stamp },
+  { key: "instrument", label: "ข้อมูลเครื่องมือ & สถานะ", sheets: "01 · 07", icon: Wrench },
+  { key: "certificates", label: "ใบรับรอง & ผลสอบเทียบ", sheets: "02 · 03 · 06", icon: FileCheck2 },
+  { key: "checks", label: "ตรวจสอบระหว่างรอบ & Uncertainty", sheets: "04 · 05", icon: ClipboardCheck },
+  { key: "actions", label: "การแก้ไข & อนุมัติ", sheets: "08 · 09", icon: Stamp },
 ];
 // Sub-components below receive only the records that belong to the chosen
 // instrument, but their own setters (setCertificates, setChecks, ...)
@@ -5352,9 +5352,6 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
         {item("Detectability", detectabilityText)}
         {item("RPN / ระดับความเสี่ยง", rpn != null ? `${rpn} · ${level}` : "-")}
 
-        {sectionHead(<Stamp size={13} />, "สถานะและการอนุมัติ")}
-        {item("สถานะเครื่องมือปัจจุบัน", usageStatusOf(instrument))}
-        {item("ผู้อนุมัติให้ใช้งาน", [authorizedByOf(instrument), instrument.statusApprovalDate ? fmtDate(instrument.statusApprovalDate) : ""].filter(Boolean).join(" · "))}
       </div>
 
       <div style={{ ...S.notesBox, marginTop: 14, fontSize: 12.5, lineHeight: 1.7 }}>
@@ -5657,7 +5654,7 @@ function CalibrationRecordsHub({
   notify, currentDisplayName = "",
 }) {
   const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
-  const [subTab, setSubTab] = useState("certificates");
+  const [subTab, setSubTab] = useState("certificates"); // "instrument" | "certificates" | "checks" | "actions"
   const [q, setQ] = useState("");
   const [critFilter, setCritFilter] = useState("all"); // "all" | "missing" | "complete"
   const [showGrid, setShowGrid] = useState(false);
@@ -5727,7 +5724,7 @@ function CalibrationRecordsHub({
         )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
           {rows.map(e => (
-            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => { setSelectedInstrumentId(e.id); setSubTab(calibCriteriaGaps(e).length > 0 ? "instrumentMaster" : "certificates"); }}>
+            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => { setSelectedInstrumentId(e.id); setSubTab(calibCriteriaGaps(e).length > 0 ? "instrument" : "certificates"); }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{e.code}</div>
@@ -5811,67 +5808,114 @@ function CalibrationRecordsHub({
               }}
             >
               <Icon size={13} /> {t.label}
+              <span style={{ fontSize: 10.5, opacity: 0.7, fontFamily: "var(--font-mono)" }}>{t.sheets}</span>
             </button>
           );
         })}
       </div>
-      {subTab === "instrumentMaster" && instrument && (
+      {subTab === "instrument" && instrument && (<>
+        <InstrumentStatusCard
+          instrument={instrument} certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
+          setEquipment={makeScopedEquipmentSetter(equipment, setEquipment)} notify={notify}
+        />
         <InstrumentMasterTab
           key={instrument.id}
           instrument={instrument} equipment={equipment} setEquipment={setEquipment}
           certificates={scopedCertificates} notify={notify}
         />
-      )}
+      </>)}
       {subTab === "certificates" && (
         <CertificateDataTab
           equipment={scopedEquipment} certificates={scopedCertificates}
           setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
           notify={notify} currentDisplayName={currentDisplayName} presetInstrumentId={selectedInstrumentId}
           onSyncDates={syncDates}
+          listFooter={scopedCertificates.length > 0 && (
+            <HubSection>
+              <CalibrationResultsTab
+                equipment={scopedEquipment} certificates={scopedCertificates}
+                setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
+                notify={notify} currentDisplayName={currentDisplayName}
+              />
+            </HubSection>
+          )}
         />
       )}
-      {subTab === "acceptance" && (
-        <CalibrationResultsTab
-          equipment={scopedEquipment} certificates={scopedCertificates}
-          setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName}
-        />
-      )}
-      {subTab === "intermediateCheck" && (
+      {subTab === "checks" && (<>
         <IntermediateCheckTab
           equipment={scopedEquipment} checks={scopedChecks} dailyChecks={scopedDailyChecks} certificates={scopedCertificates}
           setChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
           notify={notify} currentDisplayName={currentDisplayName}
         />
-      )}
-      {subTab === "uncertainty" && (
-        <UncertaintyBudgetTab
-          equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
-          setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
-          notify={notify}
-        />
-      )}
-      {subTab === "equipStatus" && (
-        <EquipmentStatusTab
-          equipment={scopedEquipment} certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
-          setEquipment={makeScopedEquipmentSetter(equipment, setEquipment)} notify={notify}
-        />
-      )}
-      {subTab === "actionImpact" && (
+        <HubSection>
+          <UncertaintyBudgetTab
+            equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
+            setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
+            notify={notify}
+          />
+        </HubSection>
+      </>)}
+      {subTab === "actions" && (<>
         <ActionImpactTab
           equipment={scopedEquipment} actionImpacts={scopedActionImpacts}
           certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
           setActionImpacts={makeScopedListSetter(actionImpacts, setActionImpacts, selectedInstrumentId)}
           notify={notify} currentDisplayName={currentDisplayName}
         />
-      )}
-      {subTab === "approvalRecord" && (
-        <ApprovalRecordTab
-          equipment={scopedEquipment} approvalRecords={scopedApprovalRecords} certificates={scopedCertificates}
-          setApprovalRecords={makeScopedListSetter(approvalRecords, setApprovalRecords, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName}
-        />
-      )}
+        <HubSection>
+          <ApprovalRecordTab
+            equipment={scopedEquipment} approvalRecords={scopedApprovalRecords} certificates={scopedCertificates}
+            setApprovalRecords={makeScopedListSetter(approvalRecords, setApprovalRecords, selectedInstrumentId)}
+            notify={notify} currentDisplayName={currentDisplayName}
+          />
+        </HubSection>
+      </>)}
+    </div>
+  );
+}
+
+// Divider between two sheets shown on the same page.
+function HubSection({ children }) {
+  return <div style={{ marginTop: 28, paddingTop: 22, borderTop: "2px dashed var(--line)" }}>{children}</div>;
+}
+// Sheet 07 for one instrument: the summary table had a single row once the
+// hub is scoped to one instrument, so it is shown as a card on top of the
+// instrument page instead. Status/approver are the same fields as Sheet 01.
+function InstrumentStatusCard({ instrument, certificates, intermediateChecks, dailyChecks, setEquipment, notify }) {
+  const r = computeEquipmentStatusRows([instrument], certificates, intermediateChecks, dailyChecks)[0];
+  const CYCLE_LABEL = { ok: "ปกติ", warn: "ใกล้ถึงกำหนด", danger: "เลยกำหนด", none: "-" };
+  const set = (patch) => { setEquipment([{ ...instrument, ...patch }]); notify("บันทึกแล้ว"); };
+  const cell = (label, value, color) => (
+    <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ fontSize: 11, color: "var(--muted)" }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2, color: color || "var(--ink)" }}>{value}</div>
+    </div>
+  );
+  return (
+    <div style={{ background: "#F5F8F7", border: "1px solid var(--line)", borderRadius: 12, padding: "12px 14px", marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)", marginBottom: 10 }}>
+        <ShieldCheck size={14} /> สรุปสถานะเครื่องมือ (Sheet 07) — คำนวณอัตโนมัติ
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 8 }}>
+        {cell("รอบสอบเทียบ", `${CYCLE_LABEL[r.cycleStatus]}${r.days != null ? ` (${r.days} วัน)` : ""}`, STATUS_COLOR[r.cycleStatus])}
+        {cell("ผลสอบเทียบล่าสุด", r.overall || "-", CALIB_DECISION_COLOR[r.overall])}
+        {cell("Tolerance Utilization สูงสุด", r.maxUtilization ? `${r.maxUtilization.toFixed(1)}%` : "-")}
+        {cell("จุด FAIL / WARNING", r.failingCount, r.failingCount ? "var(--red)" : undefined)}
+        {cell("Check ไม่ผ่าน (90 วัน)", r.failedChecks90, r.failedChecks90 ? "var(--red)" : undefined)}
+        {cell("RPN", r.rpn ?? "-")}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
+        <Field label="สถานะการใช้งาน">
+          <select style={S.input} value={usageStatusOf(instrument)} onChange={ev => set({ currentStatus: ev.target.value })}>
+            <option value="">- ยังไม่ประเมิน -</option>
+            {LK_STATUS_ALL.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </Field>
+        <Field label={`ผู้อนุมัติ${instrument.statusApprovalDate && authorizedByOf(instrument) ? ` (${fmtDate(instrument.statusApprovalDate)})` : ""}`}>
+          <CommitInput style={S.input} placeholder="ชื่อผู้อนุมัติ" value={authorizedByOf(instrument)}
+            onCommit={v => set({ authorizedBy: v, statusApprovalDate: v ? todayISO() : "" })} />
+        </Field>
+      </div>
     </div>
   );
 }
