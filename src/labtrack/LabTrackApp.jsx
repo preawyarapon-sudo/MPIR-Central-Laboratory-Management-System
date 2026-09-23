@@ -5179,23 +5179,14 @@ function ApprovalRecordForm({ row, equipment, certificates = [], onCancel, onSav
 }
 
 /* ================= Calibration Records Hub =================
-   Replaces the old flat menu (separate sub-tabs, each listing every
-   instrument in a table) with: pick an instrument first, then flip between
-   the record types (instrument master, certificates, acceptance + trend,
-   intermediate check, uncertainty budget, status summary, action/impact,
-   approval record) as tabs scoped to just that instrument. Air conditioners
+   Pick an instrument (card grid), then pick a record type from the same
+   kind of card grid (instrument & status, certificates, results & trend,
+   intermediate check, uncertainty, action/impact, approval) — each card
+   shows a one-line summary and a warning pill, and opens one page scoped
+   to that instrument. Air conditioners
    aren't calibrated, so they never appear in the instrument picker here.
    Daily check is deliberately NOT part of this bundle — it keeps its own
    separate nav entry outside this hub. */
-// Four pages instead of eight: sheets that describe the same thing are
-// shown together, in the order a lab works through a calibration cycle.
-// (The Excel export still writes all nine MPIR sheets separately.)
-const CALIBRATION_SUBTABS = [
-  { key: "instrument", label: "ข้อมูลเครื่องมือ & สถานะ", sheets: "01 · 07", icon: Wrench },
-  { key: "certificates", label: "ใบรับรอง & ผลสอบเทียบ", sheets: "02 · 03 · 06", icon: FileCheck2 },
-  { key: "checks", label: "ตรวจสอบระหว่างรอบ & Uncertainty", sheets: "04 · 05", icon: ClipboardCheck },
-  { key: "actions", label: "การแก้ไข & อนุมัติ", sheets: "08 · 09", icon: Stamp },
-];
 // Sub-components below receive only the records that belong to the chosen
 // instrument, but their own setters (setCertificates, setChecks, ...)
 // expect to replace the *whole* collection — they were written to operate
@@ -5688,11 +5679,8 @@ function CalibrationRecordsHub({
   notify, currentDisplayName = "",
 }) {
   const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
-  const [subTab, setSubTab] = useState("certificates"); // "instrument" | "certificates" | "checks" | "actions"
-  // Each page holds two sheets, but only one is shown at a time — stacking
-  // both made every page long and hard to scan.
-  const [innerView, setInnerView] = useState({ certificates: "list", checks: "ic", actions: "ai" });
-  const setInner = (tab, v) => setInnerView(prev => ({ ...prev, [tab]: v }));
+  // null = the instrument's feature cards; otherwise the key of the open page.
+  const [view, setView] = useState(null);
   const [q, setQ] = useState("");
   const [critFilter, setCritFilter] = useState("all"); // "all" | "missing" | "complete"
   const [showGrid, setShowGrid] = useState(false);
@@ -5722,7 +5710,7 @@ function CalibrationRecordsHub({
         <div style={S.detailHead}>
           <div>
             <h2 style={S.h2}>บันทึกการสอบเทียบ</h2>
-            <p style={S.h2sub}>เลือกเครื่องมือ เพื่อกรอกข้อมูลเครื่องมือ/เกณฑ์การสอบเทียบ (Sheet 01) ดูใบรับรองสอบเทียบ ผลสอบเทียบและแนวโน้ม ตรวจสอบระหว่างรอบ Uncertainty Budget สถานะ การดำเนินการ/ผลกระทบ และบันทึกการอนุมัติ ของเครื่องมือนั้น</p>
+            <p style={S.h2sub}>เลือกเครื่องมือ เพื่อดูและบันทึกข้อมูลการสอบเทียบของเครื่องนั้น</p>
           </div>
           <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
             <button style={S.smallBtn} onClick={() => exportAll()}>
@@ -5762,7 +5750,7 @@ function CalibrationRecordsHub({
         )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
           {rows.map(e => (
-            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => { setSelectedInstrumentId(e.id); setSubTab(calibCriteriaGaps(e).length > 0 ? "instrument" : "certificates"); }}>
+            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => { setSelectedInstrumentId(e.id); setView(null); }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{e.code}</div>
@@ -5813,45 +5801,92 @@ function CalibrationRecordsHub({
   }
   const calSum = instrument ? latestCalibrationSummary(instrument, scopedCertificates) : null;
 
+  // ---- Feature cards: same look as the instrument picker above ----
+  const certGroups = [...new Set(scopedCertificates.map(c => `${c.certificateNo || ""}|||${c.calibrationDate || ""}`))];
+  const latestCert = latestCertDate(scopedCertificates);
+  const unsignedRound = latestCert && scopedCertificates.some(c => c.calibrationDate === latestCert && !c.evaluatedBy);
+  const within90 = (d) => d && (Date.now() - new Date(d + "T00:00:00")) <= 90 * 86400000;
+  const icSorted = scopedChecks.slice().sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""));
+  const icFail90 = scopedChecks.filter(c => within90(c.checkDate) && calcIntermediateCheck(c, instrument).result === "FAIL").length;
+  const budgetsN = new Set(scopedBudgets.map(b => b.budgetId)).size;
+  const openActions = scopedActionImpacts.filter(a => a.actionStatus !== "ปิดเรื่อง").length;
+  const apSorted = scopedApprovalRecords.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const gaps = instrument ? calibCriteriaGaps(instrument) : [];
+  const decisionTone = (d) => CALIB_DECISION_COLOR[d] || "var(--muted)";
+  const FEATURES = [
+    { key: "instrument", sheets: "SHEET 01 · 07", title: "ข้อมูลเครื่องมือ & สถานะ",
+      sub: instrument && numOrNull(instrument.tolerance) != null ? `Tolerance ± ${instrument.tolerance}${instrument.calUnit ? ` ${instrument.calUnit}` : ""} · ${usageStatusOf(instrument) || "ยังไม่ประเมินสถานะ"}` : "ยังไม่ได้ตั้งเกณฑ์",
+      flag: gaps.length ? { text: "เกณฑ์ไม่ครบ", tone: "var(--amber)", title: `ยังไม่ได้กำหนด: ${gaps.join(", ")}` } : null },
+    { key: "certificates", sheets: "SHEET 02", title: "ใบรับรองสอบเทียบ",
+      sub: certGroups.length ? `${certGroups.length} ใบ · ล่าสุด ${fmtDate(latestCert)}` : "ยังไม่มีใบรับรอง" },
+    { key: "results", sheets: "SHEET 03 · 06", title: "ผลตัดสิน & แนวโน้ม",
+      sub: calSum ? `ผลรอบล่าสุด ${calSum.decision}` : "รอข้อมูลใบรับรอง",
+      flag: calSum && calSum.decision !== "PASS" ? { text: calSum.decision, tone: decisionTone(calSum.decision) }
+        : unsignedRound ? { text: "รอลงชื่อประเมิน", tone: "var(--amber)" } : null },
+    { key: "checks", sheets: "SHEET 04", title: "ตรวจสอบระหว่างรอบ",
+      sub: icSorted.length ? `${icSorted.length} ครั้ง · ล่าสุด ${fmtDate(icSorted[0].checkDate)}` : "ยังไม่มีบันทึก",
+      flag: icFail90 ? { text: `ไม่ผ่าน ${icFail90} ครั้ง (90 วัน)`, tone: "var(--red)" } : null },
+    { key: "uncertainty", sheets: "SHEET 05", title: "Uncertainty Budget",
+      sub: budgetsN ? `${budgetsN} Budget · ${scopedBudgets.length} องค์ประกอบ` : "ยังไม่มี Budget" },
+    { key: "actions", sheets: "SHEET 08", title: "การดำเนินการ / ผลกระทบ",
+      sub: scopedActionImpacts.length ? `${scopedActionImpacts.length} รายการ` : "ยังไม่มีรายการ",
+      flag: openActions ? { text: `เปิดอยู่ ${openActions} เรื่อง`, tone: "var(--amber)" } : null },
+    { key: "approvals", sheets: "SHEET 09", title: "บันทึกการอนุมัติ",
+      sub: apSorted.length ? `${apSorted.length} รายการ · ล่าสุด ${fmtDate(apSorted[0].date)}` : "ยังไม่มีบันทึก" },
+  ];
+  const openFeature = FEATURES.find(f => f.key === view);
+  const pill = (flag) => flag && (
+    <div title={flag.title || ""} style={{
+      display: "inline-flex", alignItems: "center", gap: 4, marginTop: 6,
+      fontSize: 10.5, fontWeight: 600, color: flag.tone, background: "#fff",
+      border: `1px solid ${flag.tone}`, borderRadius: 20, padding: "2px 8px",
+    }}>
+      <FileWarning size={11} /> {flag.text}
+    </div>
+  );
+  const scopedCertSetter = makeScopedListSetter(certificates, setCertificates, selectedInstrumentId);
+
   return (
     <div>
-      <button style={{ ...S.ghostBtn, marginBottom: 12 }} onClick={() => setSelectedInstrumentId(null)}>
-        <ChevronLeft size={14} /> กลับไปเลือกเครื่องมือ
+      <button style={{ ...S.ghostBtn, marginBottom: 12 }} onClick={() => (view ? setView(null) : setSelectedInstrumentId(null))}>
+        <ChevronLeft size={14} /> {view ? `กลับไปหน้า ${instrument?.code || "เครื่องมือ"}` : "กลับไปเลือกเครื่องมือ"}
       </button>
       <div style={{ ...S.detailHead, marginBottom: 14 }}>
         <div>
-          <h2 style={S.h2}>{instrument?.code} — {instrument?.name}</h2>
-          <p style={S.h2sub}>
-            สอบเทียบล่าสุด {instrument?.lastCalibration ? fmtDate(instrument.lastCalibration) : "-"}
-            {" · "}ครบกำหนด {instrument?.nextDue ? fmtDate(instrument.nextDue) : "-"}
-            {" · "}ผลล่าสุด {calSum ? calSum.decision : "ยังไม่มีใบรับรอง"}
-          </p>
+          {/* Inside a page the sheet's own heading is the title — only a small breadcrumb here. */}
+          {openFeature
+            ? <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--muted)" }}>{instrument?.code} — {instrument?.name} · {openFeature.sheets}</div>
+            : <h2 style={S.h2}>{instrument?.code} — {instrument?.name}</h2>}
+          {!openFeature && (
+            <p style={S.h2sub}>
+              สอบเทียบล่าสุด {instrument?.lastCalibration ? fmtDate(instrument.lastCalibration) : "-"}
+              {" · "}ครบกำหนด {instrument?.nextDue ? fmtDate(instrument.nextDue) : "-"}
+              {" · "}ผลล่าสุด {calSum ? calSum.decision : "ยังไม่มีใบรับรอง"}
+            </p>
+          )}
         </div>
-        <button style={S.smallBtn} onClick={() => exportAll(selectedInstrumentId)}><FileDown size={13} /> ส่งออก Excel เฉพาะเครื่องนี้</button>
+        {!openFeature && <button style={S.smallBtn} onClick={() => exportAll(selectedInstrumentId)}><FileDown size={13} /> ส่งออก Excel เฉพาะเครื่องนี้</button>}
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
-        {CALIBRATION_SUBTABS.map(t => {
-          const Icon = t.icon;
-          const active = subTab === t.key;
-          return (
-            <button
-              key={t.key}
-              onClick={() => setSubTab(t.key)}
-              style={{
-                display: "flex", alignItems: "center", gap: 6,
-                background: active ? "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)" : "#fff",
-                color: active ? "#fff" : "#4B5C72",
-                border: active ? "1px solid transparent" : "1px solid var(--line)",
-                borderRadius: 20, padding: "7px 12px", fontSize: 12.5, fontWeight: active ? 600 : 500,
-              }}
-            >
-              <Icon size={13} /> {t.label}
-              <span style={{ fontSize: 10.5, opacity: 0.7, fontFamily: "var(--font-mono)" }}>{t.sheets}</span>
-            </button>
-          );
-        })}
-      </div>
-      {subTab === "instrument" && instrument && (<>
+
+      {!openFeature && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
+          {FEATURES.map(f => (
+            <div key={f.key} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => setView(f.key)}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{f.sheets}</div>
+                  <div style={{ fontWeight: 700 }}>{f.title}</div>
+                </div>
+                <ChevronRight size={16} color="var(--muted)" />
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>{f.sub}</div>
+              {pill(f.flag)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {view === "instrument" && instrument && (<>
         <InstrumentStatusCard
           instrument={instrument} certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
           setEquipment={makeScopedEquipmentSetter(equipment, setEquipment)} notify={notify}
@@ -5862,100 +5897,48 @@ function CalibrationRecordsHub({
           certificates={scopedCertificates} notify={notify}
         />
       </>)}
-      {subTab === "certificates" && (() => {
-        const groupsN = new Set(scopedCertificates.map(c => `${c.certificateNo}|${c.calibrationDate}`)).size;
-        const lastSum = latestCalibrationSummary(instrument, scopedCertificates);
-        return (<>
-          <SubSwitch value={innerView.certificates} onChange={v => setInner("certificates", v)} options={[
-            { key: "list", label: "ใบรับรอง", badge: groupsN || null },
-            { key: "results", label: "ผลตัดสิน & แนวโน้ม", badge: lastSum && lastSum.decision !== "PASS" ? lastSum.decision : null, tone: lastSum ? CALIB_DECISION_COLOR[lastSum.decision] : undefined },
-          ]} />
-          {innerView.certificates === "list" ? (
-            <CertificateDataTab
-              equipment={scopedEquipment} certificates={scopedCertificates}
-              setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
-              notify={notify} currentDisplayName={currentDisplayName} presetInstrumentId={selectedInstrumentId}
-              onSyncDates={syncDates}
-            />
-          ) : (
-            <CalibrationResultsTab
-              equipment={scopedEquipment} certificates={scopedCertificates}
-              setCertificates={makeScopedListSetter(certificates, setCertificates, selectedInstrumentId)}
-              notify={notify} currentDisplayName={currentDisplayName}
-            />
-          )}
-        </>);
-      })()}
-      {subTab === "checks" && (() => {
-        const failIc = scopedChecks.filter(c => calcIntermediateCheck(c, instrument).result === "FAIL").length;
-        const budgetsN = new Set(scopedBudgets.map(b => b.budgetId)).size;
-        return (<>
-          <SubSwitch value={innerView.checks} onChange={v => setInner("checks", v)} options={[
-            { key: "ic", label: "ตรวจสอบระหว่างรอบ", badge: failIc ? `FAIL ${failIc}` : (scopedChecks.length || null), tone: failIc ? "var(--red)" : undefined },
-            { key: "ub", label: "Uncertainty Budget", badge: budgetsN || null },
-          ]} />
-          {innerView.checks === "ic" ? (
-            <IntermediateCheckTab
-              equipment={scopedEquipment} checks={scopedChecks} dailyChecks={scopedDailyChecks} certificates={scopedCertificates}
-              setChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
-              notify={notify} currentDisplayName={currentDisplayName}
-            />
-          ) : (
-            <UncertaintyBudgetTab
-              equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
-              setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
-              notify={notify}
-            />
-          )}
-        </>);
-      })()}
-      {subTab === "actions" && (() => {
-        const openN = scopedActionImpacts.filter(a => a.actionStatus !== "ปิดเรื่อง").length;
-        return (<>
-          <SubSwitch value={innerView.actions} onChange={v => setInner("actions", v)} options={[
-            { key: "ai", label: "การดำเนินการ / ผลกระทบ", badge: openN ? `เปิดอยู่ ${openN}` : null, tone: openN ? "var(--amber)" : undefined },
-            { key: "ap", label: "บันทึกการอนุมัติ", badge: scopedApprovalRecords.length || null },
-          ]} />
-          {innerView.actions === "ai" ? (
-            <ActionImpactTab
-              equipment={scopedEquipment} actionImpacts={scopedActionImpacts}
-              certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
-              setActionImpacts={makeScopedListSetter(actionImpacts, setActionImpacts, selectedInstrumentId)}
-              notify={notify} currentDisplayName={currentDisplayName}
-            />
-          ) : (
-            <ApprovalRecordTab
-              equipment={scopedEquipment} approvalRecords={scopedApprovalRecords} certificates={scopedCertificates}
-              setApprovalRecords={makeScopedListSetter(approvalRecords, setApprovalRecords, selectedInstrumentId)}
-              notify={notify} currentDisplayName={currentDisplayName}
-            />
-          )}
-        </>);
-      })()}
-    </div>
-  );
-}
-
-// Second-level switch inside a hub page (segmented control).
-function SubSwitch({ value, onChange, options }) {
-  return (
-    <div style={{ display: "inline-flex", background: "#EEF2F6", borderRadius: 10, padding: 3, gap: 2, marginBottom: 16, flexWrap: "wrap" }}>
-      {options.map(o => {
-        const active = value === o.key;
-        return (
-          <button key={o.key} type="button" onClick={() => onChange(o.key)} style={{
-            display: "flex", alignItems: "center", gap: 6, border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13,
-            fontWeight: active ? 600 : 500, background: active ? "#fff" : "transparent", color: active ? "var(--ink)" : "#5B6B80",
-            boxShadow: active ? "0 1px 3px rgba(15,40,70,0.12)" : "none", cursor: "pointer",
-          }}>
-            {o.label}
-            {o.badge != null && o.badge !== "" && (
-              <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 10, padding: "1px 7px", background: o.tone ? "#fff" : "#E1E8F0",
-                color: o.tone || "#5B6B80", border: o.tone ? `1px solid ${o.tone}` : "1px solid transparent" }}>{o.badge}</span>
-            )}
-          </button>
-        );
-      })}
+      {view === "certificates" && (
+        <CertificateDataTab
+          equipment={scopedEquipment} certificates={scopedCertificates} setCertificates={scopedCertSetter}
+          notify={notify} currentDisplayName={currentDisplayName} presetInstrumentId={selectedInstrumentId}
+          onSyncDates={syncDates}
+        />
+      )}
+      {view === "results" && (
+        <CalibrationResultsTab
+          equipment={scopedEquipment} certificates={scopedCertificates} setCertificates={scopedCertSetter}
+          notify={notify} currentDisplayName={currentDisplayName}
+        />
+      )}
+      {view === "checks" && (
+        <IntermediateCheckTab
+          equipment={scopedEquipment} checks={scopedChecks} dailyChecks={scopedDailyChecks} certificates={scopedCertificates}
+          setChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
+          notify={notify} currentDisplayName={currentDisplayName}
+        />
+      )}
+      {view === "uncertainty" && (
+        <UncertaintyBudgetTab
+          equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
+          setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
+          notify={notify}
+        />
+      )}
+      {view === "actions" && (
+        <ActionImpactTab
+          equipment={scopedEquipment} actionImpacts={scopedActionImpacts}
+          certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
+          setActionImpacts={makeScopedListSetter(actionImpacts, setActionImpacts, selectedInstrumentId)}
+          notify={notify} currentDisplayName={currentDisplayName}
+        />
+      )}
+      {view === "approvals" && (
+        <ApprovalRecordTab
+          equipment={scopedEquipment} approvalRecords={scopedApprovalRecords} certificates={scopedCertificates}
+          setApprovalRecords={makeScopedListSetter(approvalRecords, setApprovalRecords, selectedInstrumentId)}
+          notify={notify} currentDisplayName={currentDisplayName}
+        />
+      )}
     </div>
   );
 }
