@@ -1329,7 +1329,7 @@ const NAV = [
   // Sub-link of "equipment" in the desktop sidebar (see nested rendering
   // below) — still its own top-level tab/URL, and stays a normal flat
   // item in the mobile bottom bar since that layout has no room to nest.
-  { key: "dailyCheck", label: "Daily check", icon: CheckCircle2, parent: "equipment" },
+  { key: "dailyCheck", label: "ตรวจเช็คเครื่องมือ", icon: CheckCircle2, parent: "equipment" },
   // The former 8 separate sub-tabs (certificates, acceptance,
   // intermediateCheck, uncertainty, trend, equipStatus, actionImpact,
   // approvalRecord) are now one menu entry: pick an instrument first, then
@@ -1406,6 +1406,9 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   // (?tab=equipmentView&equip=<id>). Also reads the older ?scale= / ?meter=
   // params so any labels printed before the scale and pH/EC tabs were
   // merged still work.
+  // Instrument to preselect when jumping to "ตรวจเช็คเครื่องมือ" from the
+  // calibration hub (unlike equipDeepLinkId, it does not auto-open a form).
+  const [checkFocusEquipId, setCheckFocusEquipId] = useState(null);
   const [equipDeepLinkId] = useState(() => {
     if (typeof window === "undefined") return null;
     const params = new URLSearchParams(window.location.search);
@@ -1612,7 +1615,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
           )}
           <div style={S.sidebarFoot} className="ltSidebarFoot">
             {restrictToDailyCheck
-              ? "โหมดผู้เยี่ยมชม: เข้าถึงได้เฉพาะหน้า Daily check เท่านั้น (ไม่ต้องเข้าสู่ระบบ)"
+              ? "โหมดผู้เยี่ยมชม: เข้าถึงได้เฉพาะการบันทึก Daily check เท่านั้น (ไม่ต้องเข้าสู่ระบบ)"
               : restrictToEquipmentView
               ? "โหมดผู้เยี่ยมชม: ดูข้อมูลและประวัติของเครื่องมือนี้ได้อย่างเดียว (ไม่ต้องเข้าสู่ระบบ)"
               : restrictToBooking
@@ -1653,7 +1656,10 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
               canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "dailyCheck" && (
-            <DailyCheckTab equipment={equipment} certificates={certificates} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks} notify={notify} initialCheckId={equipDeepLinkId} canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
+            <DailyCheckTab equipment={equipment} certificates={certificates} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks}
+              intermediateChecks={intermediateChecks} setIntermediateChecks={persist.intermediateChecks}
+              notify={notify} initialCheckId={equipDeepLinkId} initialEquipId={checkFocusEquipId} guestMode={restrictToDailyCheck}
+              canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "calibrationRecords" && (
             <CalibrationRecordsHub
@@ -1665,6 +1671,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
               actionImpacts={actionImpacts} setActionImpacts={persist.actionImpacts}
               approvalRecords={approvalRecords} setApprovalRecords={persist.approvalRecords}
               notify={notify} currentDisplayName={currentDisplayName}
+              onOpenChecks={(id) => { setCheckFocusEquipId(id); setTab("dailyCheck"); }}
             />
           )}
           {tab === "equipmentView" && (
@@ -4329,152 +4336,6 @@ function blankIntermediateCheck(instrumentId) {
     appliedCorrection: "", checkedBy: "", reviewedBy: "", actionOnFailure: "", carNo: "", remarks: "",
   };
 }
-function IntermediateCheckTab({ equipment, checks, setChecks, dailyChecks = [], certificates = [], notify, currentDisplayName = "" }) {
-  const [editing, setEditing] = useState(null);
-  const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
-  const sorted = checks.slice().sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""));
-  function upsert(row) {
-    const { _notice, ...clean } = row;
-    // Lock the criteria this check is judged by, on its first save.
-    const rec = clean.criteriaAt ? clean : { ...clean, criteriaAt: snapshotCriteria(byId[clean.instrumentId]) };
-    if (checks.find(c => c.id === rec.id)) setChecks(checks.map(c => c.id === rec.id ? rec : c));
-    else setChecks([rec, ...checks]);
-    notify("บันทึกผลตรวจสอบแล้ว");
-    setEditing(null);
-  }
-  function remove(id) { if (!window.confirm("ลบบันทึกนี้หรือไม่?")) return; setChecks(checks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
-  // Records saved before criteria locking existed. Their original Tolerance
-  // was never stored, so the best available lock is today's value.
-  const unlocked = checks.filter(c => !c.criteriaAt && snapshotCriteria(byId[c.instrumentId]));
-  function lockLegacy() {
-    if (!window.confirm(`ล็อกเกณฑ์ให้ ${unlocked.length} รายการเก่า ด้วย Tolerance ปัจจุบันของเครื่องมือ?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
-    setChecks(checks.map(c => (c.criteriaAt ? c : { ...c, criteriaAt: snapshotCriteria(byId[c.instrumentId]) })));
-    notify(`ล็อกเกณฑ์ให้ ${unlocked.length} รายการแล้ว`);
-  }
-  // A routine check repeats the same set-up every time — carry the check
-  // standard, reference, unit and correction over from this instrument's
-  // previous check (or its Sheet 01 parameter/unit on the first one), so
-  // only the date and the readings need typing. If a newer certificate has
-  // arrived since that check, the carried Correction would be last round's
-  // — it is swapped for the new certificate's value and the user is told.
-  function newCheck() {
-    const inst = equipment[0];
-    const base = { ...blankIntermediateCheck(inst?.id || ""), checkedBy: currentDisplayName };
-    const last = sorted.find(c => c.instrumentId === base.instrumentId);
-    if (!last) return { ...base, parameter: inst?.measuredParameter || "", unit: inst?.calUnit || "" };
-    const carry = ["parameter", "checkType", "checkItem", "checkStandard", "checkStandardId", "referenceValue", "uOfCheckStandard", "unit", "appliedCorrection", "correctionSourceCert", "reviewedBy"];
-    const row = { ...base, ...Object.fromEntries(carry.map(k => [k, last[k] ?? ""])) };
-    const newest = latestCertDate(certificates.filter(c => c.instrumentId === row.instrumentId));
-    if (newest && newest > (last.checkDate || "")) {
-      const sug = suggestCorrectionFromCerts(certificates, row.instrumentId, row.parameter, row.referenceValue);
-      if (sug && String(sug.value) !== String(row.appliedCorrection)) {
-        return { ...row, appliedCorrection: String(sug.value), correctionSourceCert: sug.cert.certificateNo || "",
-          _notice: `มีใบรับรองใหม่ ${sug.cert.certificateNo || ""} (สอบเทียบ ${fmtDate(newest)}) — เปลี่ยน Correction จาก ${row.appliedCorrection === "" ? "ว่าง" : row.appliedCorrection} เป็น ${sug.value} ให้แล้ว` };
-      }
-      if (!sug) return { ...row, _notice: `มีใบรับรองใหม่ (สอบเทียบ ${fmtDate(newest)}) แต่หาจุดที่ตรงกับค่าอ้างอิงไม่ได้ — ตรวจสอบ Correction ด้วยตนเอง` };
-    }
-    return row;
-  }
-  // Group the log by calibration round: every check belongs to the
-  // certificate that was current on its date.
-  const roundsById = Object.fromEntries(equipment.map(e => [e.id, calibrationRounds(certificates, e.id)]));
-  const groups = [];
-  sorted.forEach(row => {
-    const r = roundOfDate(roundsById[row.instrumentId] || [], row.checkDate);
-    const key = `${row.instrumentId}|${r?.date || "none"}`;
-    let g = groups.find(x => x.key === key);
-    if (!g) { g = { key, round: r, instrument: byId[row.instrumentId], rows: [] }; groups.push(g); }
-    g.rows.push({ row, calc: calcIntermediateCheck(row, byId[row.instrumentId]) });
-  });
-  const COLS = ["วันที่", "พารามิเตอร์", "ค่าเฉลี่ยหลังแก้ค่า", "Bias", "ช่วงยอมรับ (Action)", "ผล", ""];
-  const mono = { fontFamily: "var(--font-mono)" };
-  return (
-    <div>
-      <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Intermediate / Performance Check)</h2><p style={S.h2sub}>เกณฑ์คิดจาก Tolerance และล็อกไว้ ณ วันบันทึก · ครั้งถัดไปกรอกแค่ค่าที่อ่านได้</p></div>
-        <button style={S.primaryBtn} onClick={() => setEditing(newCheck())}><Plus size={15} /> บันทึกผลตรวจสอบ</button>
-      </div>
-      {(() => {
-        const bySeq = dailyChecks.slice().sort((a, b) => ((b.date || "") + (b.time || "")).localeCompare((a.date || "") + (a.time || "")));
-        const last = bySeq[0];
-        const now = Date.now();
-        const failed90 = dailyChecks.filter(c => c.result === false && c.date && (now - new Date(c.date + "T00:00:00")) <= 90 * 86400000).length;
-        return (
-          <div style={{ ...S.notesBox, marginTop: 0, marginBottom: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <CheckCircle2 size={14} color={last ? (last.result === false ? "var(--red)" : "var(--green)") : "var(--muted)"} style={{ flexShrink: 0 }} />
-            {last ? (
-              <span>
-                Daily check ล่าสุด {fmtDate(last.date)}: <b>{last.result === false ? "ไม่ผ่าน" : last.result === true ? "ผ่าน" : "-"}</b> · ไม่ผ่านใน 90 วัน {failed90} ครั้ง · ทั้งหมด {dailyChecks.length} รายการ
-              </span>
-            ) : (
-              <span>ยังไม่มี Daily check ของเครื่องมือนี้</span>
-            )}
-            <span style={{ color: "var(--muted)" }}>— บันทึกที่เมนู "Daily check" ไม่ต้องกรอกซ้ำที่นี่</span>
-          </div>
-        );
-      })()}
-      {unlocked.length > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5 }}>
-          <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
-          <span style={{ flex: 1 }}><b>{unlocked.length}</b> รายการเก่ายังไม่ได้ล็อกเกณฑ์ — ผลของรายการเหล่านี้จะเปลี่ยนตาม Tolerance ปัจจุบันจนกว่าจะล็อก</span>
-          <button style={S.smallBtn} onClick={lockLegacy}>ล็อกด้วยเกณฑ์ปัจจุบัน</button>
-        </div>
-      )}
-      <div style={{ ...S.tableWrap, overflowX: "auto" }}>
-        <table style={{ ...S.table, minWidth: 680 }}>
-          <thead><tr>{COLS.map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
-          <tbody>
-            {groups.map(g => {
-              const nFail = g.rows.filter(x => x.calc.result === "FAIL").length;
-              const nWarn = g.rows.filter(x => x.calc.result === "WARNING").length;
-              const until = g.round
-                ? (g.round.nextDate ? `ถึง ${fmtDate(g.round.nextDate)}` : `ถึงปัจจุบัน${g.instrument?.nextDue ? ` (ครบกำหนด ${fmtDate(g.instrument.nextDue)})` : ""}`)
-                : "";
-              return (
-                <Fragment key={g.key}>
-                  <tr>
-                    <td colSpan={COLS.length} style={{ ...S.td, background: "#F5F8F7", borderTop: "2px solid var(--line)" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5 }}>
-                        {g.round
-                          ? <span>รอบใบรับรอง <b style={mono}>{g.round.certificateNo || "-"}</b> · สอบเทียบ {fmtDate(g.round.date)} {until}</span>
-                          : <span><b>ก่อนมีใบรับรองในระบบ</b></span>}
-                        {equipment.length > 1 && g.instrument && <span style={{ color: "var(--muted)" }}>{g.instrument.code}</span>}
-                        <span style={{ color: "var(--muted)" }}>{g.rows.length} ครั้ง</span>
-                        {nWarn > 0 && <span style={{ ...S.tag, borderColor: "var(--amber)", color: "var(--amber)" }}>WARNING {nWarn}</span>}
-                        {nFail > 0 && <span style={{ ...S.tag, borderColor: "var(--red)", color: "var(--red)" }}>FAIL {nFail}</span>}
-                      </div>
-                    </td>
-                  </tr>
-                  {g.rows.map(({ row, calc }) => {
-                    const color = calc.result === "PASS" ? "var(--green)" : calc.result === "WARNING" ? "var(--amber)" : calc.result === "FAIL" ? "var(--red)" : "var(--muted)";
-                    const changed = criteriaChanged(g.instrument, row, ["tolerance", "toleranceType"]);
-                    return (
-                      <tr key={row.id} style={S.tr}>
-                        <td style={S.td}>{fmtDate(row.checkDate)}</td>
-                        <td style={S.td}>{row.parameter}<div style={{ fontSize: 11, color: "var(--muted)" }}>{[row.checkType !== "Intermediate Check" ? row.checkType : "", row.checkItem].filter(Boolean).join(" · ")}</div></td>
-                        <td style={{ ...S.td, ...mono }}>{calc.correctedMean != null ? calc.correctedMean.toFixed(4) : "-"}</td>
-                        <td style={{ ...S.td, ...mono }}>{calc.bias != null ? calc.bias.toFixed(4) : "-"}</td>
-                        <td style={{ ...S.td, ...mono, fontSize: 11.5 }} title={calc.lwl != null ? `Warning: ${calc.lwl.toFixed(3)} – ${calc.uwl.toFixed(3)}` : ""}>{calc.lal != null ? `${calc.lal.toFixed(3)} – ${calc.ual.toFixed(3)}` : "-"}</td>
-                        <td style={S.td}>
-                          <span title={row.criteriaAt ? `เกณฑ์ ณ วันบันทึก: ${criteriaText(row.criteriaAt)}` : "ยังไม่ล็อกเกณฑ์ — ใช้ Tolerance ปัจจุบัน"} style={{ ...S.tag, borderColor: color, color }}>{calc.result}</span>
-                          {changed && <div style={{ fontSize: 10.5, color: "var(--amber)", marginTop: 2 }}>🔒 เกณฑ์เดิม ±{row.criteriaAt.tolerance}</div>}
-                          {!row.criteriaAt && <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2 }}>ยังไม่ล็อก</div>}
-                        </td>
-                        <td style={S.td}><div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(row)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(row.id)}><Trash2 size={13} /></button></div></td>
-                      </tr>
-                    );
-                  })}
-                </Fragment>
-              );
-            })}
-            {sorted.length === 0 && <tr><td style={S.td} colSpan={COLS.length}><div style={S.emptyState}>ยังไม่มีบันทึกการตรวจสอบระหว่างรอบ</div></td></tr>}
-          </tbody>
-        </table>
-      </div>
-      {editing && <IntermediateCheckForm row={editing} equipment={equipment} certificates={certificates} currentDisplayName={currentDisplayName} onCancel={() => setEditing(null)} onSave={upsert} />}
-    </div>
-  );
-}
 function IntermediateCheckForm({ row, equipment, certificates = [], currentDisplayName, onCancel, onSave }) {
   const [f, setF] = useState(row.checkedBy ? row : { ...row, checkedBy: row.checkedBy || currentDisplayName });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -5718,7 +5579,7 @@ function CalibrationRecordsHub({
   uncertaintyBudgets, setUncertaintyBudgets,
   actionImpacts, setActionImpacts,
   approvalRecords, setApprovalRecords,
-  notify, currentDisplayName = "",
+  notify, currentDisplayName = "", onOpenChecks = null,
 }) {
   const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
   // Open page (sheet key); null = default for the chosen instrument.
@@ -5941,6 +5802,7 @@ function CalibrationRecordsHub({
   const within90 = (d) => d && (Date.now() - new Date(d + "T00:00:00")) <= 90 * 86400000;
   const icSorted = scopedChecks.slice().sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""));
   const icFail90 = scopedChecks.filter(c => within90(c.checkDate) && calcIntermediateCheck(c, instrument).result === "FAIL").length;
+  const dcFail90 = scopedDailyChecks.filter(c => within90(c.date) && c.result === false).length;
   const budgetsN = new Set(scopedBudgets.map(b => b.budgetId)).size;
   const openActions = scopedActionImpacts.filter(a => a.actionStatus !== "ปิดเรื่อง").length;
   const apSorted = scopedApprovalRecords.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
@@ -5957,8 +5819,8 @@ function CalibrationRecordsHub({
       flag: calSum && calSum.decision !== "PASS" ? { text: calSum.decision, tone: decisionTone(calSum.decision) }
         : unsignedRound ? { text: "รอลงชื่อประเมิน", tone: "var(--amber)" } : null },
     { key: "checks", sheets: "SHEET 04", title: "ตรวจสอบระหว่างรอบ",
-      sub: icSorted.length ? `${icSorted.length} ครั้ง · ล่าสุด ${fmtDate(icSorted[0].checkDate)}` : "ยังไม่มีบันทึก",
-      flag: icFail90 ? { text: `ไม่ผ่าน ${icFail90} ครั้ง (90 วัน)`, tone: "var(--red)" } : null },
+      sub: `Daily ${scopedDailyChecks.length} · Intermediate ${icSorted.length}`,
+      flag: (icFail90 + dcFail90) ? { text: `ไม่ผ่าน ${icFail90 + dcFail90} ครั้ง (90 วัน)`, tone: "var(--red)" } : null },
     { key: "uncertainty", sheets: "SHEET 05", title: "Uncertainty Budget",
       sub: budgetsN ? `${budgetsN} Budget · ${scopedBudgets.length} องค์ประกอบ` : "ยังไม่มี Budget" },
     { key: "actions", sheets: "SHEET 08", title: "การดำเนินการ / ผลกระทบ",
@@ -6051,11 +5913,16 @@ function CalibrationRecordsHub({
         />
       )}
       {current === "checks" && (
-        <IntermediateCheckTab
-          equipment={scopedEquipment} checks={scopedChecks} dailyChecks={scopedDailyChecks} certificates={scopedCertificates}
-          setChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName}
-        />
+        <div>
+          <div style={S.detailHead}>
+            <div>
+              <h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Daily / Intermediate Check)</h2>
+              <p style={S.h2sub}>ประวัติรวมทั้งสองแบบ แบ่งตามรอบใบรับรอง · บันทึกได้ที่เมนู "ตรวจเช็คเครื่องมือ"</p>
+            </div>
+            {onOpenChecks && <button style={S.primaryBtn} onClick={() => onOpenChecks(selectedInstrumentId)}><ClipboardCheck size={15} /> ไปบันทึกที่หน้าตรวจเช็คเครื่องมือ</button>}
+          </div>
+          <CheckHistoryTable instrument={instrument} dailyChecks={scopedDailyChecks} checks={scopedChecks} certificates={scopedCertificates} readOnly />
+        </div>
       )}
       {current === "uncertainty" && (
         <UncertaintyBudgetTab
@@ -6152,19 +6019,167 @@ function InstrumentStatusCard({ instrument, certificates, intermediateChecks, da
   );
 }
 
+// ---- Shared by the "ตรวจเช็คเครื่องมือ" page and the calibration hub ----
+// Types that have a dedicated daily-check form.
+const DAILY_CHECK_TYPES = ["เครื่องชั่ง", "pH Meter", "EC Meter", "Polarimeter", "Oven", "เครื่องควบคุมความชื้น", "Cooling Bath", "Refractometer", "Glass Thermometer"];
+const hasDailyForm = (e) => !!e && DAILY_CHECK_TYPES.includes(e.type);
+// New Intermediate check: carries the set-up over from the instrument's
+// previous check (or its Sheet 01 parameter/unit the first time); if a newer
+// certificate arrived since then, the carried Correction is swapped for the
+// new certificate's value and a notice explains it.
+function newIntermediateCheckFor(inst, checks, certificates, currentDisplayName) {
+  const base = { ...blankIntermediateCheck(inst?.id || ""), checkedBy: currentDisplayName };
+  const last = checks.filter(c => c.instrumentId === base.instrumentId).sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""))[0];
+  if (!last) return { ...base, parameter: inst?.measuredParameter || "", unit: inst?.calUnit || "" };
+  const carry = ["parameter", "checkType", "checkItem", "checkStandard", "checkStandardId", "referenceValue", "uOfCheckStandard", "unit", "appliedCorrection", "correctionSourceCert", "reviewedBy"];
+  const row = { ...base, ...Object.fromEntries(carry.map(k => [k, last[k] ?? ""])) };
+  const newest = latestCertDate(certificates.filter(c => c.instrumentId === row.instrumentId));
+  if (newest && newest > (last.checkDate || "")) {
+    const sug = suggestCorrectionFromCerts(certificates, row.instrumentId, row.parameter, row.referenceValue);
+    if (sug && String(sug.value) !== String(row.appliedCorrection)) {
+      return { ...row, appliedCorrection: String(sug.value), correctionSourceCert: sug.cert.certificateNo || "",
+        _notice: `มีใบรับรองใหม่ ${sug.cert.certificateNo || ""} (สอบเทียบ ${fmtDate(newest)}) — เปลี่ยน Correction จาก ${row.appliedCorrection === "" ? "ว่าง" : row.appliedCorrection} เป็น ${sug.value} ให้แล้ว` };
+    }
+    if (!sug) return { ...row, _notice: `มีใบรับรองใหม่ (สอบเทียบ ${fmtDate(newest)}) แต่หาจุดที่ตรงกับค่าอ้างอิงไม่ได้ — ตรวจสอบ Correction ด้วยตนเอง` };
+  }
+  return row;
+}
+// Save: strips UI-only fields and locks the criteria on first save.
+function saveIntermediateCheckInto(checks, row, instrument) {
+  const { _notice, ...clean } = row;
+  const rec = clean.criteriaAt ? clean : { ...clean, criteriaAt: snapshotCriteria(instrument) };
+  return checks.some(c => c.id === rec.id) ? checks.map(c => c.id === rec.id ? rec : c) : [rec, ...checks];
+}
+// One history for both kinds of check (Sheet 04), newest first, grouped by
+// the calibration round each check fell in. readOnly hides edit/delete.
+function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certificates = [], readOnly = false, onEditDaily, onEditIc, onDeleteDaily, onDeleteIc }) {
+  const [kind, setKind] = useState("all");
+  const mono = { fontFamily: "var(--font-mono)" };
+  const rows = [
+    ...dailyChecks.map(c => ({ kind: "daily", key: c.id, date: c.date || "", time: c.time || "", rec: c,
+      result: c.result === true ? "PASS" : c.result === false ? "FAIL" : "-" })),
+    ...checks.map(c => { const calc = calcIntermediateCheck(c, instrument); return { kind: "ic", key: c.id, date: c.checkDate || "", time: "", rec: c, calc, result: calc.result }; }),
+  ].filter(r => kind === "all" || r.kind === kind)
+    .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const rounds = instrument ? calibrationRounds(certificates, instrument.id) : [];
+  const groups = [];
+  rows.forEach(r => {
+    const round = roundOfDate(rounds, r.date);
+    const k = round?.date || "none";
+    let g = groups.find(x => x.k === k);
+    if (!g) { g = { k, round, rows: [] }; groups.push(g); }
+    g.rows.push(r);
+  });
+  const color = (res) => res === "PASS" ? "var(--green)" : res === "WARNING" ? "var(--amber)" : res === "FAIL" ? "var(--red)" : "var(--muted)";
+  const RESULT_TH = { PASS: "ผ่าน", FAIL: "ไม่ผ่าน", WARNING: "WARNING" };
+  const COLS = ["วันที่", "ประเภท", "รายละเอียด", "ผล", "ผู้ตรวจ / อนุมัติ", ...(readOnly ? [] : [""])];
+  const kindBadge = (k) => k === "daily"
+    ? <span style={{ ...S.tag, borderColor: "#8FB4DF", color: "#1D5FB8", background: "#EAF2FD" }}>Daily</span>
+    : <span style={{ ...S.tag, borderColor: "#C4B2E6", color: "#6A43B5", background: "#F3EEFB" }}>Intermediate</span>;
+  const nDaily = dailyChecks.length, nIc = checks.length;
+  return (
+    <div>
+      <SubSwitch value={kind} onChange={setKind} options={[
+        { key: "all", label: "ทั้งหมด", badge: String(nDaily + nIc) },
+        { key: "daily", label: "Daily check", badge: String(nDaily) },
+        { key: "ic", label: "Intermediate check", badge: String(nIc) },
+      ]} />
+      <div style={{ ...S.tableWrap, overflowX: "auto" }}>
+        <table style={{ ...S.table, minWidth: 720 }}>
+          <thead><tr>{COLS.map((h, i) => <th key={i} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {groups.map(g => {
+              const nFail = g.rows.filter(r => r.result === "FAIL").length;
+              const nWarn = g.rows.filter(r => r.result === "WARNING").length;
+              const until = g.round ? (g.round.nextDate ? `ถึง ${fmtDate(g.round.nextDate)}` : `ถึงปัจจุบัน${instrument?.nextDue ? ` (ครบกำหนด ${fmtDate(instrument.nextDue)})` : ""}`) : "";
+              return (
+                <Fragment key={g.k}>
+                  <tr>
+                    <td colSpan={COLS.length} style={{ ...S.td, background: "#F5F8F7", borderTop: "2px solid var(--line)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5 }}>
+                        {g.round
+                          ? <span>รอบใบรับรอง <b style={mono}>{g.round.certificateNo || "-"}</b> · สอบเทียบ {fmtDate(g.round.date)} {until}</span>
+                          : <b>ก่อนมีใบรับรองในระบบ</b>}
+                        <span style={{ color: "var(--muted)" }}>Daily {g.rows.filter(r => r.kind === "daily").length} · Intermediate {g.rows.filter(r => r.kind === "ic").length}</span>
+                        {nWarn > 0 && <span style={{ ...S.tag, borderColor: "var(--amber)", color: "var(--amber)" }}>WARNING {nWarn}</span>}
+                        {nFail > 0 && <span style={{ ...S.tag, borderColor: "var(--red)", color: "var(--red)" }}>ไม่ผ่าน {nFail}</span>}
+                      </div>
+                    </td>
+                  </tr>
+                  {g.rows.map(r => {
+                    const c = r.rec;
+                    const changed = r.kind === "ic" && criteriaChanged(instrument, c, ["tolerance", "toleranceType"]);
+                    return (
+                      <tr key={r.key} style={{ ...S.tr, cursor: readOnly ? "default" : "pointer" }}
+                        onClick={readOnly ? undefined : () => (r.kind === "daily" ? onEditDaily(c) : onEditIc(c))}>
+                        <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtDate(r.date)}{r.time && <span style={{ color: "var(--muted)", marginLeft: 6, fontSize: 11.5 }}>{r.time}</span>}</td>
+                        <td style={S.td}>{kindBadge(r.kind)}</td>
+                        <td style={{ ...S.td, fontSize: 12.5 }}>
+                          {r.kind === "daily" ? <CheckPointsMini c={c} /> : (
+                            <div>
+                              <div>{c.parameter || "-"}{c.checkItem ? <span style={{ color: "var(--muted)" }}> · {c.checkItem}</span> : null}</div>
+                              <div style={{ ...mono, fontSize: 11.5, color: "#4B5C72" }} title={r.calc.lwl != null ? `Warning: ${r.calc.lwl.toFixed(3)} – ${r.calc.uwl.toFixed(3)}` : ""}>
+                                ค่าเฉลี่ยหลังแก้ {r.calc.correctedMean != null ? r.calc.correctedMean.toFixed(4) : "-"} · Bias {r.calc.bias != null ? r.calc.bias.toFixed(4) : "-"}
+                                {r.calc.lal != null ? ` · ช่วงยอมรับ ${r.calc.lal.toFixed(3)} – ${r.calc.ual.toFixed(3)}` : ""}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                        <td style={S.td}>
+                          <span title={r.kind === "ic" ? (c.criteriaAt ? `เกณฑ์ ณ วันบันทึก: ${criteriaText(c.criteriaAt)}` : "ยังไม่ล็อกเกณฑ์") : ""}
+                            style={{ ...S.tag, borderColor: color(r.result), color: color(r.result) }}>{RESULT_TH[r.result] || r.result}</span>
+                          {changed && <div style={{ fontSize: 10.5, color: "var(--amber)", marginTop: 2 }}>🔒 เกณฑ์เดิม ±{c.criteriaAt.tolerance}</div>}
+                          {r.kind === "ic" && !c.criteriaAt && <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2 }}>ยังไม่ล็อก</div>}
+                        </td>
+                        <td style={{ ...S.td, fontSize: 12.5 }}>
+                          {c.checkedBy || "-"}
+                          {r.kind === "daily" && (c.approved
+                            ? <div style={{ fontSize: 11, color: "var(--green)" }}>อนุมัติแล้ว{c.approvedByName ? ` · ${c.approvedByName}` : ""}</div>
+                            : <div style={{ fontSize: 11, color: "var(--amber)" }}>รออนุมัติ</div>)}
+                          {r.kind === "ic" && c.reviewedBy && <div style={{ fontSize: 11, color: "var(--muted)" }}>ทบทวน: {c.reviewedBy}</div>}
+                        </td>
+                        {!readOnly && (
+                          <td style={S.td} onClick={e => e.stopPropagation()}>
+                            <div style={{ display: "flex", gap: 4 }}>
+                              <button style={S.iconBtnSm} onClick={() => (r.kind === "daily" ? onEditDaily(c) : onEditIc(c))}><Pencil size={13} /></button>
+                              <button style={S.iconBtnSm} onClick={() => { if (window.confirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) (r.kind === "daily" ? onDeleteDaily(c.id) : onDeleteIc(c.id)); }}><Trash2 size={13} /></button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </Fragment>
+              );
+            })}
+            {rows.length === 0 && <tr><td style={S.td} colSpan={COLS.length}><div style={S.emptyState}>ยังไม่มีบันทึกการตรวจเช็คของเครื่องนี้</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // Unified "Daily check" tab — one dropdown covering every equipment type
 // that has a dedicated daily-check design: เครื่องชั่ง (weight check),
 // pH Meter / EC Meter (buffer / standard-solution check), Polarimeter
 // (quartz control plate check), and Oven (temperature check). Which form
 // opens (DailyCheckForm vs MeterCheckForm) is decided per selected item's
 // type, so this tab stays a single entry point instead of splitting by type.
-function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, notify, initialCheckId, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
-  const checkable = equipment
-    .filter(e => e.type === "เครื่องชั่ง" || e.type === "pH Meter" || e.type === "EC Meter" || e.type === "Polarimeter" || e.type === "Oven" || e.type === "เครื่องควบคุมความชื้น" || e.type === "Cooling Bath" || e.type === "Refractometer" || e.type === "Glass Thermometer")
+// "ตรวจเช็คเครื่องมือ": one place for every between-calibration check —
+// type-specific Daily checks and general Intermediate / Performance checks
+// (MPIR Sheet 04). Every calibrated instrument is listed; the Daily button
+// only appears for types that have a daily form. QR deep links still open
+// the Daily form straight away.
+function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, intermediateChecks = [], setIntermediateChecks = null, notify, initialCheckId, initialEquipId = null, guestMode = false, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+  const checkable = useMemo(() => equipment
+    .filter(e => e.type !== "เครื่องปรับอากาศ" && (!guestMode || hasDailyForm(e)))
     .slice()
-    .sort((a, b) => alphaCompare(a.code, b.code));
-  const [equipId, setEquipId] = useState(checkable[0]?.id || "");
+    .sort((a, b) => alphaCompare(a.code, b.code)), [equipment, guestMode]);
+  const [equipId, setEquipId] = useState(() => initialEquipId || checkable.find(hasDailyForm)?.id || checkable[0]?.id || "");
   const [editing, setEditing] = useState(null);
+  const [editingIc, setEditingIc] = useState(null);
+  useEffect(() => { if (initialEquipId) setEquipId(initialEquipId); }, [initialEquipId]);
   const [showShare, setShowShare] = useState(false);
   const deepLinkHandled = useRef(false);
 
@@ -6185,7 +6200,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
     if (!target) return;
     deepLinkHandled.current = true;
     setEquipId(target.id);
-    setEditing(target.type === "เครื่องชั่ง" ? blankScaleCheckEntry(target.id) : blankMeterCheckEntry(target.id));
+    if (hasDailyForm(target)) setEditing(target.type === "เครื่องชั่ง" ? blankScaleCheckEntry(target.id) : blankMeterCheckEntry(target.id));
   }, [initialCheckId, checkable]);
 
   const equip = equipment.find(e => e.id === equipId);
@@ -6208,6 +6223,22 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
     setEditing(null);
   }
   function remove(id) { setDailyChecks(dailyChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+  const canIc = !guestMode && !!setIntermediateChecks;
+  const icForEquip = intermediateChecks.filter(c => c.instrumentId === equipId);
+  const byIdAll = Object.fromEntries(equipment.map(e => [e.id, e]));
+  function saveIc(row) {
+    setIntermediateChecks(saveIntermediateCheckInto(intermediateChecks, row, byIdAll[row.instrumentId]));
+    notify("บันทึก Intermediate check แล้ว");
+    setEditingIc(null);
+  }
+  function removeIc(id) { setIntermediateChecks(intermediateChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+  const unlockedIc = icForEquip.filter(c => !c.criteriaAt);
+  function lockLegacyIc() {
+    if (!equip || !snapshotCriteria(equip)) return;
+    if (!window.confirm(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการเก่า ด้วย Tolerance ปัจจุบันของเครื่องมือ?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
+    setIntermediateChecks(intermediateChecks.map(c => (c.instrumentId === equipId && !c.criteriaAt ? { ...c, criteriaAt: snapshotCriteria(equip) } : c)));
+    notify(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการแล้ว`);
+  }
   function approve(entry) {
     upsert({
       ...entry,
@@ -6220,10 +6251,10 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
 
   return (
     <div>
-      <TabHeader title="ตรวจเช็คเครื่องมือประจำวัน" sub="บันทึกผลตรวจสอบเครื่องชั่ง, pH Meter, EC Meter, Polarimeter และ Oven แต่ละวัน คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — หรือสแกน QR ที่ติดบนเครื่องเพื่อเปิดตรงเครื่องนั้นได้เลย" />
+      <TabHeader title="ตรวจเช็คเครื่องมือ" sub="Daily check และ Intermediate check ระหว่างรอบสอบเทียบ (Sheet 04) รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที" />
 
       {checkable.length === 0 ? (
-        <EmptyState text={'ยังไม่มีเครื่องมือประเภท "เครื่องชั่ง", "pH Meter", "EC Meter", "Polarimeter" หรือ "Oven" — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่'} />
+        <EmptyState text="ยังไม่มีเครื่องมือ — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่" />
       ) : (
         <>
           <Toolbar>
@@ -6232,13 +6263,30 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
                 <option key={e.id} value={e.id}>{e.code}{e.name ? ` — ${e.name}` : ""} · {e.type}{e.location ? ` (${e.location})` : ""}</option>
               ))}
             </select>
-            <button
-              style={S.primaryBtn}
-              onClick={() => setEditing(isScale ? blankScaleCheckEntry(equipId) : blankMeterCheckEntry(equipId))}
-            >
-              <Plus size={15} /> บันทึกการตรวจวันนี้
-            </button>
+            {hasDailyForm(equip) && (
+              <button
+                style={S.primaryBtn}
+                onClick={() => setEditing(isScale ? blankScaleCheckEntry(equipId) : blankMeterCheckEntry(equipId))}
+              >
+                <Plus size={15} /> Daily check วันนี้
+              </button>
+            )}
+            {canIc && equip && (
+              <button style={hasDailyForm(equip) ? S.ghostBtn : S.primaryBtn} onClick={() => setEditingIc(newIntermediateCheckFor(equip, intermediateChecks, certificates, currentDisplayName))}>
+                <Plus size={15} /> Intermediate check
+              </button>
+            )}
           </Toolbar>
+          {equip && !hasDailyForm(equip) && (
+            <div style={{ fontSize: 12, color: "var(--muted)", margin: "-4px 0 12px" }}>เครื่องประเภท "{equip.type || "-"}" ยังไม่มีฟอร์ม Daily check — บันทึกเป็น Intermediate check ได้</div>
+          )}
+          {canIc && unlockedIc.length > 0 && snapshotCriteria(equip) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5 }}>
+              <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1 }}><b>{unlockedIc.length}</b> รายการ Intermediate check เก่ายังไม่ได้ล็อกเกณฑ์ — ผลจะเปลี่ยนตาม Tolerance ปัจจุบันจนกว่าจะล็อก</span>
+              <button style={S.smallBtn} onClick={lockLegacyIc}>ล็อกด้วยเกณฑ์ปัจจุบัน</button>
+            </div>
+          )}
 
           {equip && (
             <div style={{ ...S.panel, display: "flex", gap: 14, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
@@ -6284,7 +6332,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
             );
           })()}
 
-          {equip && (
+          {equip && hasDailyForm(equip) && (
             <div style={S.statGrid}>
               <div style={S.statCard}>
                 <div style={S.statTop}><Clock size={16} color="var(--teal)" /><span style={S.statLabel}>ตรวจล่าสุด</span></div>
@@ -6320,21 +6368,15 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
             </div>
           )}
 
-          <Table
-            cols={["วันที่ / เวลา", "ผู้ตรวจสอบ", "จุดตรวจ", "ผล", "การอนุมัติ", ""]}
-            onRowClick={(i) => setEditing(checks[i])}
-            rows={checks.map(c => [
-              <div>{fmtDate(c.date)}<span style={{ color: "var(--muted)", marginLeft: 6, fontSize: 11.5 }}>{c.time}</span></div>,
-              c.checkedBy || "-",
-              <CheckPointsMini c={c} />,
-              <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>,
-              c.approved
-                ? <Tag color="var(--green)">อนุมัติแล้ว{c.approvedByName ? ` · ${c.approvedByName}` : ""}</Tag>
-                : <Tag color="var(--amber)">รออนุมัติ</Tag>,
-              <RowActions onEdit={() => setEditing(c)} onDelete={() => remove(c.id)} confirmMessage="ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้" />,
-            ])}
-            empty="ยังไม่มีรายการตรวจสอบสำหรับเครื่องนี้"
-          />
+          {equip && (
+            <CheckHistoryTable
+              key={equip.id}
+              instrument={equip} dailyChecks={checks} checks={icForEquip} certificates={certificates}
+              readOnly={false}
+              onEditDaily={c => setEditing(c)} onDeleteDaily={remove}
+              onEditIc={c => (canIc ? setEditingIc(c) : null)} onDeleteIc={id => (canIc ? removeIc(id) : null)}
+            />
+          )}
         </>
       )}
 
@@ -6364,6 +6406,10 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
           onApprove={approve}
         />
       ))}
+      {editingIc && (
+        <IntermediateCheckForm row={editingIc} equipment={equipment.filter(e => e.id === editingIc.instrumentId)} certificates={certificates}
+          currentDisplayName={currentDisplayName} onCancel={() => setEditingIc(null)} onSave={saveIc} />
+      )}
       {showShare && equip && <EquipQRLinkModal equip={equip} onClose={() => setShowShare(false)} />}
     </div>
   );
