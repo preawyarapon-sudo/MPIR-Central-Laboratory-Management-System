@@ -4189,6 +4189,145 @@ function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
 function calPointLabel(c) {
   return `${c.parameter || ""}${c.calibrationPoint !== "" && c.calibrationPoint != null ? ` @ ${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : ""}`;
 }
+/* ---------- Sheet 06 trend chart (plain SVG, no chart library needed) ----------
+   One small line chart per calibration point: Error per round (dots + line),
+   U as error bars, ±Tolerance as dashed red limits, and a dashed projection
+   to the next round from the latest drift rate. */
+function TrendChart({ s, width = 300, height = 180 }) {
+  const pts = s.points;
+  const pad = { l: 46, r: 18, t: 12, b: 26 };
+  const W = width - pad.l - pad.r, H = height - pad.t - pad.b;
+  const t = (d) => new Date(d + "T00:00:00").getTime();
+  const xs = [...pts.map(p => t(p.date)), ...(s.projection ? [t(s.projection.date)] : [])];
+  let x0 = Math.min(...xs), x1 = Math.max(...xs);
+  if (x0 === x1) { x0 -= 180 * 86400000; x1 += 180 * 86400000; }
+  const ys = [0];
+  pts.forEach(p => { if (p.error != null) ys.push(p.error + (p.U || 0), p.error - (p.U || 0)); if (p.tol != null) ys.push(p.tol, -p.tol); });
+  if (s.projection) ys.push(s.projection.value);
+  let y0 = Math.min(...ys), y1 = Math.max(...ys);
+  if (y0 === y1) { y0 -= 1; y1 += 1; }
+  const span = y1 - y0; y0 -= span * 0.1; y1 += span * 0.1;
+  const X = (d) => pad.l + ((t(d) - x0) / (x1 - x0)) * W;
+  const Y = (v) => pad.t + (1 - (v - y0) / (y1 - y0)) * H;
+  const lastTol = pts.filter(p => p.tol != null).map(p => p.tol).pop();
+  // Gridlines where they mean something: 0 and ±Tolerance (fallback: evenly spaced).
+  const ticks = lastTol != null ? [-lastTol, 0, lastTol] : [y0 + (y1 - y0) * 0.1, (y0 + y1) / 2, y1 - (y1 - y0) * 0.1];
+  const fmt = (v) => { const a = Math.abs(v); return a >= 100 ? v.toFixed(0) : a >= 1 ? v.toFixed(2) : v.toFixed(3); };
+  const withErr = pts.filter(p => p.error != null);
+  const tolPts = pts.filter(p => p.tol != null);
+  const line = (arr, f) => arr.map((p, i) => `${i ? "L" : "M"}${X(p.date).toFixed(1)},${Y(f(p)).toFixed(1)}`).join(" ");
+  const last = withErr[withErr.length - 1];
+  const dotColor = (d) => CALIB_DECISION_COLOR[d] || "var(--teal-dark)";
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", display: "block" }} role="img" aria-label={`กราฟแนวโน้ม ${s.label}`}>
+      {ticks.map((v, i) => (
+        <g key={i}>
+          <line x1={pad.l} x2={width - pad.r} y1={Y(v)} y2={Y(v)} stroke="#EEF2F6" />
+          <text x={pad.l - 6} y={Y(v) + 3.5} textAnchor="end" fontSize="9.5" fill="#8795A6" fontFamily="var(--font-mono)">{fmt(v)}</text>
+        </g>
+      ))}
+      <line x1={pad.l} x2={width - pad.r} y1={Y(0)} y2={Y(0)} stroke="#B4BFCC" strokeWidth="1" />
+      {tolPts.length > 0 && <>
+        {[1, -1].map(sg => (
+          <path key={sg} fill="none" stroke="var(--red)" strokeDasharray="4 3" strokeWidth="1.2"
+            d={`M${pad.l},${Y(sg * tolPts[0].tol)} ${tolPts.map(p => `L${X(p.date).toFixed(1)},${Y(sg * p.tol).toFixed(1)}`).join(" ")} L${width - pad.r},${Y(sg * lastTol)}`} />
+        ))}
+      </>}
+      {withErr.map(p => p.U ? (
+        <g key={`u${p.date}`} stroke="#9DB6D3" strokeWidth="1.2">
+          <line x1={X(p.date)} x2={X(p.date)} y1={Y(p.error + p.U)} y2={Y(p.error - p.U)} />
+          <line x1={X(p.date) - 4} x2={X(p.date) + 4} y1={Y(p.error + p.U)} y2={Y(p.error + p.U)} />
+          <line x1={X(p.date) - 4} x2={X(p.date) + 4} y1={Y(p.error - p.U)} y2={Y(p.error - p.U)} />
+        </g>
+      ) : null)}
+      {withErr.length > 1 && <path d={line(withErr, p => p.error)} fill="none" stroke="var(--teal-dark)" strokeWidth="2" />}
+      {s.projection && last && (
+        <>
+          <path d={`M${X(last.date)},${Y(last.error)} L${X(s.projection.date)},${Y(s.projection.value)}`} fill="none" stroke="var(--amber)" strokeWidth="1.5" strokeDasharray="3 3" />
+          <circle cx={X(s.projection.date)} cy={Y(s.projection.value)} r="3.5" fill="#fff" stroke="var(--amber)" strokeWidth="1.5">
+            <title>{`คาดการณ์รอบถัดไป (${fmtDate(s.projection.date)}): ${round4(s.projection.value)}`}</title>
+          </circle>
+        </>
+      )}
+      {withErr.map(p => (
+        <circle key={p.date} cx={X(p.date)} cy={Y(p.error)} r="4" fill={dotColor(p.decision)} stroke="#fff" strokeWidth="1.5">
+          <title>{`${fmtDate(p.date)} · ใบรับรอง ${p.certificateNo || "-"}\nError ${round4(p.error)}${p.U ? ` ± ${round4(p.U)}` : ""}${p.tol != null ? ` · Tolerance ± ${round4(p.tol)}` : ""} · ${p.decision}`}</title>
+        </circle>
+      ))}
+      {[...pts.map(p => p.date), ...(s.projection ? [s.projection.date] : [])].map((d, i, arr) => (
+        <text key={d + i} x={X(d)} y={height - 8} textAnchor="middle" fontSize="9.5" fill={s.projection && i === arr.length - 1 ? "var(--amber)" : "#8795A6"}>
+          {beYear(d)}{s.projection && i === arr.length - 1 ? "*" : ""}
+        </text>
+      ))}
+    </svg>
+  );
+}
+function TrendCharts({ equipment, certificates, trendById, query = "" }) {
+  const [param, setParam] = useState("");
+  const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
+  const map = new Map();
+  certificates.forEach(c => {
+    const key = `${c.instrumentId}|${c.parameter}|${c.calibrationPoint}`;
+    if (!map.has(key)) map.set(key, { key, c0: c, list: [] });
+    map.get(key).list.push(c);
+  });
+  let series = [...map.values()].map(({ key, c0, list }) => {
+    const instrument = byId[c0.instrumentId];
+    const pts = list.slice().sort((a, b) => (a.calibrationDate || "").localeCompare(b.calibrationDate || ""))
+      .filter(c => c.calibrationDate)
+      .map(c => { const ev = evaluateAcceptance(c, instrument); return { date: c.calibrationDate, certificateNo: c.certificateNo, error: derivedErrorOf(c), U: derivedUOf(c), tol: ev.tol, decision: ev.decision }; });
+    const lastCert = list.slice().sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || ""))[0];
+    const tr = lastCert ? trendById[lastCert.id] : null;
+    let projection = null;
+    if (tr && tr.projected != null && tr.yearsBetween && lastCert.calibrationDate) {
+      const d = new Date(lastCert.calibrationDate + "T00:00:00");
+      d.setDate(d.getDate() + Math.round(tr.yearsBetween * 365.25));
+      projection = { date: d.toISOString().slice(0, 10), value: tr.projected };
+    }
+    return { key, parameter: c0.parameter || "-", point: numOrNull(c0.calibrationPoint), label: calPointLabel(c0) || "-", unit: c0.unit || "", points: pts, projection, flag: tr?.flag || "", proposal: trendIntervalProposal(tr) };
+  }).filter(s => s.points.length);
+  const params = [...new Set(series.map(s => s.parameter))].sort(alphaCompare);
+  const ql = query.trim().toLowerCase();
+  series = series.filter(s => (!param || s.parameter === param) && (!ql || s.label.toLowerCase().includes(ql)))
+    .sort((a, b) => alphaCompare(a.parameter, b.parameter) || ((a.point ?? Number.MAX_VALUE) - (b.point ?? Number.MAX_VALUE)));
+  if (!map.size) return null;
+  const multiRound = series.some(s => s.points.length > 1);
+  return (
+    <div style={{ ...S.panel, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, fontSize: 13.5, color: "var(--teal-dark)" }}><TrendingUp size={15} /> กราฟแนวโน้ม Error ข้ามรอบสอบเทียบ</div>
+        <div style={{ flex: 1 }} />
+        {params.length > 1 && (
+          <select value={param} onChange={e => setParam(e.target.value)} style={{ ...S.select, height: 34 }}>
+            <option value="">ทุกพารามิเตอร์ ({series.length} จุด)</option>
+            {params.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        )}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 14, fontSize: 11.5, color: "#4B5C72", marginBottom: 10 }}>
+        <span><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="var(--teal-dark)" strokeWidth="2" /></svg> Error</span>
+        <span><svg width="10" height="12"><line x1="5" x2="5" y1="1" y2="11" stroke="#9DB6D3" strokeWidth="1.5" /></svg> ± U</span>
+        <span><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="var(--red)" strokeWidth="1.2" strokeDasharray="4 3" /></svg> ± Tolerance</span>
+        <span><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="var(--amber)" strokeWidth="1.5" strokeDasharray="3 3" /></svg> คาดการณ์รอบถัดไป (*)</span>
+        <span>สีจุด = ผลตัดสินรอบนั้น · ชี้ที่จุดเพื่อดูค่า</span>
+      </div>
+      {!multiRound && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>ตอนนี้มีใบรับรองรอบเดียว กราฟจะเป็นเส้นแนวโน้มเมื่อมีตั้งแต่ 2 รอบขึ้นไป</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        {series.map(s => (
+          <div key={s.key} style={{ border: "1px solid var(--line)", borderRadius: 10, padding: "8px 10px 4px", background: "#fff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12.5 }}>
+              <b style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={s.label}>{s.label}</b>
+              <span style={{ color: s.proposal && s.proposal !== "คงรอบเดิม" ? "var(--amber)" : "var(--muted)", fontSize: 11, whiteSpace: "nowrap" }}>{s.flag || `${s.points.length} รอบ`}</span>
+            </div>
+            <TrendChart s={s} />
+            {s.proposal && s.proposal !== "คงรอบเดิม" && <div style={{ fontSize: 11, color: "var(--amber)", paddingBottom: 4 }}>{s.proposal}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CalibrationResultsTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "" }) {
   const [q, setQ] = useState("");
   const byId = useMemo(() => Object.fromEntries(equipment.map(e => [e.id, e])), [equipment]);
@@ -4271,6 +4410,7 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
           <input type="checkbox" checked={detail} onChange={e => setDetail(e.target.checked)} /> แสดงค่าละเอียด (U, TUR, Drift, คาดการณ์)
         </label>
       </div>
+      <TrendCharts equipment={equipment} certificates={certificates} trendById={trendById} query={q} />
       <div style={{ ...S.tableWrap, overflowX: "auto" }}>
         <table style={{ ...S.table, minWidth: detail ? 1100 : 640 }}>
           <thead><tr>{HEAD.map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
