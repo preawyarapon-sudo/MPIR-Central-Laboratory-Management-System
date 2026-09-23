@@ -2592,6 +2592,40 @@ function CriteriaGridEditor({ equipment, setEquipment, notify, onClose }) {
   );
 }
 
+// Booking/borrowing history of one piece of equipment, shown as a tab of the
+// equipment card's history (replaces the old "แจ้งซ่อม" tab and the short
+// list that used to sit under the action buttons).
+function BookingHistoryList({ bookings = [] }) {
+  const list = bookings.slice().sort((a, b) => (b.startDate || b.requestedAt || "").localeCompare(a.startDate || a.requestedAt || ""));
+  const range = (b) => {
+    const start = `${fmtDate(b.startDate)}${b.startTime ? ` ${b.startTime}` : ""}`;
+    const endDate = b.endDate || b.dueBackDate;
+    const end = endDate ? `${endDate !== b.startDate ? fmtDate(endDate) : ""}${b.endTime ? ` ${b.endTime}` : ""}`.trim() : "";
+    return end ? `${start} – ${end}` : start;
+  };
+  return (
+    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+      {list.length === 0 && <EmptyState text="ยังไม่มีประวัติการจอง/ยืมของเครื่องมือนี้" small />}
+      {list.map(b => {
+        const overdue = isBookingOverdue(b);
+        return (
+          <div key={b.id} style={{ ...S.activityRow, alignItems: "center" }}>
+            <div style={S.activityDate}>{fmtDate(b.startDate)}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type] || b.type} · {b.requestedBy || "-"}</div>
+              <div style={S.activityDetail}>
+                {range(b)}{b.purpose ? ` · ${b.purpose}` : ""}
+              </div>
+              {b.returnedAt && <div style={{ fontSize: 11.5, color: "var(--green)", marginTop: 2 }}>คืนเมื่อ {fmtDate(String(b.returnedAt).slice(0, 10))}</div>}
+              {!b.returnedAt && overdue && <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 2 }}>เลยกำหนดคืน {fmtDate(b.dueBackDate)}</div>}
+            </div>
+            <Tag color={BOOKING_STATUS_COLOR[b.status] || "var(--muted)"}>{bookingHistoryStatusLabel(b)}</Tag>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 function EquipmentDetail({ item, certificates = [], activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity, onSaveDailyCheck, onApproveDailyCheck, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
@@ -2629,7 +2663,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
     all: activities.length,
     calibration: activities.filter(a => a.type === "calibration").length,
     repair: activities.filter(a => a.type === "repair").length,
-    request: activities.filter(a => a.type === "request").length,
+    bookings: bookings.length,
     other: activities.filter(a => a.type === "other").length,
     dailyCheck: sortedDailyChecks.length,
   };
@@ -2722,23 +2756,6 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
             <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
           </div>
 
-          {bookings.length > 0 && (
-            <div>
-              <div style={S.panelTitle}>ประวัติการจอง/ยืม</div>
-              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
-                {bookings.slice(0, 8).map(b => (
-                  <div key={b.id} style={{ ...S.activityRow, alignItems: "center" }}>
-                    <div style={S.activityDate}>{fmtDate(b.startDate)}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type]} · {b.requestedBy || "-"}</div>
-                      <div style={S.activityDetail}>{b.purpose || "-"}</div>
-                    </div>
-                    <Tag color={BOOKING_STATUS_COLOR[b.status]}>{bookingHistoryStatusLabel(b)}</Tag>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* RIGHT: history — filter tabs stay fixed, only the list below scrolls */}
@@ -2767,12 +2784,14 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
             {filterTab("all", "ทั้งหมด")}
             {filterTab("calibration", "สอบเทียบ")}
             {filterTab("repair", "ซ่อม")}
-            {filterTab("request", "แจ้งซ่อม")}
+            {filterTab("bookings", "จอง/ยืม")}
             {filterTab("other", "อื่นๆ")}
             {(isScale || isMeter) && filterTab("dailyCheck", "ตรวจเช็คประจำวัน")}
           </div>
 
-          {activityFilter === "dailyCheck" ? (
+          {activityFilter === "bookings" ? (
+            <BookingHistoryList bookings={bookings} />
+          ) : activityFilter === "dailyCheck" ? (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
               {sortedDailyChecks.length === 0 && <EmptyState text="ยังไม่มีรายการตรวจเช็คประจำวันสำหรับเครื่องมือนี้" small />}
               {sortedDailyChecks.map(c => (
@@ -6679,7 +6698,7 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
     all: activities.length,
     calibration: activities.filter(a => a.type === "calibration").length,
     repair: activities.filter(a => a.type === "repair").length,
-    request: activities.filter(a => a.type === "request").length,
+    bookings: bookings.length,
     other: activities.filter(a => a.type === "other").length,
     dailyCheck: sortedDailyChecks.length,
   };
@@ -6755,23 +6774,6 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
           )}
           {equip.notes && <div style={S.notesBox}>{equip.notes}</div>}
 
-          {bookings.length > 0 && (
-            <div>
-              <div style={S.panelTitle}>ประวัติการจอง/ยืม</div>
-              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
-                {bookings.slice(0, 8).map(b => (
-                  <div key={b.id} style={{ ...S.activityRow, alignItems: "center" }}>
-                    <div style={S.activityDate}>{fmtDate(b.startDate)}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={S.activityType}>{BOOKING_TYPE_LABEL[b.type]} · {b.requestedBy || "-"}</div>
-                      <div style={S.activityDetail}>{b.purpose || "-"}</div>
-                    </div>
-                    <Tag color={BOOKING_STATUS_COLOR[b.status]}>{bookingHistoryStatusLabel(b)}</Tag>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* RIGHT: history — read-only, no add/edit/delete affordances */}
@@ -6781,12 +6783,14 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
             {filterTab("all", "ทั้งหมด")}
             {filterTab("calibration", "สอบเทียบ")}
             {filterTab("repair", "ซ่อม")}
-            {filterTab("request", "แจ้งซ่อม")}
+            {filterTab("bookings", "จอง/ยืม")}
             {filterTab("other", "อื่นๆ")}
             {(isScale || isMeter) && filterTab("dailyCheck", "ตรวจเช็คประจำวัน")}
           </div>
 
-          {activityFilter === "dailyCheck" ? (
+          {activityFilter === "bookings" ? (
+            <BookingHistoryList bookings={bookings} />
+          ) : activityFilter === "dailyCheck" ? (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
               {sortedDailyChecks.length === 0 && <EmptyState text="ยังไม่มีรายการตรวจเช็คประจำวันสำหรับเครื่องมือนี้" small />}
               {sortedDailyChecks.map(c => (
