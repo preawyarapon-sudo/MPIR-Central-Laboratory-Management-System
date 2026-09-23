@@ -6,7 +6,8 @@ import {
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
   LayoutGrid, ZoomIn, QrCode, Printer, FileCheck2, BadgeCheck,
   Sparkles, ClipboardCheck, Gauge, TrendingUp,
-  ShieldCheck, FileWarning, Stamp, Check, BookOpen, ChevronDown, ChevronUp
+  ShieldCheck, FileWarning, Stamp, Check, BookOpen, ChevronDown, ChevronUp,
+  Scale, Microscope, Thermometer, Info, Table2
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
@@ -5178,6 +5179,47 @@ function ApprovalRecordForm({ row, equipment, certificates = [], onCancel, onSav
   return <WizardModal title="บันทึกการทบทวนและอนุมัติ" steps={steps} onCancel={onCancel} onSave={() => onSave(f)} saveDisabled={!f.instrumentId || !f.subject} />;
 }
 
+// One overall status per instrument for the picker badge, worst first.
+const INSTRUMENT_STATUS = {
+  overdue:  { label: "เกินกำหนด", color: "var(--red)", bg: "#FDF1F1", border: "#F2C4C4", icon: AlertTriangle },
+  fail:     { label: "ไม่ผ่านเกณฑ์", color: "var(--red)", bg: "#FDF1F1", border: "#F2C4C4", icon: XCircle },
+  inAction: { label: "อยู่ระหว่างดำเนินการ", color: "#1D5FB8", bg: "#EAF2FD", border: "#BFD5F3", icon: Info },
+  dueSoon:  { label: "ใกล้ครบกำหนด", color: "#A86A00", bg: "#FFF6E0", border: "#F3DDA5", icon: Clock },
+  pending:  { label: "รอตรวจสอบ", color: "#6B7A8C", bg: "#F1F4F7", border: "#DCE3EA", icon: Clock },
+  pass:     { label: "ผ่านการสอบเทียบ", color: "#1E8A57", bg: "#EAF7F0", border: "#BFE6D0", icon: CheckCircle2 },
+};
+function instrumentOverallStatus(e, certificates, actionImpacts) {
+  const days = daysUntil(e.nextDue);
+  const own = certificates.filter(c => c.instrumentId === e.id);
+  const sum = latestCalibrationSummary(e, own);
+  const openAction = actionImpacts.some(a => a.instrumentId === e.id && a.actionStatus !== "ปิดเรื่อง");
+  const pick = (key, title) => ({ key, ...INSTRUMENT_STATUS[key], title });
+  if (statusOf(days) === "danger") return pick("overdue", `เลยวันครบกำหนดสอบเทียบ ${fmtDate(e.nextDue)}`);
+  if (sum && (sum.decision === "FAIL" || sum.decision === "WARNING")) return pick("fail", `ผลสอบเทียบรอบ ${fmtDate(sum.date)}: ${sum.decision}`);
+  if (openAction) return pick("inAction", "มีเรื่องใน \"การดำเนินการ / ผลกระทบ\" ที่ยังไม่ปิด");
+  if (statusOf(days) === "warn") return pick("dueSoon", `ครบกำหนดสอบเทียบ ${fmtDate(e.nextDue)}`);
+  if (!sum) return pick("pending", "ยังไม่มีใบรับรองสอบเทียบในระบบ");
+  if (sum.decision === "INCOMPLETE DATA") return pick("pending", "ข้อมูลใบรับรองหรือเกณฑ์ยังไม่ครบ ตัดสินผลไม่ได้");
+  const latest = own.filter(c => c.calibrationDate === sum.date);
+  if (latest.some(c => !c.evaluatedBy)) return pick("pending", "ผลรอบล่าสุดยังไม่ได้ลงชื่อผู้ประเมิน");
+  return pick("pass", `ผลสอบเทียบรอบ ${fmtDate(sum.date)}: ${sum.decision}`);
+}
+// Photo when the instrument has one, otherwise an icon that matches its type.
+function InstrumentThumb({ e, size = 56 }) {
+  if (e.imageUrl) return <Thumb src={e.imageUrl} size={size} radius={10} />;
+  const t = `${e.type || ""} ${e.name || ""}`.toLowerCase();
+  const Icon = /ชั่ง|balance|scale/.test(t) ? Scale
+    : /microscope|จุลทรรศน์/.test(t) ? Microscope
+    : /oven|ตู้อบ|bath|อุณหภูมิ|thermo|cooling|ความชื้น|แวดล้อม/.test(t) ? Thermometer
+    : /hplc|icp|spectro|uv|gc|polari|refracto|ph|ec/.test(t) ? FlaskConical
+    : Wrench;
+  return (
+    <div style={{ width: size, height: size, borderRadius: 10, background: "#EEF4FB", border: "1px solid #DCE7F4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      <Icon size={Math.round(size * 0.5)} color="#3E6FA8" strokeWidth={1.6} />
+    </div>
+  );
+}
+
 /* ================= Calibration Records Hub =================
    Pick an instrument (card grid), then pick a record type from the same
    kind of card grid (instrument & status, certificates, results & trend,
@@ -5682,7 +5724,10 @@ function CalibrationRecordsHub({
   // null = the instrument's feature cards; otherwise the key of the open page.
   const [view, setView] = useState(null);
   const [q, setQ] = useState("");
-  const [critFilter, setCritFilter] = useState("all"); // "all" | "missing" | "complete"
+  const [typeFilter, setTypeFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState(""); // overall status key, or "gaps"
+  const [dueFilter, setDueFilter] = useState("");       // "" | "ok" | "warn" | "danger" | "none"
+  const [layout, setLayout] = useState("cards");        // "cards" | "table"
   const [showGrid, setShowGrid] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const exportAll = (onlyId = null) => exportMPIRWorkbook(equipment, dailyChecks, {
@@ -5701,24 +5746,59 @@ function CalibrationRecordsHub({
 
   // ---------------- Level 1: pick an instrument ----------------
   if (!selectedInstrumentId) {
-    const rows = calibratable
-      .filter(e => (e.code + e.name + (e.type || "")).toLowerCase().includes(q.toLowerCase()))
-      .filter(e => critFilter === "all" || (critFilter === "missing" ? calibCriteriaGaps(e).length > 0 : calibCriteriaGaps(e).length === 0))
-      .sort((a, b) => alphaCompare(a.code, b.code));
+    const withStatus = calibratable.map(e => ({ e, st: instrumentOverallStatus(e, certificates, actionImpacts), days: daysUntil(e.nextDue), gaps: calibCriteriaGaps(e) }));
+    const types = [...new Set(calibratable.map(e => e.type).filter(Boolean))].sort(alphaCompare);
+    const ql = q.trim().toLowerCase();
+    const rows = withStatus
+      .filter(({ e }) => !ql || (e.code + " " + e.name + " " + (e.type || "") + " " + (e.custodian || "")).toLowerCase().includes(ql))
+      .filter(({ e }) => !typeFilter || e.type === typeFilter)
+      .filter(({ st, gaps }) => !statusFilter || (statusFilter === "gaps" ? gaps.length > 0 : st.key === statusFilter))
+      .filter(({ days }) => !dueFilter || statusOf(days) === dueFilter)
+      .sort((a, b) => alphaCompare(a.e.code, b.e.code));
+    const DUE_LABEL = { ok: "ยังไม่ถึงกำหนด", warn: "ครบกำหนดใน 30 วัน", danger: "เกินกำหนด", none: "ยังไม่มีกำหนด" };
+    const chips = [
+      q.trim() && { label: `ค้นหา: ${q.trim()}`, clear: () => setQ("") },
+      typeFilter && { label: `ประเภท: ${typeFilter}`, clear: () => setTypeFilter("") },
+      statusFilter && { label: `สถานะ: ${statusFilter === "gaps" ? "เกณฑ์ไม่ครบ" : INSTRUMENT_STATUS[statusFilter].label}`, clear: () => setStatusFilter("") },
+      dueFilter && { label: `รอบสอบเทียบ: ${DUE_LABEL[dueFilter]}`, clear: () => setDueFilter("") },
+    ].filter(Boolean);
+    const clearAll = () => { setQ(""); setTypeFilter(""); setStatusFilter(""); setDueFilter(""); };
+    const selectStyle = { ...S.select, minWidth: 170, height: 42 };
+    const dueText = (e, days) => {
+      if (!e.nextDue) return <span style={{ color: "var(--muted)" }}>ยังไม่มีกำหนด</span>;
+      const color = STATUS_COLOR[statusOf(days)];
+      return <>{fmtDate(e.nextDue)} <span style={{ color }}>({days < 0 ? `เกินกำหนด ${-days} วัน` : days === 0 ? "ครบกำหนดวันนี้" : `อีก ${days} วัน`})</span></>;
+    };
+    const badge = (st) => {
+      const Icon = st.icon;
+      return (
+        <span title={st.title} style={{
+          display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+          color: st.color, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 20, padding: "3px 9px",
+        }}><Icon size={12} /> {st.label}</span>
+      );
+    };
+    const infoRow = (Icon, children, color) => (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: color || "#4B5C72" }}>
+        <Icon size={14} color={color || "var(--muted)"} style={{ flexShrink: 0 }} /><span>{children}</span>
+      </div>
+    );
+    const open = (e) => { setSelectedInstrumentId(e.id); setView(null); };
     return (
       <div>
-        <div style={S.detailHead}>
-          <div>
-            <h2 style={S.h2}>บันทึกการสอบเทียบ</h2>
-            <p style={S.h2sub}>เลือกเครื่องมือ เพื่อดูและบันทึกข้อมูลการสอบเทียบของเครื่องนั้น</p>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{ width: 48, height: 48, borderRadius: 12, background: "#E9F1FB", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <FlaskConical size={26} color="var(--teal-dark)" />
+            </div>
+            <div>
+              <h2 style={{ ...S.h2, marginBottom: 2 }}>บันทึกการสอบเทียบ</h2>
+              <p style={{ ...S.h2sub, margin: 0 }}>ระบบบริหารจัดการเครื่องมือและการสอบเทียบ (Calibration Management)</p>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
-            <button style={S.smallBtn} onClick={() => exportAll()}>
-              <FileDown size={13} /> ส่งออก Excel (MPIR)
-            </button>
-            <button style={S.smallBtn} onClick={() => setShowGuide(true)}>
-              <BookOpen size={13} /> คู่มือ
-            </button>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button style={S.smallBtn} onClick={() => exportAll()}><FileDown size={13} /> ส่งออก Excel (MPIR)</button>
+            <button style={S.smallBtn} onClick={() => setShowGuide(true)}><BookOpen size={13} /> คู่มือ</button>
           </div>
         </div>
         {showGuide && <CalibrationGuideModal onClose={() => setShowGuide(false)} />}
@@ -5726,55 +5806,107 @@ function CalibrationRecordsHub({
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, color: "var(--ink)" }}>
             <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
             <span style={{ flex: 1 }}>
-              <strong>{criteriaStats.missing}</strong> จาก {criteriaStats.total} เครื่องมือในทะเบียนสอบเทียบ
-              ยังไม่ได้กำหนดเกณฑ์ (Tolerance / Decision Rule / Risk score)
+              <strong>{criteriaStats.missing}</strong> จาก {criteriaStats.total} เครื่องมือในทะเบียนสอบเทียบ ยังไม่ได้กำหนดเกณฑ์ (Tolerance / Decision Rule / Risk score)
             </span>
-            <button style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => setShowGrid(true)}>
-              <ClipboardCheck size={13} /> กรอกเกณฑ์แบบตาราง
-            </button>
+            <button style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => setStatusFilter("gaps")}>ดูเฉพาะเครื่องนี้</button>
+            <button style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => setShowGrid(true)}><ClipboardCheck size={13} /> กรอกเกณฑ์แบบตาราง</button>
           </div>
         )}
-        <div style={S.toolbar}>
-          <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ (รหัส / ชื่อ / ประเภท)" value={q} onChange={e => setQ(e.target.value)} /></div>
-          <select value={critFilter} onChange={e => setCritFilter(e.target.value)} style={S.select}>
-            <option value="all">ทุกสถานะเกณฑ์</option>
-            <option value="missing">เกณฑ์ยังไม่ครบ</option>
-            <option value="complete">เกณฑ์ครบแล้ว</option>
+        {showGrid && <CriteriaGridEditor equipment={equipment} setEquipment={setEquipment} notify={notify} onClose={() => setShowGrid(false)} />}
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ ...S.searchWrap, flex: "1 1 300px", height: 42 }}>
+            <Search size={15} color="var(--muted)" />
+            <input style={S.searchInput} placeholder="ค้นหาเครื่องมือ (รหัส / ชื่อ / ประเภท)" value={q} onChange={e => setQ(e.target.value)} />
+          </div>
+          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={selectStyle}>
+            <option value="">ประเภททั้งหมด</option>
+            {types.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
-          <button style={S.ghostBtn} onClick={() => setShowGrid(true)}>
-            <ClipboardCheck size={14} style={{ marginRight: 4 }} /> กรอกเกณฑ์แบบตาราง
-          </button>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={selectStyle}>
+            <option value="">สถานะทั้งหมด</option>
+            {Object.entries(INSTRUMENT_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            <option value="gaps">เกณฑ์ไม่ครบ</option>
+          </select>
+          <select value={dueFilter} onChange={e => setDueFilter(e.target.value)} style={selectStyle}>
+            <option value="">รอบสอบเทียบทั้งหมด</option>
+            {Object.entries(DUE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[["cards", LayoutGrid, "การ์ด"], ["table", Table2, "ตาราง"]].map(([k, Icon, label]) => (
+              <button key={k} onClick={() => setLayout(k)} style={{
+                display: "flex", alignItems: "center", gap: 6, height: 42, padding: "0 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                background: layout === k ? "var(--teal)" : "#fff", color: layout === k ? "#fff" : "#4B5C72",
+                border: layout === k ? "1px solid var(--teal)" : "1px solid var(--line)",
+              }}><Icon size={15} /> {label}</button>
+            ))}
+          </div>
         </div>
-        {showGrid && (
-          <CriteriaGridEditor equipment={equipment} setEquipment={setEquipment} notify={notify} onClose={() => setShowGrid(false)} />
-        )}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
-          {rows.map(e => (
-            <div key={e.id} style={{ ...S.eqCard, cursor: "pointer" }} onClick={() => { setSelectedInstrumentId(e.id); setView(null); }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div>
-                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}>{e.code}</div>
-                  <div style={{ fontWeight: 700 }}>{e.name}</div>
-                </div>
-                <ChevronRight size={16} color="var(--muted)" />
-              </div>
-              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>{e.type}{e.location ? ` · ${e.location}` : ""}</div>
-              {calibCriteriaGaps(e).length > 0 && (
-                <div
-                  title={`ยังไม่ได้กำหนด: ${calibCriteriaGaps(e).join(", ")}`}
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 4, marginTop: 6,
-                    fontSize: 10.5, fontWeight: 600, color: "var(--amber)", background: "#FDF3E3",
-                    border: "1px solid var(--amber)", borderRadius: 20, padding: "2px 8px",
-                  }}
-                >
-                  <FileWarning size={11} /> เกณฑ์ไม่ครบ
-                </div>
-              )}
-            </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minHeight: 34, marginBottom: 12, fontSize: 12.5 }}>
+          {chips.length > 0 && <span style={{ color: "var(--muted)" }}>ตัวกรองที่เลือก :</span>}
+          {chips.map(c => (
+            <span key={c.label} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#E9F1FB", color: "var(--teal-dark)", borderRadius: 8, padding: "4px 10px", fontWeight: 600 }}>
+              {c.label}
+              <button onClick={c.clear} title="ล้างตัวกรองนี้" style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", display: "flex", color: "var(--teal-dark)" }}><X size={14} /></button>
+            </span>
           ))}
-          {rows.length === 0 && <EmptyState text="ไม่พบเครื่องมือ" />}
+          {chips.length > 0 && <button onClick={clearAll} style={{ border: "none", background: "transparent", color: "var(--teal)", cursor: "pointer", fontSize: 12.5, fontWeight: 600, padding: "4px 6px" }}>ล้างทั้งหมด</button>}
+          <span style={{ marginLeft: "auto", color: "var(--muted)" }}>
+            จำนวนเครื่องมือทั้งหมด {rows.length}{rows.length !== calibratable.length ? ` จาก ${calibratable.length}` : ""} เครื่อง
+          </span>
         </div>
+
+        {layout === "cards" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+            {rows.map(({ e, st, days, gaps }) => (
+              <div key={e.id} onClick={() => open(e)} style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, cursor: "pointer", boxShadow: "0 1px 2px rgba(15,40,70,0.04)" }}>
+                <div style={{ display: "flex", gap: 12, padding: "14px 14px 12px", borderBottom: "1px solid var(--line)" }}>
+                  <InstrumentThumb e={e} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", paddingTop: 2 }}>{e.code}</div>
+                      {badge(st)}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, marginTop: 2 }}>
+                      <div style={{ fontWeight: 700, fontSize: 16, color: "var(--teal-dark)", lineHeight: 1.3 }}>{e.name}</div>
+                      <ChevronRight size={17} color="var(--muted)" style={{ flexShrink: 0 }} />
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{[e.type, e.location].filter(Boolean).join(" · ") || "-"}</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "12px 14px 14px" }}>
+                  {infoRow(CalendarCheck, <>สอบเทียบล่าสุด {e.lastCalibration ? fmtDate(e.lastCalibration) : "-"}</>)}
+                  {infoRow(CalendarClock, <>ครบกำหนด {dueText(e, days)}</>, statusOf(days) === "danger" ? "var(--red)" : undefined)}
+                  {infoRow(User, <>ผู้รับผิดชอบ : {e.custodian || <span style={{ color: "var(--muted)" }}>ยังไม่ระบุ</span>}</>)}
+                  {gaps.length > 0 && infoRow(FileWarning, <span title={gaps.join(", ")}>เกณฑ์ไม่ครบ: {gaps.join(", ")}</span>, "var(--amber)")}
+                </div>
+              </div>
+            ))}
+            {rows.length === 0 && <EmptyState text="ไม่พบเครื่องมือตามตัวกรองที่เลือก" />}
+          </div>
+        ) : (
+          <div style={{ ...S.tableWrap, overflowX: "auto" }}>
+            <table style={{ ...S.table, minWidth: 900 }}>
+              <thead><tr>{["", "รหัส", "ชื่อเครื่องมือ", "ประเภท · ตำแหน่ง", "สอบเทียบล่าสุด", "ครบกำหนด", "ผู้รับผิดชอบ", "สถานะ"].map((h, i) => <th key={i} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {rows.map(({ e, st, days, gaps }) => (
+                  <tr key={e.id} style={{ ...S.tr, cursor: "pointer" }} onClick={() => open(e)}>
+                    <td style={S.td}><InstrumentThumb e={e} size={36} /></td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)", fontSize: 12 }}>{e.code}</td>
+                    <td style={{ ...S.td, fontWeight: 600 }}>{e.name}{gaps.length > 0 && <div style={{ fontSize: 11, color: "var(--amber)", fontWeight: 500 }}>เกณฑ์ไม่ครบ</div>}</td>
+                    <td style={{ ...S.td, color: "var(--muted)" }}>{[e.type, e.location].filter(Boolean).join(" · ") || "-"}</td>
+                    <td style={S.td}>{e.lastCalibration ? fmtDate(e.lastCalibration) : "-"}</td>
+                    <td style={S.td}>{dueText(e, days)}</td>
+                    <td style={S.td}>{e.custodian || "-"}</td>
+                    <td style={S.td}>{badge(st)}</td>
+                  </tr>
+                ))}
+                {rows.length === 0 && <tr><td style={S.td} colSpan={8}><EmptyState text="ไม่พบเครื่องมือตามตัวกรองที่เลือก" /></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     );
   }
