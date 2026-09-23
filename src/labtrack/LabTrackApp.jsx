@@ -646,10 +646,50 @@ function suggestCorrectionFromCerts(certs, instrumentId, parameter, referenceVal
   return { value: round4(-derivedErrorOf(best)), cert: best };
 }
 
+// ---- Criteria snapshot: "เกณฑ์ ณ วันบันทึก" ----
+// PASS/FAIL is derived, not stored, so it used to be recomputed with
+// *today's* Sheet 01 Tolerance — tightening Tolerance next year silently
+// turned last year's PASS records into FAIL, on screen and in the export.
+// A Sheet 04 record now carries the criteria it was judged by (captured on
+// save), and a certificate carries them from the moment it is evaluated
+// (Sheet 03 sign-off). Everything that evaluates a record goes through
+// criteriaFor(), so screens, Sheet 07 and the Excel export all agree.
+const CRITERIA_KEYS = ["tolerance", "toleranceType", "workingRangeMax", "basisOfCriteria", "decisionRule", "guardBandFactor"];
+function snapshotCriteria(instrument) {
+  if (!instrument || numOrNull(instrument.tolerance) == null) return null; // nothing to lock yet
+  return { ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, instrument[k] ?? ""])), capturedAt: todayISO() };
+}
+function criteriaFor(instrument, rec) {
+  return rec?.criteriaAt ? { ...(instrument || {}), ...rec.criteriaAt } : instrument;
+}
+function criteriaChanged(instrument, rec, keys = ["tolerance", "toleranceType", "decisionRule", "guardBandFactor"]) {
+  if (!rec?.criteriaAt || !instrument) return false;
+  return keys.some(k => String(rec.criteriaAt[k] ?? "") !== String(instrument[k] ?? ""));
+}
+function criteriaText(c) {
+  if (!c) return "";
+  return `Tolerance ± ${c.tolerance} (${c.toleranceType || "absolute"})`;
+}
+// Calibration rounds of one instrument, from its certificates: each round
+// runs from one certificate's calibration date to the next one's.
+function calibrationRounds(certs, instrumentId) {
+  const byDate = new Map();
+  certs.filter(c => c.instrumentId === instrumentId && c.calibrationDate)
+    .forEach(c => { if (!byDate.has(c.calibrationDate)) byDate.set(c.calibrationDate, c.certificateNo || ""); });
+  const dates = [...byDate.keys()].sort();
+  return dates.map((d, i) => ({ date: d, certificateNo: byDate.get(d), nextDate: dates[i + 1] || "" }));
+}
+function roundOfDate(rounds, date) {
+  let r = null;
+  rounds.forEach(x => { if (x.date <= (date || "")) r = x; });
+  return r;
+}
+
 // Sheet 03 in full: compares one certificate row against the owning
 // instrument's approved Tolerance/Decision Rule and returns every derived
 // column (Tolerance Utilization, TUR, En, Decision, Rationale).
-function evaluateAcceptance(cert, instrument) {
+function evaluateAcceptance(cert, instrumentIn) {
+  const instrument = criteriaFor(instrumentIn, cert);
   const errorVal = derivedErrorOf(cert);
   const U = derivedUOf(cert);
   const tol = resolveTolerance(instrument, cert);
@@ -857,9 +897,13 @@ const LK_YESNO = ["ใช่", "ไม่ใช่"];
 // Sheet 04: mean/SD/%RSD from up to 5 readings, then Warning/Action limits
 // per the workbook's own formula note — "Warning Limit = ค่าอ้างอิง ±
 // (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance".
-function calcIntermediateCheck(entry, instrument) {
+function calcIntermediateCheck(entry, instrumentIn) {
+  const instrument = criteriaFor(instrumentIn, entry);
+  // numOrNull, not Number: Number("") is 0, so every blank reading slot used
+  // to be averaged in as a 0 — any check with fewer than 5 readings got a
+  // wrong mean, bias and result.
   const readings = [entry.reading1, entry.reading2, entry.reading3, entry.reading4, entry.reading5]
-    .map(Number).filter(n => !isNaN(n));
+    .map(numOrNull).filter(n => n != null);
   const mean = readings.length ? readings.reduce((a, b) => a + b, 0) / readings.length : null;
   const sd = readings.length > 1
     ? Math.sqrt(readings.reduce((s, r) => s + (r - mean) ** 2, 0) / (readings.length - 1))
@@ -911,7 +955,7 @@ function computeTrendRows(certificates, equipment) {
     sorted.forEach((c, i) => {
       const instrument = byId[c.instrumentId];
       const error = derivedErrorOf(c);
-      const tol = resolveTolerance(instrument, c);
+      const tol = resolveTolerance(criteriaFor(instrument, c), c);
       const prev = sorted[i - 1];
       let drift = null, yearsBetween = null, driftRate = null, projected = null, yearsToOOT = null, flag = "ข้อมูลไม่พอ (จุดแรก)";
       if (prev) {
@@ -4154,9 +4198,13 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
       if (!name) return;
     }
     const ids = new Set(g.points.map(p => p.c.id));
+    // Evaluating locks the criteria the decision was made with; clearing the
+    // evaluation unlocks them (and withdraws the approval that relied on it).
     const patch = field === "approved"
       ? { approvedBy: name, approvalDate: clear ? "" : todayISO() }
-      : { evaluatedBy: name, evaluationDate: clear ? "" : todayISO() };
+      : clear
+        ? { evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", criteriaAt: null }
+        : { evaluatedBy: name, evaluationDate: todayISO(), criteriaAt: snapshotCriteria(g.instrument) };
     setCertificates(certificates.map(c => ids.has(c.id) ? { ...c, ...patch } : c));
     notify(clear ? "ยกเลิกการลงชื่อแล้ว" : field === "approved" ? `อนุมัติผลใบรับรอง ${g.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${g.certificateNo || "-"} แล้ว`);
   }
@@ -4189,6 +4237,11 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                         <b style={mono}>{g.certificateNo || "-"}</b>
                         <span style={{ color: "var(--muted)", fontSize: 12 }}>สอบเทียบ {fmtDate(g.calibrationDate)} (พ.ศ. {beYear(g.calibrationDate) || "-"}){g.provider ? ` · ${g.provider}` : ""} · {g.points.length} จุด</span>
                         <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[g.decision], color: CALIB_DECISION_COLOR[g.decision] }}>ทั้งใบ: {g.decision}</span>
+                        {g.points[0]?.c.criteriaAt && (
+                          <span title={`ล็อกเมื่อ ${fmtDate(g.points[0].c.criteriaAt.capturedAt)}`} style={{ fontSize: 11.5, color: criteriaChanged(g.instrument, g.points[0].c) ? "var(--amber)" : "var(--muted)" }}>
+                            🔒 {criteriaText(g.points[0].c.criteriaAt)}{criteriaChanged(g.instrument, g.points[0].c) ? " — เกณฑ์ ณ วันประเมิน (ต่างจากปัจจุบัน)" : ""}
+                          </span>
+                        )}
                         <div style={{ flex: 1 }} />
                         {evald ? (
                           <span style={{ fontSize: 12 }}>ประเมินโดย <b>{evald.by}</b> {evald.date ? `· ${fmtDate(evald.date)}` : ""} <button style={{ ...S.smallBtn, padding: "2px 7px" }} onClick={() => sign(g, "evaluated", true)}>ยกเลิก</button></span>
@@ -4256,30 +4309,64 @@ function IntermediateCheckTab({ equipment, checks, setChecks, dailyChecks = [], 
   const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
   const sorted = checks.slice().sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""));
   function upsert(row) {
-    if (checks.find(c => c.id === row.id)) setChecks(checks.map(c => c.id === row.id ? row : c));
-    else setChecks([row, ...checks]);
+    const { _notice, ...clean } = row;
+    // Lock the criteria this check is judged by, on its first save.
+    const rec = clean.criteriaAt ? clean : { ...clean, criteriaAt: snapshotCriteria(byId[clean.instrumentId]) };
+    if (checks.find(c => c.id === rec.id)) setChecks(checks.map(c => c.id === rec.id ? rec : c));
+    else setChecks([rec, ...checks]);
     notify("บันทึกผลตรวจสอบแล้ว");
     setEditing(null);
   }
   function remove(id) { if (!window.confirm("ลบบันทึกนี้หรือไม่?")) return; setChecks(checks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+  // Records saved before criteria locking existed. Their original Tolerance
+  // was never stored, so the best available lock is today's value.
+  const unlocked = checks.filter(c => !c.criteriaAt && snapshotCriteria(byId[c.instrumentId]));
+  function lockLegacy() {
+    if (!window.confirm(`ล็อกเกณฑ์ให้ ${unlocked.length} รายการเก่า ด้วย Tolerance ปัจจุบันของเครื่องมือ?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
+    setChecks(checks.map(c => (c.criteriaAt ? c : { ...c, criteriaAt: snapshotCriteria(byId[c.instrumentId]) })));
+    notify(`ล็อกเกณฑ์ให้ ${unlocked.length} รายการแล้ว`);
+  }
   // A routine check repeats the same set-up every time — carry the check
   // standard, reference, unit and correction over from this instrument's
   // previous check (or its Sheet 01 parameter/unit on the first one), so
-  // only the date and the readings need typing.
+  // only the date and the readings need typing. If a newer certificate has
+  // arrived since that check, the carried Correction would be last round's
+  // — it is swapped for the new certificate's value and the user is told.
   function newCheck() {
     const inst = equipment[0];
     const base = { ...blankIntermediateCheck(inst?.id || ""), checkedBy: currentDisplayName };
     const last = sorted.find(c => c.instrumentId === base.instrumentId);
-    if (last) {
-      const carry = ["parameter", "checkType", "checkItem", "checkStandard", "checkStandardId", "referenceValue", "uOfCheckStandard", "unit", "appliedCorrection", "reviewedBy"];
-      return { ...base, ...Object.fromEntries(carry.map(k => [k, last[k] ?? ""])) };
+    if (!last) return { ...base, parameter: inst?.measuredParameter || "", unit: inst?.calUnit || "" };
+    const carry = ["parameter", "checkType", "checkItem", "checkStandard", "checkStandardId", "referenceValue", "uOfCheckStandard", "unit", "appliedCorrection", "correctionSourceCert", "reviewedBy"];
+    const row = { ...base, ...Object.fromEntries(carry.map(k => [k, last[k] ?? ""])) };
+    const newest = latestCertDate(certificates.filter(c => c.instrumentId === row.instrumentId));
+    if (newest && newest > (last.checkDate || "")) {
+      const sug = suggestCorrectionFromCerts(certificates, row.instrumentId, row.parameter, row.referenceValue);
+      if (sug && String(sug.value) !== String(row.appliedCorrection)) {
+        return { ...row, appliedCorrection: String(sug.value), correctionSourceCert: sug.cert.certificateNo || "",
+          _notice: `มีใบรับรองใหม่ ${sug.cert.certificateNo || ""} (สอบเทียบ ${fmtDate(newest)}) — เปลี่ยน Correction จาก ${row.appliedCorrection === "" ? "ว่าง" : row.appliedCorrection} เป็น ${sug.value} ให้แล้ว` };
+      }
+      if (!sug) return { ...row, _notice: `มีใบรับรองใหม่ (สอบเทียบ ${fmtDate(newest)}) แต่หาจุดที่ตรงกับค่าอ้างอิงไม่ได้ — ตรวจสอบ Correction ด้วยตนเอง` };
     }
-    return { ...base, parameter: inst?.measuredParameter || "", unit: inst?.calUnit || "" };
+    return row;
   }
+  // Group the log by calibration round: every check belongs to the
+  // certificate that was current on its date.
+  const roundsById = Object.fromEntries(equipment.map(e => [e.id, calibrationRounds(certificates, e.id)]));
+  const groups = [];
+  sorted.forEach(row => {
+    const r = roundOfDate(roundsById[row.instrumentId] || [], row.checkDate);
+    const key = `${row.instrumentId}|${r?.date || "none"}`;
+    let g = groups.find(x => x.key === key);
+    if (!g) { g = { key, round: r, instrument: byId[row.instrumentId], rows: [] }; groups.push(g); }
+    g.rows.push({ row, calc: calcIntermediateCheck(row, byId[row.instrumentId]) });
+  });
+  const COLS = ["วันที่", "พารามิเตอร์", "ประเภท", "ค่าเฉลี่ยหลังแก้ค่า", "Bias", "LWL/UWL", "LAL/UAL", "ผล", ""];
+  const mono = { fontFamily: "var(--font-mono)" };
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Intermediate / Performance Check)</h2><p style={S.h2sub}>Sheet 04 — Warning/Action Limit คำนวณจาก Tolerance ที่อนุมัติในข้อมูลเครื่องมือ (Sheet 01) · บันทึกครั้งถัดไประบบดึงการตั้งค่าจากครั้งก่อนให้ กรอกแค่ค่าที่อ่านได้</p></div>
+        <div><h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Intermediate / Performance Check)</h2><p style={S.h2sub}>Sheet 04 — Warning/Action Limit คำนวณจาก Tolerance ใน Sheet 01 และล็อกไว้ ณ วันบันทึก (แก้ Tolerance ภายหลังไม่กระทบผลย้อนหลัง) · จัดกลุ่มตามรอบใบรับรอง · ครั้งถัดไประบบดึงการตั้งค่าจากครั้งก่อนให้ กรอกแค่ค่าที่อ่านได้</p></div>
         <button style={S.primaryBtn} onClick={() => setEditing(newCheck())}><Plus size={15} /> บันทึกผลตรวจสอบ</button>
       </div>
       {(() => {
@@ -4301,30 +4388,63 @@ function IntermediateCheckTab({ equipment, checks, setChecks, dailyChecks = [], 
           </div>
         );
       })()}
-      <div style={S.tableWrap}>
-        <table style={S.table}>
-          <thead><tr>{["วันที่", "เครื่องมือ", "พารามิเตอร์", "ประเภท", "ค่าเฉลี่ยหลังแก้ค่า", "Bias", "LWL/UWL", "LAL/UAL", "ผล", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+      {unlocked.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5 }}>
+          <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}><b>{unlocked.length}</b> รายการเก่ายังไม่ได้ล็อกเกณฑ์ — ผลของรายการเหล่านี้จะเปลี่ยนตาม Tolerance ปัจจุบันจนกว่าจะล็อก</span>
+          <button style={S.smallBtn} onClick={lockLegacy}>ล็อกด้วยเกณฑ์ปัจจุบัน</button>
+        </div>
+      )}
+      <div style={{ ...S.tableWrap, overflowX: "auto" }}>
+        <table style={{ ...S.table, minWidth: 820 }}>
+          <thead><tr>{COLS.map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
           <tbody>
-            {sorted.map(row => {
-              const instrument = byId[row.instrumentId];
-              const calc = calcIntermediateCheck(row, instrument);
-              const color = calc.result === "PASS" ? "var(--green)" : calc.result === "WARNING" ? "var(--amber)" : calc.result === "FAIL" ? "var(--red)" : "var(--muted)";
+            {groups.map(g => {
+              const nFail = g.rows.filter(x => x.calc.result === "FAIL").length;
+              const nWarn = g.rows.filter(x => x.calc.result === "WARNING").length;
+              const until = g.round
+                ? (g.round.nextDate ? `ถึง ${fmtDate(g.round.nextDate)}` : `ถึงปัจจุบัน${g.instrument?.nextDue ? ` (ครบกำหนด ${fmtDate(g.instrument.nextDue)})` : ""}`)
+                : "";
               return (
-                <tr key={row.id} style={S.tr}>
-                  <td style={S.td}>{fmtDate(row.checkDate)}</td>
-                  <td style={S.td}>{instrument ? `${instrument.code} — ${instrument.name}` : "-"}</td>
-                  <td style={S.td}>{row.parameter}</td>
-                  <td style={S.td}>{row.checkType}</td>
-                  <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{calc.correctedMean != null ? calc.correctedMean.toFixed(4) : "-"}</td>
-                  <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{calc.bias != null ? calc.bias.toFixed(4) : "-"}</td>
-                  <td style={{ ...S.td, fontFamily: "var(--font-mono)", fontSize: 11 }}>{calc.lwl != null ? `${calc.lwl.toFixed(3)} / ${calc.uwl.toFixed(3)}` : "-"}</td>
-                  <td style={{ ...S.td, fontFamily: "var(--font-mono)", fontSize: 11 }}>{calc.lal != null ? `${calc.lal.toFixed(3)} / ${calc.ual.toFixed(3)}` : "-"}</td>
-                  <td style={S.td}><span style={{ ...S.tag, borderColor: color, color }}>{calc.result}</span></td>
-                  <td style={S.td}><div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(row)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(row.id)}><Trash2 size={13} /></button></div></td>
-                </tr>
+                <Fragment key={g.key}>
+                  <tr>
+                    <td colSpan={COLS.length} style={{ ...S.td, background: "#F5F8F7", borderTop: "2px solid var(--line)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5 }}>
+                        {g.round
+                          ? <span>รอบใบรับรอง <b style={mono}>{g.round.certificateNo || "-"}</b> · สอบเทียบ {fmtDate(g.round.date)} {until}</span>
+                          : <span><b>ก่อนมีใบรับรองในระบบ</b></span>}
+                        {equipment.length > 1 && g.instrument && <span style={{ color: "var(--muted)" }}>{g.instrument.code}</span>}
+                        <span style={{ color: "var(--muted)" }}>{g.rows.length} ครั้ง</span>
+                        {nWarn > 0 && <span style={{ ...S.tag, borderColor: "var(--amber)", color: "var(--amber)" }}>WARNING {nWarn}</span>}
+                        {nFail > 0 && <span style={{ ...S.tag, borderColor: "var(--red)", color: "var(--red)" }}>FAIL {nFail}</span>}
+                      </div>
+                    </td>
+                  </tr>
+                  {g.rows.map(({ row, calc }) => {
+                    const color = calc.result === "PASS" ? "var(--green)" : calc.result === "WARNING" ? "var(--amber)" : calc.result === "FAIL" ? "var(--red)" : "var(--muted)";
+                    const changed = criteriaChanged(g.instrument, row, ["tolerance", "toleranceType"]);
+                    return (
+                      <tr key={row.id} style={S.tr}>
+                        <td style={S.td}>{fmtDate(row.checkDate)}</td>
+                        <td style={S.td}>{row.parameter}{row.checkItem ? <div style={{ fontSize: 11, color: "var(--muted)" }}>{row.checkItem}</div> : null}</td>
+                        <td style={S.td}>{row.checkType}</td>
+                        <td style={{ ...S.td, ...mono }}>{calc.correctedMean != null ? calc.correctedMean.toFixed(4) : "-"}</td>
+                        <td style={{ ...S.td, ...mono }}>{calc.bias != null ? calc.bias.toFixed(4) : "-"}</td>
+                        <td style={{ ...S.td, ...mono, fontSize: 11 }}>{calc.lwl != null ? `${calc.lwl.toFixed(3)} / ${calc.uwl.toFixed(3)}` : "-"}</td>
+                        <td style={{ ...S.td, ...mono, fontSize: 11 }}>{calc.lal != null ? `${calc.lal.toFixed(3)} / ${calc.ual.toFixed(3)}` : "-"}</td>
+                        <td style={S.td}>
+                          <span title={row.criteriaAt ? `เกณฑ์ ณ วันบันทึก: ${criteriaText(row.criteriaAt)}` : "ยังไม่ล็อกเกณฑ์ — ใช้ Tolerance ปัจจุบัน"} style={{ ...S.tag, borderColor: color, color }}>{calc.result}</span>
+                          {changed && <div style={{ fontSize: 10.5, color: "var(--amber)", marginTop: 2 }}>🔒 เกณฑ์เดิม ±{row.criteriaAt.tolerance}</div>}
+                          {!row.criteriaAt && <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2 }}>ยังไม่ล็อก</div>}
+                        </td>
+                        <td style={S.td}><div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(row)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(row.id)}><Trash2 size={13} /></button></div></td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
               );
             })}
-            {sorted.length === 0 && <tr><td style={S.td} colSpan={10}><div style={S.emptyState}>ยังไม่มีบันทึกการตรวจสอบระหว่างรอบ</div></td></tr>}
+            {sorted.length === 0 && <tr><td style={S.td} colSpan={COLS.length}><div style={S.emptyState}>ยังไม่มีบันทึกการตรวจสอบระหว่างรอบ</div></td></tr>}
           </tbody>
         </table>
       </div>
@@ -4389,14 +4509,20 @@ function IntermediateCheckForm({ row, equipment, certificates = [], currentDispl
       title: "ค่าที่อ่านได้",
       hint: "อ่านค่าซ้ำจากเครื่องมือ สูงสุด 5 ครั้ง (ใส่น้อยกว่า 5 ครั้งก็ได้)",
       content: (<>
+        {f._notice && (
+          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, background: "#E9F1FB", border: "1px solid var(--teal)", borderRadius: 8, padding: "8px 10px" }}>
+            <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} /> {f._notice}
+          </div>
+        )}
         {[1, 2, 3, 4, 5].map(n => (
           <Field key={n} label={`ค่าอ่านครั้งที่ ${n}`}><input type="number" step="any" style={S.input} value={f[`reading${n}`]} onChange={set(`reading${n}`)} placeholder={refPh} /></Field>
         ))}
         <Field label="Correction ที่ใช้">
-          <input type="number" step="any" style={S.input} value={f.appliedCorrection} onChange={set("appliedCorrection")} placeholder="เช่น 0" />
+          <input type="number" step="any" style={S.input} value={f.appliedCorrection} onChange={e => setF({ ...f, appliedCorrection: e.target.value, correctionSourceCert: "" })} placeholder="เช่น 0" />
+          {f.correctionSourceCert && <span style={{ ...WIZ_HINT, color: "var(--teal-dark)" }}>ค่าจากใบรับรอง {f.correctionSourceCert}</span>}
           <span style={WIZ_HINT}>ค่าที่ “บวกเพิ่ม” เข้าค่าเฉลี่ย ไม่ใช่ค่าอ้างอิง ถ้าใบรับรองไม่ระบุให้ใส่ 0</span>
           {corrSug && String(f.appliedCorrection) !== String(corrSug.value) && (
-            <button type="button" style={{ ...S.smallBtn, marginTop: 4, alignSelf: "flex-start" }} onClick={() => setF({ ...f, appliedCorrection: String(corrSug.value) })}>
+            <button type="button" style={{ ...S.smallBtn, marginTop: 4, alignSelf: "flex-start" }} onClick={() => setF({ ...f, appliedCorrection: String(corrSug.value), correctionSourceCert: corrSug.cert.certificateNo || "" })}>
               <Sparkles size={12} /> ใช้ {corrSug.value} จากใบรับรอง {corrSug.cert.certificateNo || "-"} ({calPointLabel(corrSug.cert)})
             </button>
           )}
@@ -4452,6 +4578,19 @@ function IntermediateCheckForm({ row, equipment, certificates = [], currentDispl
               เครื่องมือนี้ยังไม่ได้ตั้ง Tolerance จึงยังไม่มี Warning/Action Limit — ตั้งได้ที่แท็บ “ข้อมูลเครื่องมือ (Sheet 01)” (ช่อง Tolerance/MPE) แล้วผลจะคำนวณให้เอง
             </div>
           )}
+          {(() => {
+            const live = snapshotCriteria(instrument);
+            if (f.criteriaAt) {
+              const changed = criteriaChanged(instrument, f, ["tolerance", "toleranceType"]);
+              return (
+                <div style={{ fontSize: 12.5, color: changed ? "var(--amber)" : "var(--muted)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span>🔒 ใช้เกณฑ์ ณ วันบันทึก ({fmtDate(f.criteriaAt.capturedAt)}): {criteriaText(f.criteriaAt)}{changed ? ` — ปัจจุบันเป็น ± ${instrument?.tolerance}` : ""}</span>
+                  {changed && live && <button type="button" style={S.smallBtn} onClick={() => setF({ ...f, criteriaAt: live })}>ประเมินใหม่ด้วยเกณฑ์ปัจจุบัน</button>}
+                </div>
+              );
+            }
+            return live ? <div style={{ fontSize: 12.5, color: "var(--muted)" }}>🔒 เมื่อบันทึก ระบบจะล็อกเกณฑ์นี้ ({criteriaText(live)}) ไว้กับรายการ — แก้ Tolerance ภายหลังไม่กระทบผลของรายการนี้</div> : null;
+          })()}
         </div>
       ),
     },
@@ -4748,23 +4887,47 @@ function proposeActionImpact(instrument, certificates, checks, dailyChecks) {
   const latest = latestCertDate(own);
   const latestPts = own.filter(c => c.calibrationDate === latest);
   const bad = latestPts.map(c => ({ c, ev: evaluateAcceptance(c, instrument) })).filter(x => ["FAIL", "WARNING", "CONDITIONAL PASS"].includes(x.ev.decision));
+  // Sheet 04 checks inside a period narrow the impact window: the last
+  // PASS is evidence the instrument was fine on that date, so the period
+  // can start there instead of at the beginning of the whole round.
+  const checksIn = (from, to) => checks
+    .filter(c => c.instrumentId === instrument.id && (!from || (c.checkDate || "") > from) && (c.checkDate || "") <= to)
+    .sort((a, b) => (a.checkDate || "").localeCompare(b.checkDate || ""))
+    .map(c => ({ c, result: calcIntermediateCheck(c, instrument).result }));
+  const checkEvidence = (list) => {
+    const lastPass = list.filter(x => x.result === "PASS").pop();
+    const firstBad = list.find(x => (x.result === "WARNING" || x.result === "FAIL") && (!lastPass || x.c.checkDate > lastPass.c.checkDate));
+    return { lastPass, firstBad };
+  };
   if (bad.length) {
     const prevDate = own.map(c => c.calibrationDate || "").filter(d => d && d < latest).sort().pop() || "";
+    const list = checksIn(prevDate, latest);
+    const { lastPass, firstBad } = checkEvidence(list);
+    const evidence = !list.length
+      ? " · ไม่มี Intermediate check ในรอบนี้ ต้องประเมินย้อนทั้งรอบ"
+      : (lastPass ? ` · Intermediate check ผ่านครั้งล่าสุด ${fmtDate(lastPass.c.checkDate)}` : " · Intermediate check ในรอบนี้ไม่มีครั้งที่ผ่าน")
+        + (firstBad ? ` · เริ่มพบ ${firstBad.result} ${fmtDate(firstBad.c.checkDate)}` : "");
     return {
       ...base, sourceOfFinding: "ผลการสอบเทียบประจำปี",
       assessedDecision: worstDecision(bad.map(x => x.ev)),
       description: `ผลสอบเทียบรอบ ${fmtDate(latest)} (ใบรับรอง ${latestPts[0]?.certificateNo || "-"}) ไม่ผ่านเกณฑ์ ${bad.length} จุด: `
-        + bad.slice(0, 6).map(x => `${calPointLabel(x.c)} = ${x.ev.decision}`).join(", ") + (bad.length > 6 ? " ..." : ""),
-      impactPeriodFrom: prevDate, impactPeriodTo: latest,
+        + bad.slice(0, 6).map(x => `${calPointLabel(x.c)} = ${x.ev.decision}`).join(", ") + (bad.length > 6 ? " ..." : "") + evidence,
+      impactPeriodFrom: lastPass?.c.checkDate || prevDate, impactPeriodTo: latest,
       affectedTestMethods: instrument.relatedTestMethod || "",
     };
   }
   const within90 = (d) => d && (Date.now() - new Date(d + "T00:00:00")) <= 90 * 86400000;
   const failIc = checks.filter(c => c.instrumentId === instrument.id && within90(c.checkDate) && calcIntermediateCheck(c, instrument).result === "FAIL")
     .sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""))[0];
-  if (failIc) return { ...base, sourceOfFinding: "Intermediate Check", assessedDecision: "FAIL", impactPeriodTo: failIc.checkDate,
-    description: `Intermediate Check วันที่ ${fmtDate(failIc.checkDate)} ไม่ผ่าน (${failIc.parameter || "-"}${failIc.checkItem ? ` · ${failIc.checkItem}` : ""})`,
-    affectedTestMethods: instrument.relatedTestMethod || "", carNo: failIc.carNo || "" };
+  if (failIc) {
+    const round = roundOfDate(calibrationRounds(certificates, instrument.id), failIc.checkDate);
+    const { lastPass } = checkEvidence(checksIn(round?.date || "", failIc.checkDate).filter(x => x.c.parameter === failIc.parameter && x.c.id !== failIc.id));
+    return { ...base, sourceOfFinding: "Intermediate Check", assessedDecision: "FAIL",
+      impactPeriodFrom: lastPass?.c.checkDate || round?.date || "", impactPeriodTo: failIc.checkDate,
+      description: `Intermediate Check วันที่ ${fmtDate(failIc.checkDate)} ไม่ผ่าน (${failIc.parameter || "-"}${failIc.checkItem ? ` · ${failIc.checkItem}` : ""})`
+        + (lastPass ? ` · ผ่านครั้งล่าสุด ${fmtDate(lastPass.c.checkDate)}` : round ? ` · ไม่มีครั้งที่ผ่านตั้งแต่สอบเทียบ ${fmtDate(round.date)}` : ""),
+      affectedTestMethods: instrument.relatedTestMethod || "", carNo: failIc.carNo || "" };
+  }
   const failDc = dailyChecks.filter(c => c.equipmentId === instrument.id && c.result === false && within90(c.date))
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
   if (failDc) return { ...base, sourceOfFinding: "Daily Check", assessedDecision: "FAIL", impactPeriodTo: failDc.date,
@@ -4837,7 +5000,7 @@ function ActionImpactForm({ row, equipment, onCancel, onSave }) {
       </>),
     },
     {
-      title: "ขอบเขตผลกระทบ", hint: "ช่วงเวลาที่ผลทดสอบอาจได้รับผลกระทบ (ค่าเริ่มต้น = ตั้งแต่รอบสอบเทียบก่อนหน้าถึงวันที่พบ)",
+      title: "ขอบเขตผลกระทบ", hint: "ค่าเริ่มต้น = ตั้งแต่ Intermediate check ที่ผ่านครั้งล่าสุด (ถ้าไม่มี = ตั้งแต่สอบเทียบรอบก่อน) ถึงวันที่พบ",
       content: (<>
         <Field label="ตั้งแต่วันที่"><input type="date" style={S.input} value={f.impactPeriodFrom} onChange={set("impactPeriodFrom")} /></Field>
         <Field label="ถึงวันที่"><input type="date" style={S.input} value={f.impactPeriodTo} onChange={set("impactPeriodTo")} /></Field>
@@ -5201,6 +5364,7 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
         {isRefractometer && (
           <div>• Daily check (Refractometer): เกณฑ์ %Brix = {REFRACTOMETER_STD_BRIX} ± Tolerance {brixLimits ? <b style={{ fontFamily: "var(--font-mono)" }}>→ {brixLimits.lal} – {brixLimits.ual} °Brix</b> : "(ยังไม่ได้ตั้ง Tolerance)"}</div>
         )}
+        <div>• แก้ Tolerance/Decision Rule ที่นี่ ไม่กระทบผลย้อนหลัง: บันทึก Sheet 04 ล็อกเกณฑ์ ณ วันบันทึก และใบรับรองล็อกเกณฑ์เมื่อลงชื่อผู้ประเมิน (Sheet 03)</div>
         <div>• ผลสอบเทียบล่าสุด: {calSummary ? <><b>{calSummary.decision}</b> (รอบ {fmtDate(calSummary.date)})</> : "ยังไม่มีใบรับรอง"}</div>
       </div>
 
@@ -5343,7 +5507,7 @@ const CALIBRATION_GUIDE_SHEETS = [
       { label: "En (Normalized Error)", kind: "auto", note: "= Error ÷ (2 × U) — สูตรอย่างง่าย สมมติว่าความไม่แน่นอนของค่าอ้างอิงน้อยมาก" },
       { label: "ผลการตัดสิน (Decision)", kind: "auto", note: "Simple: |Error| ≤ Tolerance → PASS, ไม่งั้น FAIL | Conservative: |Error|+U ≤ Tolerance → PASS | Guard band: |Error| ≤ Limit → PASS, ≤ Tolerance → CONDITIONAL PASS, เกิน → FAIL. กรณี FAIL แต่ |Error| ≤ Tolerance×1.1 จะลดเป็น WARNING (near-miss) แทน" },
       { label: "เหตุผล/เงื่อนไข (Rationale)", kind: "auto", note: "ข้อความอธิบายว่าใช้สูตรไหนเทียบกับอะไร" },
-      { label: "ผู้ประเมิน/วันที่ประเมิน, ผู้อนุมัติเกณฑ์ (Technical Manager)/วันที่อนุมัติ", kind: "input", note: "กดลงชื่อครั้งเดียวต่อใบรับรอง ใช้ชื่อผู้ที่ล็อกอินและวันที่วันนี้ให้อัตโนมัติ" },
+      { label: "ผู้ประเมิน/วันที่ประเมิน, ผู้อนุมัติเกณฑ์ (Technical Manager)/วันที่อนุมัติ", kind: "input", note: "กดลงชื่อครั้งเดียวต่อใบรับรอง ใช้ชื่อผู้ที่ล็อกอินและวันที่วันนี้ให้อัตโนมัติ; การลงชื่อผู้ประเมินล็อก Tolerance/Decision Rule ณ วันนั้นไว้กับใบรับรอง (ยกเลิกลงชื่อ = ปลดล็อก)" },
     ],
   },
   {
@@ -5358,7 +5522,7 @@ const CALIBRATION_GUIDE_SHEETS = [
       { label: "ค่าเฉลี่ยหลังแก้ค่า (Corrected Mean)", kind: "auto", note: "= Mean + Applied Correction" },
       { label: "Bias / Relative Bias (%)", kind: "auto", note: "Bias = Corrected Mean − ค่าอ้างอิง; Relative Bias % = Bias ÷ |ค่าอ้างอิง| × 100" },
       { label: "Tolerance ที่ใช้, LWL/UWL (Warning), LAL/UAL (Action)", kind: "auto", note: "Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance" },
-      { label: "ผลการประเมิน (Result)", kind: "auto", note: "Corrected Mean เกิน Action limit → FAIL | เกิน Warning limit → WARNING | อยู่ในช่วง → PASS" },
+      { label: "ผลการประเมิน (Result)", kind: "auto", note: "Corrected Mean เกิน Action limit → FAIL | เกิน Warning limit → WARNING | อยู่ในช่วง → PASS — ใช้ Tolerance ที่ล็อกไว้ ณ วันบันทึก แก้ Sheet 01 ภายหลังไม่เปลี่ยนผลย้อนหลัง" },
       { label: "ผู้ตรวจสอบ/ผู้ทบทวน, การดำเนินการเมื่อไม่ผ่าน, เลขที่ CAR/NC, หมายเหตุ", kind: "input" },
     ],
   },
@@ -9618,9 +9782,10 @@ function mpirAcceptanceRows(certificates, equipment) {
   return mpirSortCerts(certificates, equipment).map((c, i) => {
     const instrument = equipment.find(e => e.id === c.instrumentId);
     const ev = evaluateAcceptance(c, instrument);
+    const crit = criteriaFor(instrument, c);
     const U = derivedUOf(c), k = Number(c.coverageFactor) || 2;
-    const rule = instrument?.decisionRule || "simple";
-    const g = Number(instrument?.guardBandFactor) || 1;
+    const rule = crit?.decisionRule || "simple";
+    const g = Number(crit?.guardBandFactor) || 1;
     const guardBand = U == null ? "" : rule === "guardband" ? round4(g * U) : rule === "conservative" ? round4(U) : 0;
     const err = derivedErrorOf(c);
     return mpirRowFromMap(MPIR_DOC.sheets[2].headers, {
@@ -9635,9 +9800,9 @@ function mpirAcceptanceRows(certificates, equipment) {
       "Expanded Uncertainty": U ?? "",
       "Standard Uncertainty": U != null ? round4(U / k) : "",
       "Applied Tolerance": ev.tol ?? "",
-      "Tolerance Type": instrument?.toleranceType || "",
-      "Basis of Criteria": instrument?.basisOfCriteria || "",
-      "Applied Decision Rule": LK_RULE.find(r => r.key === (instrument?.decisionRule || "simple"))?.label || "",
+      "Tolerance Type": crit?.toleranceType || "",
+      "Basis of Criteria": crit?.basisOfCriteria || "",
+      "Applied Decision Rule": LK_RULE.find(r => r.key === rule)?.label || "",
       "Guard Band Factor": rule === "guardband" ? g : "",
       "Guard Band": guardBand,
       "Acceptance Limit": ev.limit ?? "",
