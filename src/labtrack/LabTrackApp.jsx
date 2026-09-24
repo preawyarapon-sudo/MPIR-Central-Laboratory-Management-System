@@ -336,7 +336,18 @@ function AnalysisTrackView({ jobs }) {
 
 /* ---------- helpers ---------- */
 const uid = () => Math.random().toString(36).slice(2, 10);
-const todayISO = () => new Date().toISOString().slice(0, 10);
+// Dates are handled as LOCAL calendar dates. toISOString() converts to UTC,
+// which in Thailand (UTC+7) shifted results one day back: addMonths gave a
+// due date one day early (23 ก.ย. 2569 + 36 เดือน → 22 ก.ย. 2572) and
+// todayISO() returned yesterday for anything recorded before 07:00.
+const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayISO = () => localISO(new Date());
+function addDaysISO(dateStr, days) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  return localISO(new Date(y, m - 1, d + Math.round(days)));
+}
 const daysUntil = (dateStr) => {
   if (!dateStr) return null;
   const d = new Date(dateStr + "T00:00:00");
@@ -359,9 +370,20 @@ function fmtTimestamp(ts) {
 // calibration/maintenance due date from an equipment's recurrence interval.
 function addMonths(dateStr, months) {
   if (!dateStr || !months) return "";
-  const d = new Date(dateStr + "T00:00:00");
-  d.setMonth(d.getMonth() + Number(months));
-  return d.toISOString().slice(0, 10);
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  // Clamp to the month's last day (31 ม.ค. + 1 เดือน → 28/29 ก.พ., not 3 มี.ค.).
+  const target = new Date(y, m - 1 + Number(months), 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(d, lastDay));
+  return localISO(target);
+}
+// Records saved before the fix above carry a due date exactly one day
+// early. Returns the corrected date for such a record, otherwise null.
+function offByOneNextDue(e) {
+  if (!e?.lastCalibration || !e?.intervalMonths || !e?.nextDue) return null;
+  const correct = addMonths(e.lastCalibration, e.intervalMonths);
+  return correct && e.nextDue !== correct && e.nextDue === addDaysISO(correct, -1) ? correct : null;
 }
 function statusOf(days) {
   if (days === null) return "none";
@@ -719,7 +741,10 @@ function evaluateAcceptance(cert, instrumentIn) {
   // TUR = Tolerance / U(k=2). U here is already the expanded uncertainty at
   // the certificate's own coverage factor, so no further scaling is applied.
   const tur = U ? tol / U : null;
-  const en = U ? errorVal / (2 * U) : null; // simplified: assumes reference uncertainty negligible
+  // En = Error / √(U_lab² + U_ref²) with expanded uncertainties; the
+  // reference's U isn't recorded, so En = Error / U (|En| ≤ 1 satisfactory).
+  // It used to divide by 2U, reporting En at half its real size.
+  const en = U ? errorVal / U : null;
   const utilizationPct = tol ? Math.round((absError / tol) * 1000) / 10 : null;
   if (decision === "FAIL" && absError <= tol * 1.1) decision = "WARNING"; // near-miss band, still flagged for review
   return { decision, rationale, absError, tol, limit, tur, en, utilizationPct };
@@ -947,7 +972,7 @@ function computeTrendRows(certificates, equipment) {
   const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
   const groups = {};
   certificates.forEach(c => {
-    const key = `${c.instrumentId}|${c.parameter}|${c.calibrationPoint}`;
+    const key = trendKeyOf(c);
     (groups[key] = groups[key] || []).push(c);
   });
   const out = [];
@@ -958,18 +983,31 @@ function computeTrendRows(certificates, equipment) {
       const error = derivedErrorOf(c);
       const tol = resolveTolerance(criteriaFor(instrument, c), c);
       const prev = sorted[i - 1];
-      let drift = null, yearsBetween = null, driftRate = null, projected = null, yearsToOOT = null, flag = "ข้อมูลไม่พอ (จุดแรก)";
+      let drift = null, yearsBetween = null, driftRate = null, projected = null, projDate = "", yearsToOOT = null, flag = "ข้อมูลไม่พอ (จุดแรก)";
       if (prev) {
         const prevError = derivedErrorOf(prev);
         if (error != null && prevError != null) drift = error - prevError;
         const d1 = new Date((prev.calibrationDate || "") + "T00:00:00"), d2 = new Date((c.calibrationDate || "") + "T00:00:00");
         if (!isNaN(d1) && !isNaN(d2)) yearsBetween = (d2 - d1) / (365.25 * 86400000);
         if (drift != null && yearsBetween) driftRate = drift / yearsBetween;
-        if (error != null && driftRate != null && yearsBetween) projected = error + driftRate * yearsBetween;
-        if (tol != null && driftRate) yearsToOOT = Math.max(0, (tol - Math.abs(error ?? 0)) / Math.abs(driftRate));
+        // Project to the next DUE round: the instrument's own interval when
+        // set (before: always "same spacing as the last two certificates").
+        const months = Number(instrument?.intervalMonths) || 0;
+        const projYears = months ? months / 12 : yearsBetween;
+        if (error != null && driftRate != null && projYears) {
+          projected = error + driftRate * projYears;
+          projDate = months ? addMonths(c.calibrationDate, months) : addDaysISO(c.calibrationDate, projYears * 365.25);
+        }
+        // Moving away from zero → reaches the near limit; moving toward zero
+        // → must cross zero first and reach the opposite limit. (Before, both
+        // used the near limit, so an improving point looked about to fail.)
+        if (tol != null && driftRate && error != null) {
+          const away = error === 0 || Math.sign(driftRate) === Math.sign(error);
+          yearsToOOT = Math.max(0, (away ? tol - Math.abs(error) : tol + Math.abs(error)) / Math.abs(driftRate));
+        }
         flag = driftRate == null ? "ไม่สามารถคำนวณได้" : Math.abs(driftRate) < (tol || Infinity) * 0.02 ? "คงที่ (Stable)" : (driftRate > 0 ? "เพิ่มขึ้น (Increasing)" : "ลดลง (Decreasing)");
       }
-      out.push({ cert: c, instrument, error, tol, drift, yearsBetween, driftRate, projected, yearsToOOT, flag, calibYearBE: beYear(c.calibrationDate) });
+      out.push({ cert: c, instrument, error, tol, drift, yearsBetween, driftRate, projected, projDate, yearsToOOT, flag, calibYearBE: beYear(c.calibrationDate) });
     });
   });
   return out.sort((a, b) => (b.cert.calibrationDate || "").localeCompare(a.cert.calibrationDate || ""));
@@ -1408,7 +1446,10 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   // merged still work.
   // Instrument to preselect when jumping to "ตรวจเช็คเครื่องมือ" from the
   // calibration hub (unlike equipDeepLinkId, it does not auto-open a form).
-  const [checkFocusEquipId, setCheckFocusEquipId] = useState(null);
+  // A fresh object per jump, so jumping to the same instrument again still
+  // re-selects it; cleared when leaving the page so its back link goes away.
+  const [checkFocus, setCheckFocus] = useState(null);
+  useEffect(() => { if (tab !== "dailyCheck") setCheckFocus(null); }, [tab]);
   const [equipDeepLinkId] = useState(() => {
     if (typeof window === "undefined") return null;
     const params = new URLSearchParams(window.location.search);
@@ -1658,7 +1699,8 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
           {!restrictToBooking && tab === "dailyCheck" && (
             <DailyCheckTab equipment={equipment} certificates={certificates} dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks}
               intermediateChecks={intermediateChecks} setIntermediateChecks={persist.intermediateChecks}
-              notify={notify} initialCheckId={equipDeepLinkId} initialEquipId={checkFocusEquipId} guestMode={restrictToDailyCheck}
+              notify={notify} initialCheckId={equipDeepLinkId} focusRequest={checkFocus} guestMode={restrictToDailyCheck}
+              onBackToCalibration={checkFocus?.from === "calibration" ? () => setTab("calibrationRecords") : null}
               canApprove={canApprove} currentUsername={currentUsername} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "calibrationRecords" && (
@@ -1670,8 +1712,8 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
               uncertaintyBudgets={uncertaintyBudgets} setUncertaintyBudgets={persist.uncertaintyBudgets}
               actionImpacts={actionImpacts} setActionImpacts={persist.actionImpacts}
               approvalRecords={approvalRecords} setApprovalRecords={persist.approvalRecords}
-              notify={notify} currentDisplayName={currentDisplayName}
-              onOpenChecks={(id) => { setCheckFocusEquipId(id); setTab("dailyCheck"); }}
+              notify={notify} currentDisplayName={currentDisplayName} canApprove={canApprove}
+              onOpenChecks={(id) => { setCheckFocus({ id, from: "calibration", at: Date.now() }); setTab("dailyCheck"); }}
             />
           )}
           {tab === "equipmentView" && (
@@ -3644,10 +3686,34 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     const sync = onSyncDates ? onSyncDates(list) : "";
     notify(msg + (sync || ""), sync ? 6000 : 2200);
   }
+  // A certificate's evaluation/approval (Sheet 03) was made on its data at
+  // the time. If a point is added, removed or its values change afterwards,
+  // that sign-off no longer covers what is on record — it used to stay in
+  // place silently. Now it is withdrawn and has to be signed again.
+  const MEAS_KEYS = ["parameter", "rangeId", "calibrationPoint", "unit", "referenceValue", "indication", "reportedError", "reportedCorrection", "reportedU", "uReportedAs", "coverageFactor"];
+  const inGroup = (c, instrumentId, no, date) => c.instrumentId === instrumentId && (c.certificateNo || "") === (no || "") && (c.calibrationDate || "") === (date || "");
+  function clearSignoffs(list, instrumentId, no, date) {
+    let cleared = false;
+    const out = list.map(c => {
+      if (!inGroup(c, instrumentId, no, date) || !(c.evaluatedBy || c.approvedBy)) return c;
+      cleared = true;
+      return { ...c, evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", criteriaAt: null };
+    });
+    return { list: out, cleared };
+  }
+  const SIGNOFF_CLEARED_MSG = " · ข้อมูลเปลี่ยนหลังลงชื่อประเมินแล้ว — ต้องลงชื่อประเมิน/อนุมัติใหม่";
   function upsert(row) {
     const prev = certificates.find(c => c.id === row.id);
     const clean = normalizeCertRow(row, { wasIncomplete: !!prev?.missingItems });
-    commit(prev ? certificates.map(c => c.id === row.id ? clean : c) : [clean, ...certificates], prev ? "บันทึกจุดสอบเทียบแล้ว" : "เพิ่มจุดสอบเทียบแล้ว");
+    let list = prev ? certificates.map(c => c.id === row.id ? clean : c) : [clean, ...certificates];
+    let msg = prev ? "บันทึกจุดสอบเทียบแล้ว" : "เพิ่มจุดสอบเทียบแล้ว";
+    const changed = !prev || MEAS_KEYS.some(k => String(prev[k] ?? "") !== String(clean[k] ?? ""));
+    if (changed) {
+      const r = clearSignoffs(list, clean.instrumentId, clean.certificateNo, clean.calibrationDate);
+      list = r.list;
+      if (r.cleared) msg += SIGNOFF_CLEARED_MSG;
+    }
+    commit(list, msg);
     setEditing(null);
     // Land inside the certificate just saved, so "เพิ่มจุดสอบเทียบ" is one click away.
     setSelectedInstrumentId(clean.instrumentId);
@@ -3662,19 +3728,22 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     setEditing(null);
     setSelectedGroupKey(`${header.certificateNo || ""}|||${header.calibrationDate || ""}`);
   }
+  // Deletes also go through commit(): removing a certificate imported to the
+  // wrong instrument used to leave that instrument's "สอบเทียบล่าสุด /
+  // ครบกำหนด" pointing at the deleted certificate.
   function remove(id) {
     if (!window.confirm("ลบจุดสอบเทียบนี้หรือไม่?")) return;
-    setCertificates(certificates.filter(c => c.id !== id));
-    notify("ลบรายการแล้ว");
+    const target = certificates.find(c => c.id === id);
+    const r = clearSignoffs(certificates.filter(c => c.id !== id), target?.instrumentId, target?.certificateNo, target?.calibrationDate);
+    commit(r.list, "ลบจุดสอบเทียบแล้ว" + (r.cleared ? SIGNOFF_CLEARED_MSG : ""));
   }
   function removeGroup(groupKey) {
     const [no, date] = groupKey.split("|||");
-    const match = (c) => c.instrumentId === selectedInstrumentId && (c.certificateNo || "") === no && (c.calibrationDate || "") === date;
+    const match = (c) => inGroup(c, selectedInstrumentId, no, date);
     const n = certificates.filter(match).length;
     if (!window.confirm(`ลบใบรับรอง ${no || "-"} ทั้งใบ (${n} จุด) หรือไม่?`)) return;
-    setCertificates(certificates.filter(c => !match(c)));
+    commit(certificates.filter(c => !match(c)), "ลบใบรับรองแล้ว");
     setSelectedGroupKey(null);
-    notify("ลบใบรับรองแล้ว");
   }
 
   // Shared by both paste paths (text and JSON) so the two can
@@ -3995,7 +4064,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
               const st = c.recordStatus || "Verified";
               return (
                 <tr key={c.id} style={S.tr}>
-                  <td style={S.td}>{calPointLabel(c) || "-"}{c.rangeId ? <span style={{ color: "var(--muted)", fontSize: 11.5 }}> · ช่วง {c.rangeId}</span> : null}</td>
+                  <td style={S.td}>{calPointLabel(c) || "-"}</td>
                   <td style={{ ...S.td, ...mono }}>{c.referenceValue !== "" && c.referenceValue != null ? c.referenceValue : "-"}</td>
                   <td style={{ ...S.td, ...mono }} title={errorSourceLabel(c)}>{err != null ? round4(err) : "-"}</td>
                   <td style={{ ...S.td, ...mono }}>{U != null ? `${round4(U)} (k=${c.coverageFactor || 2})` : "-"}</td>
@@ -4187,7 +4256,18 @@ function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
    Nothing is typed in except the evaluator/approver sign-off, matching the
    workbook's own "เขียว = คำนวณอัตโนมัติ ห้ามพิมพ์ทับ" convention. */
 function calPointLabel(c) {
-  return `${c.parameter || ""}${c.calibrationPoint !== "" && c.calibrationPoint != null ? ` @ ${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : ""}`;
+  // Range is part of the label: photometric points share the same nominal
+  // (e.g. 0.5 A) at several wavelengths, which used to read identically.
+  return `${c.parameter || ""}${c.rangeId !== "" && c.rangeId != null ? ` [${c.rangeId}]` : ""}${c.calibrationPoint !== "" && c.calibrationPoint != null ? ` @ ${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : ""}`;
+}
+// Identity of "the same calibration point" across rounds (Sheet 06 trend).
+// Normalised so 361.3 vs "361.30" or a changed capitalisation of the
+// parameter don't split one point's history, and includes the range so
+// different wavelengths/ranges with the same nominal never merge.
+const normTxt = (v) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+function trendKeyOf(c) {
+  const p = numOrNull(c.calibrationPoint);
+  return `${c.instrumentId}|${normTxt(c.parameter)}|${normTxt(c.rangeId)}|${p != null ? p : normTxt(c.calibrationPoint)}`;
 }
 /* ---------- Sheet 06 trend chart (plain SVG, no chart library needed) ----------
    One small line chart per calibration point: Error per round (dots + line),
@@ -4254,11 +4334,16 @@ function TrendChart({ s, width = 300, height = 180 }) {
           <title>{`${fmtDate(p.date)} · ใบรับรอง ${p.certificateNo || "-"}\nError ${round4(p.error)}${p.U ? ` ± ${round4(p.U)}` : ""}${p.tol != null ? ` · Tolerance ± ${round4(p.tol)}` : ""} · ${p.decision}`}</title>
         </circle>
       ))}
-      {[...pts.map(p => p.date), ...(s.projection ? [s.projection.date] : [])].map((d, i, arr) => (
-        <text key={d + i} x={X(d)} y={height - 8} textAnchor="middle" fontSize="9.5" fill={s.projection && i === arr.length - 1 ? "var(--amber)" : "#8795A6"}>
-          {beYear(d)}{s.projection && i === arr.length - 1 ? "*" : ""}
-        </text>
-      ))}
+      {(() => {
+        const dates = [...pts.map(p => p.date), ...(s.projection ? [s.projection.date] : [])];
+        const years = dates.map(beYear);
+        const clash = years.some((y, i) => years.indexOf(y) !== i);
+        return dates.map((d, i) => (
+          <text key={d + i} x={X(d)} y={height - 8} textAnchor="middle" fontSize="9.5" fill={s.projection && i === dates.length - 1 ? "var(--amber)" : "#8795A6"}>
+            {clash ? fmtDate(d).split(" ").slice(1).join(" ") : years[i]}{s.projection && i === dates.length - 1 ? "*" : ""}
+          </text>
+        ));
+      })()}
     </svg>
   );
 }
@@ -4267,7 +4352,7 @@ function TrendCharts({ equipment, certificates, trendById, query = "" }) {
   const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
   const map = new Map();
   certificates.forEach(c => {
-    const key = `${c.instrumentId}|${c.parameter}|${c.calibrationPoint}`;
+    const key = trendKeyOf(c);
     if (!map.has(key)) map.set(key, { key, c0: c, list: [] });
     map.get(key).list.push(c);
   });
@@ -4278,12 +4363,7 @@ function TrendCharts({ equipment, certificates, trendById, query = "" }) {
       .map(c => { const ev = evaluateAcceptance(c, instrument); return { date: c.calibrationDate, certificateNo: c.certificateNo, error: derivedErrorOf(c), U: derivedUOf(c), tol: ev.tol, decision: ev.decision }; });
     const lastCert = list.slice().sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || ""))[0];
     const tr = lastCert ? trendById[lastCert.id] : null;
-    let projection = null;
-    if (tr && tr.projected != null && tr.yearsBetween && lastCert.calibrationDate) {
-      const d = new Date(lastCert.calibrationDate + "T00:00:00");
-      d.setDate(d.getDate() + Math.round(tr.yearsBetween * 365.25));
-      projection = { date: d.toISOString().slice(0, 10), value: tr.projected };
-    }
+    const projection = tr && tr.projected != null && tr.projDate ? { date: tr.projDate, value: tr.projected } : null;
     return { key, parameter: c0.parameter || "-", point: numOrNull(c0.calibrationPoint), label: calPointLabel(c0) || "-", unit: c0.unit || "", points: pts, projection, flag: tr?.flag || "", proposal: trendIntervalProposal(tr) };
   }).filter(s => s.points.length);
   const params = [...new Set(series.map(s => s.parameter))].sort(alphaCompare);
@@ -4328,7 +4408,7 @@ function TrendCharts({ equipment, certificates, trendById, query = "" }) {
   );
 }
 
-function CalibrationResultsTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "" }) {
+function CalibrationResultsTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", canApprove = true }) {
   const [q, setQ] = useState("");
   const byId = useMemo(() => Object.fromEntries(equipment.map(e => [e.id, e])), [equipment]);
   const trendById = useMemo(() => Object.fromEntries(computeTrendRows(certificates, equipment).map(r => [r.cert.id, r])), [certificates, equipment]);
@@ -4438,9 +4518,13 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                           <button style={S.smallBtn} onClick={() => sign(g, "evaluated")}><Pencil size={12} /> ลงชื่อผู้ประเมินทั้งใบ</button>
                         )}
                         {appr ? (
-                          <span style={{ fontSize: 12, color: "var(--green)" }}>อนุมัติโดย <b>{appr.by}</b> {appr.date ? `· ${fmtDate(appr.date)}` : ""} <button style={{ ...S.smallBtn, padding: "2px 7px" }} onClick={() => sign(g, "approved", true)}>ยกเลิก</button></span>
+                          <span style={{ fontSize: 12, color: "var(--green)" }}>อนุมัติโดย <b>{appr.by}</b> {appr.date ? `· ${fmtDate(appr.date)}` : ""} {canApprove && <button style={{ ...S.smallBtn, padding: "2px 7px" }} onClick={() => sign(g, "approved", true)}>ยกเลิก</button>}</span>
                         ) : (
-                          <button style={{ ...S.smallBtn, opacity: evald ? 1 : 0.5 }} disabled={!evald} title={evald ? "" : "ลงชื่อผู้ประเมินก่อน"} onClick={() => sign(g, "approved")}><Stamp size={12} /> อนุมัติ (Technical Manager)</button>
+                          // Approval is the Technical Manager's decision — only users with
+                          // approval rights (same permission as Daily check approval) can sign it.
+                          <button style={{ ...S.smallBtn, opacity: evald && canApprove ? 1 : 0.5 }} disabled={!evald || !canApprove}
+                            title={!canApprove ? "เฉพาะผู้มีสิทธิ์อนุมัติ (Technical Manager)" : evald ? "" : "ลงชื่อผู้ประเมินก่อน"}
+                            onClick={() => sign(g, "approved")}><Stamp size={12} /> อนุมัติ (Technical Manager)</button>
                         )}
                       </div>
                     </td>
@@ -4951,7 +5035,7 @@ function proposeActionImpact(instrument, certificates, checks, dailyChecks) {
       : (lastPass ? ` · Intermediate check ผ่านครั้งล่าสุด ${fmtDate(lastPass.c.checkDate)}` : " · Intermediate check ในรอบนี้ไม่มีครั้งที่ผ่าน")
         + (firstBad ? ` · เริ่มพบ ${firstBad.result} ${fmtDate(firstBad.c.checkDate)}` : "");
     return {
-      ...base, sourceOfFinding: "ผลการสอบเทียบประจำปี",
+      ...base, sourceOfFinding: "ผลการสอบเทียบประจำปี", findingKey: `cert:${instrument.id}:${latest}`,
       assessedDecision: worstDecision(bad.map(x => x.ev)),
       description: `ผลสอบเทียบรอบ ${fmtDate(latest)} (ใบรับรอง ${latestPts[0]?.certificateNo || "-"}) ไม่ผ่านเกณฑ์ ${bad.length} จุด: `
         + bad.slice(0, 6).map(x => `${calPointLabel(x.c)} = ${x.ev.decision}`).join(", ") + (bad.length > 6 ? " ..." : "") + evidence,
@@ -4965,7 +5049,7 @@ function proposeActionImpact(instrument, certificates, checks, dailyChecks) {
   if (failIc) {
     const round = roundOfDate(calibrationRounds(certificates, instrument.id), failIc.checkDate);
     const { lastPass } = checkEvidence(checksIn(round?.date || "", failIc.checkDate).filter(x => x.c.parameter === failIc.parameter && x.c.id !== failIc.id));
-    return { ...base, sourceOfFinding: "Intermediate Check", assessedDecision: "FAIL",
+    return { ...base, sourceOfFinding: "Intermediate Check", assessedDecision: "FAIL", findingKey: `ic:${failIc.id}`,
       impactPeriodFrom: lastPass?.c.checkDate || round?.date || "", impactPeriodTo: failIc.checkDate,
       description: `Intermediate Check วันที่ ${fmtDate(failIc.checkDate)} ไม่ผ่าน (${failIc.parameter || "-"}${failIc.checkItem ? ` · ${failIc.checkItem}` : ""})`
         + (lastPass ? ` · ผ่านครั้งล่าสุด ${fmtDate(lastPass.c.checkDate)}` : round ? ` · ไม่มีครั้งที่ผ่านตั้งแต่สอบเทียบ ${fmtDate(round.date)}` : ""),
@@ -4973,7 +5057,7 @@ function proposeActionImpact(instrument, certificates, checks, dailyChecks) {
   }
   const failDc = dailyChecks.filter(c => c.equipmentId === instrument.id && c.result === false && within90(c.date))
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
-  if (failDc) return { ...base, sourceOfFinding: "Daily Check", assessedDecision: "FAIL", impactPeriodTo: failDc.date,
+  if (failDc) return { ...base, sourceOfFinding: "Daily Check", assessedDecision: "FAIL", findingKey: `dc:${failDc.id}`, impactPeriodTo: failDc.date,
     description: `Daily check วันที่ ${fmtDate(failDc.date)} ไม่ผ่าน${failDc.remarks ? ` — ${failDc.remarks}` : ""}`,
     affectedTestMethods: instrument.relatedTestMethod || "" };
   return { ...base, affectedTestMethods: instrument.relatedTestMethod || "" };
@@ -4995,7 +5079,9 @@ function ActionImpactTab({ equipment, actionImpacts, setActionImpacts, certifica
         <div><h2 style={S.h2}>การดำเนินการและการประเมินผลกระทบ</h2><p style={S.h2sub}>บันทึกเมื่อผลไม่ผ่านเกณฑ์ (ISO/IEC 17025 ข้อ 7.10, 8.7)</p></div>
         <button style={S.primaryBtn} onClick={() => setEditing({ ...proposal, responsiblePerson: currentDisplayName })}><Plus size={15} /> บันทึกรายการใหม่</button>
       </div>
-      {proposal.description && !sorted.some(a => a.description === proposal.description) && (
+      {/* Hidden once a record exists for this finding — matched by key, not by
+          the description text (editing the text used to bring the banner back). */}
+      {proposal.findingKey && !sorted.some(a => a.findingKey === proposal.findingKey || a.description === proposal.description) && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5 }}>
           <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
           <span style={{ flex: 1 }}>{proposal.description}</span>
@@ -5730,6 +5816,10 @@ function CalibrationGuideModal({ onClose }) {
   );
 }
 
+// Survives the hub unmounting (e.g. a trip to "ตรวจเช็คเครื่องมือ" and
+// back), so returning lands on the same instrument and page instead of the
+// picker. Also keeps the picker's filters.
+const calibHubMemory = { instrumentId: null, view: null, q: "", typeFilter: "", statusFilter: "", dueFilter: "", layout: "cards", sortBy: "code" };
 function CalibrationRecordsHub({
   equipment, setEquipment,
   certificates, setCertificates,
@@ -5738,17 +5828,22 @@ function CalibrationRecordsHub({
   uncertaintyBudgets, setUncertaintyBudgets,
   actionImpacts, setActionImpacts,
   approvalRecords, setApprovalRecords,
-  notify, currentDisplayName = "", onOpenChecks = null,
+  notify, currentDisplayName = "", onOpenChecks = null, canApprove = true,
 }) {
-  const [selectedInstrumentId, setSelectedInstrumentId] = useState(null);
+  const mem = calibHubMemory;
+  const [selectedInstrumentId, setSelectedInstrumentId] = useState(() => (equipment.some(e => e.id === mem.instrumentId) ? mem.instrumentId : null));
   // Open page (sheet key); null = default for the chosen instrument.
-  const [view, setView] = useState(null);
+  const [view, setView] = useState(() => mem.view);
   const [lastLeaf, setLastLeaf] = useState({}); // remembers the switch position per tab
-  const [q, setQ] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState(""); // overall status key, or "gaps"
-  const [dueFilter, setDueFilter] = useState("");       // "" | "ok" | "warn" | "danger" | "none"
-  const [layout, setLayout] = useState("cards");        // "cards" | "table"
+  const [q, setQ] = useState(mem.q);
+  const [typeFilter, setTypeFilter] = useState(mem.typeFilter);
+  const [statusFilter, setStatusFilter] = useState(mem.statusFilter); // overall status key, or "gaps"
+  const [dueFilter, setDueFilter] = useState(mem.dueFilter);          // "" | "ok" | "warn" | "danger" | "none"
+  const [layout, setLayout] = useState(mem.layout);                   // "cards" | "table"
+  const [sortBy, setSortBy] = useState(mem.sortBy);                   // "code" | "due"
+  useEffect(() => {
+    Object.assign(calibHubMemory, { instrumentId: selectedInstrumentId, view, q, typeFilter, statusFilter, dueFilter, layout, sortBy });
+  }, [selectedInstrumentId, view, q, typeFilter, statusFilter, dueFilter, layout, sortBy]);
   const [showGrid, setShowGrid] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const exportAll = (onlyId = null) => exportMPIRWorkbook(equipment, dailyChecks, {
@@ -5775,7 +5870,18 @@ function CalibrationRecordsHub({
       .filter(({ e }) => !typeFilter || e.type === typeFilter)
       .filter(({ st, gaps }) => !statusFilter || (statusFilter === "gaps" ? gaps.length > 0 : st.key === statusFilter))
       .filter(({ days }) => !dueFilter || statusOf(days) === dueFilter)
-      .sort((a, b) => alphaCompare(a.e.code, b.e.code));
+      .sort((a, b) => sortBy === "due"
+        ? ((a.days ?? Number.MAX_SAFE_INTEGER) - (b.days ?? Number.MAX_SAFE_INTEGER)) || alphaCompare(a.e.code, b.e.code)
+        : alphaCompare(a.e.code, b.e.code));
+    // Counts per status over the whole register (not the filtered view) —
+    // clicking one filters to it.
+    const statusCounts = withStatus.reduce((m, x) => ({ ...m, [x.st.key]: (m[x.st.key] || 0) + 1 }), {});
+    const offByOne = calibratable.map(e => ({ e, fixed: offByOneNextDue(e) })).filter(x => x.fixed);
+    const repairDates = () => {
+      const fix = Object.fromEntries(offByOne.map(x => [x.e.id, x.fixed]));
+      setEquipment(equipment.map(e => (fix[e.id] ? { ...e, nextDue: fix[e.id] } : e)));
+      notify(`แก้วันครบกำหนดให้ถูกต้องแล้ว ${offByOne.length} เครื่อง`);
+    };
     const DUE_LABEL = { ok: "ยังไม่ถึงกำหนด", warn: "ครบกำหนดใน 30 วัน", danger: "เกินกำหนด", none: "ยังไม่มีกำหนด" };
     const chips = [
       q.trim() && { label: `ค้นหา: ${q.trim()}`, clear: () => setQ("") },
@@ -5834,6 +5940,31 @@ function CalibrationRecordsHub({
           </div>
         )}
         {showGrid && <CriteriaGridEditor equipment={equipment} setEquipment={setEquipment} notify={notify} onClose={() => setShowGrid(false)} />}
+        {offByOne.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "#EAF2FD", border: "1px solid #BFD5F3", borderRadius: 10, padding: "9px 13px", fontSize: 12.5 }}>
+            <Info size={15} color="#1D5FB8" style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>
+              <b>{offByOne.length}</b> เครื่อง มีวันครบกำหนดเร็วไป 1 วันจากบั๊กการคำนวณวันที่เดิม (เช่น {offByOne[0].e.code}: {fmtDate(offByOne[0].e.nextDue)} → {fmtDate(offByOne[0].fixed)})
+            </span>
+            <button style={{ ...S.smallBtn, flexShrink: 0 }} onClick={repairDates}>แก้ให้ถูกต้องทั้งหมด</button>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {Object.entries(INSTRUMENT_STATUS).filter(([k]) => statusCounts[k]).map(([k, v]) => {
+            const Icon = v.icon;
+            const active = statusFilter === k;
+            return (
+              <button key={k} onClick={() => setStatusFilter(active ? "" : k)} title={active ? "คลิกอีกครั้งเพื่อล้างตัวกรอง" : `แสดงเฉพาะ "${v.label}"`} style={{
+                display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12.5, fontWeight: 600,
+                color: v.color, background: active ? "#fff" : v.bg, border: `1px solid ${active ? v.color : v.border}`,
+                borderRadius: 10, padding: "6px 12px", boxShadow: active ? `0 0 0 2px ${v.bg}` : "none",
+              }}>
+                <Icon size={13} /> {v.label} <span style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{statusCounts[k]}</span>
+              </button>
+            );
+          })}
+        </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
           <div style={{ ...S.searchWrap, flex: "1 1 300px", height: 42 }}>
@@ -5873,7 +6004,11 @@ function CalibrationRecordsHub({
             </span>
           ))}
           {chips.length > 0 && <button onClick={clearAll} style={{ border: "none", background: "transparent", color: "var(--teal)", cursor: "pointer", fontSize: 12.5, fontWeight: 600, padding: "4px 6px" }}>ล้างทั้งหมด</button>}
-          <span style={{ marginLeft: "auto", color: "var(--muted)" }}>
+          <span style={{ marginLeft: "auto", color: "var(--muted)", display: "flex", alignItems: "center", gap: 10 }}>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...S.select, height: 30, fontSize: 12 }}>
+              <option value="code">เรียงตามรหัส</option>
+              <option value="due">เรียงตามวันครบกำหนด (ใกล้สุดก่อน)</option>
+            </select>
             จำนวนเครื่องมือทั้งหมด {rows.length}{rows.length !== calibratable.length ? ` จาก ${calibratable.length}` : ""} เครื่อง
           </span>
         </div>
@@ -5941,17 +6076,43 @@ function CalibrationRecordsHub({
   const scopedActionImpacts = actionImpacts.filter(a => a.instrumentId === selectedInstrumentId);
   const scopedApprovalRecords = approvalRecords.filter(a => a.instrumentId === selectedInstrumentId);
   // Newest certificate date → equipment "สอบเทียบล่าสุด" and "กำหนดถัดไป"
-  // (lastCalibration + intervalMonths). Only moves forward, so an older
-  // certificate entered for history never rolls the dates back. Returns the
-  // text appended to the save toast.
+  // (lastCalibration + intervalMonths).
+  // • Forward: a newer certificate moves the dates forward; an older one
+  //   entered for history never rolls them back.
+  // • Backward: if the date came from a certificate (lastCalibrationFrom =
+  //   "certificate") and that certificate is deleted, the dates fall back to
+  //   the newest remaining certificate, or to what was on the equipment
+  //   record before any certificate set it (calDateBaseline).
+  // Returns the text appended to the save toast.
   function syncDates(scopedList) {
     if (!instrument) return "";
     const latest = latestCertDate(scopedList);
-    if (!latest || latest <= (instrument.lastCalibration || "")) return "";
-    const nextDue = instrument.intervalMonths ? addMonths(latest, instrument.intervalMonths) : "";
-    setEquipment(equipment.map(e => e.id === instrument.id ? { ...e, lastCalibration: latest, ...(nextDue ? { nextDue } : {}) } : e));
-    return ` · อัปเดต "สอบเทียบล่าสุด" เป็น ${fmtDate(latest)}` + (nextDue ? ` และครบกำหนดถัดไป ${fmtDate(nextDue)}` : " (ยังไม่ได้ตั้งรอบสอบเทียบ (เดือน) จึงยังคำนวณวันครบกำหนดไม่ได้)");
+    const fromCert = instrument.lastCalibrationFrom === "certificate";
+    const due = (d) => (instrument.intervalMonths ? addMonths(d, instrument.intervalMonths) : "");
+    let patch = null, msg = "";
+    if (latest && latest > (instrument.lastCalibration || "")) {
+      const nextDue = due(latest);
+      patch = {
+        lastCalibration: latest, ...(nextDue ? { nextDue } : {}), lastCalibrationFrom: "certificate",
+        calDateBaseline: fromCert ? (instrument.calDateBaseline || null) : { lastCalibration: instrument.lastCalibration || "", nextDue: instrument.nextDue || "" },
+      };
+      msg = ` · อัปเดต "สอบเทียบล่าสุด" เป็น ${fmtDate(latest)}` + (nextDue ? ` และครบกำหนดถัดไป ${fmtDate(nextDue)}` : " (ยังไม่ได้ตั้งรอบสอบเทียบ (เดือน) จึงยังคำนวณวันครบกำหนดไม่ได้)");
+    } else if (fromCert && instrument.lastCalibration && !scopedList.some(c => c.calibrationDate === instrument.lastCalibration)) {
+      if (latest) {
+        const nextDue = due(latest);
+        patch = { lastCalibration: latest, ...(nextDue ? { nextDue } : {}) };
+        msg = ` · ย้อน "สอบเทียบล่าสุด" กลับเป็นใบรับรองที่เหลือล่าสุด ${fmtDate(latest)}`;
+      } else {
+        const base = instrument.calDateBaseline || { lastCalibration: "", nextDue: "" };
+        patch = { lastCalibration: base.lastCalibration || "", nextDue: base.nextDue || "", lastCalibrationFrom: "", calDateBaseline: null };
+        msg = base.lastCalibration ? ` · คืน "สอบเทียบล่าสุด" เป็นค่าเดิม ${fmtDate(base.lastCalibration)}` : ` · ล้าง "สอบเทียบล่าสุด" (ไม่มีใบรับรองเหลือ)`;
+      }
+    }
+    if (!patch) return "";
+    setEquipment(equipment.map(e => e.id === instrument.id ? { ...e, ...patch } : e));
+    return msg;
   }
+
   const calSum = instrument ? latestCalibrationSummary(instrument, scopedCertificates) : null;
 
   // ---- Feature cards: same look as the instrument picker above ----
@@ -5998,6 +6159,28 @@ function CalibrationRecordsHub({
     { key: "actions", label: "การแก้ไข & อนุมัติ", sheets: "08 · 09", icon: Stamp, leaves: ["actions", "approvals"] },
   ];
   const featureOf = (k) => FEATURES.find(f => f.key === k);
+  // ---- "ขั้นตอนรอบสอบเทียบ": where this instrument stands in its cycle ----
+  // Each step is derived from the records (nothing extra to tick), and the
+  // first unfinished one is offered as the next thing to do.
+  const latestPts = latestCert ? scopedCertificates.filter(c => c.calibrationDate === latestCert) : [];
+  const finding = instrument ? proposeActionImpact(instrument, scopedCertificates, scopedChecks, scopedDailyChecks) : null;
+  const needsAction = !!finding?.findingKey && finding.findingKey.startsWith("cert:");
+  const actionOpened = needsAction && scopedActionImpacts.some(a => a.findingKey === finding.findingKey || (a.dateIdentified || "") >= latestCert);
+  const statusConfirmed = !!usageStatusOf(instrument || {}) && !!authorizedByOf(instrument || {}) && (!latestCert || (instrument?.statusApprovalDate || "") >= latestCert);
+  const CYCLE_STEPS = [
+    { key: "criteria", label: "ตั้งเกณฑ์", view: "instrument", done: gaps.length === 0, todo: gaps.length ? `ยังขาด ${gaps.join(", ")}` : "" },
+    { key: "cert", label: "บันทึกใบรับรองรอบล่าสุด", view: "certificates",
+      done: !!latestCert && !latestPts.some(c => c.recordStatus === "Draft"),
+      todo: !latestCert ? "ยังไม่มีใบรับรองในระบบ" : "มีจุดที่ข้อมูลไม่ครบ (Draft)" },
+    { key: "evaluate", label: "ลงชื่อประเมินผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.evaluatedBy), todo: "ผลรอบล่าสุดยังไม่ได้ลงชื่อผู้ประเมิน" },
+    { key: "approve", label: "อนุมัติผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.approvedBy),
+      todo: canApprove ? "รออนุมัติโดย Technical Manager" : "รอผู้มีสิทธิ์อนุมัติ (Technical Manager)" },
+    ...(needsAction ? [{ key: "action", label: "เปิดเรื่องแก้ไข / ประเมินผลกระทบ", view: "actions", done: actionOpened, todo: `ผลรอบล่าสุด ${calSum?.decision || ""} — ต้องประเมินผลกระทบ` }] : []),
+    { key: "status", label: "ยืนยันสถานะการใช้งาน", view: "instrument", done: statusConfirmed,
+      todo: !usageStatusOf(instrument || {}) || !authorizedByOf(instrument || {}) ? "ยังไม่ได้ระบุสถานะ/ผู้อนุมัติ" : "ยืนยันสถานะอีกครั้งหลังใบรับรองรอบล่าสุด" },
+  ];
+  const nextStep = CYCLE_STEPS.find(st => !st.done);
+  const doneCount = CYCLE_STEPS.filter(st => st.done).length;
   const scopedCertSetter = makeScopedListSetter(certificates, setCertificates, selectedInstrumentId);
   const current = view || (gaps.length ? "instrument" : "certificates");
   const currentGroup = TAB_GROUPS.find(g => g.leaves.includes(current)) || TAB_GROUPS[0];
@@ -6019,6 +6202,41 @@ function CalibrationRecordsHub({
           </p>
         </div>
         <button style={S.smallBtn} onClick={() => exportAll(selectedInstrumentId)}><FileDown size={13} /> ส่งออก Excel เฉพาะเครื่องนี้</button>
+      </div>
+      <div style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, padding: "10px 14px", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)" }}>ขั้นตอนรอบสอบเทียบ</span>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>เสร็จ {doneCount}/{CYCLE_STEPS.length}</span>
+          <div style={{ flex: 1 }} />
+          {nextStep ? (
+            <button style={{ ...S.primaryBtn, padding: "6px 12px", fontSize: 12.5 }} onClick={() => setView(nextStep.view)}>
+              ถัดไป: {nextStep.label} <ChevronRight size={14} />
+            </button>
+          ) : (
+            <span style={{ fontSize: 12.5, color: "var(--green)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}><CheckCircle2 size={14} /> ครบทุกขั้นตอนของรอบนี้แล้ว</span>
+          )}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {CYCLE_STEPS.map((st, i) => {
+            const isNext = nextStep && nextStep.key === st.key;
+            return (
+              <button key={st.key} onClick={() => setView(st.view)} title={st.done ? "เสร็จแล้ว" : st.todo} style={{
+                display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: isNext ? 700 : 500,
+                borderRadius: 20, padding: "5px 11px",
+                background: st.done ? "#EAF7F0" : isNext ? "#FFF6E0" : "#F5F7FA",
+                color: st.done ? "#1E8A57" : isNext ? "#A86A00" : "#6B7A8C",
+                border: `1px solid ${st.done ? "#BFE6D0" : isNext ? "#F3DDA5" : "#E1E7EE"}`,
+              }}>
+                <span style={{
+                  width: 18, height: 18, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700,
+                  background: st.done ? "#1E8A57" : isNext ? "#D9941E" : "#C5CFDA", color: "#fff",
+                }}>{st.done ? <Check size={11} /> : i + 1}</span>
+                {st.label}
+              </button>
+            );
+          })}
+        </div>
+        {nextStep && <div style={{ fontSize: 11.5, color: "#A86A00", marginTop: 6 }}>{nextStep.todo}</div>}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
         {TAB_GROUPS.map(g => {
@@ -6068,7 +6286,7 @@ function CalibrationRecordsHub({
       {current === "results" && (
         <CalibrationResultsTab
           equipment={scopedEquipment} certificates={scopedCertificates} setCertificates={scopedCertSetter}
-          notify={notify} currentDisplayName={currentDisplayName}
+          notify={notify} currentDisplayName={currentDisplayName} canApprove={canApprove}
         />
       )}
       {current === "checks" && (
@@ -6169,9 +6387,16 @@ function InstrumentStatusCard({ instrument, certificates, intermediateChecks, da
             {LK_STATUS_ALL.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
         </Field>
-        <Field label={`ผู้อนุมัติ${instrument.statusApprovalDate && authorizedByOf(instrument) ? ` (${fmtDate(instrument.statusApprovalDate)})` : ""}`}>
-          <CommitInput style={S.input} placeholder="ชื่อผู้อนุมัติ" value={authorizedByOf(instrument)}
-            onCommit={v => set({ authorizedBy: v, statusApprovalDate: v ? todayISO() : "" })} />
+        <Field label={`ผู้อนุมัติ${instrument.statusApprovalDate && authorizedByOf(instrument) ? ` (ยืนยันล่าสุด ${fmtDate(instrument.statusApprovalDate)})` : ""}`}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <CommitInput style={{ ...S.input, flex: 1 }} placeholder="ชื่อผู้อนุมัติ" value={authorizedByOf(instrument)}
+              onCommit={v => set({ authorizedBy: v, statusApprovalDate: v ? todayISO() : "" })} />
+            {/* Same approver confirming again after a new certificate: stamps today's
+                date without retyping the name (typing the same name saved nothing). */}
+            {authorizedByOf(instrument) && instrument.statusApprovalDate !== todayISO() && (
+              <button type="button" style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => set({ statusApprovalDate: todayISO() })}>ยืนยันวันนี้</button>
+            )}
+          </div>
         </Field>
       </div>
     </div>
@@ -6330,15 +6555,15 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
 // (MPIR Sheet 04). Every calibrated instrument is listed; the Daily button
 // only appears for types that have a daily form. QR deep links still open
 // the Daily form straight away.
-function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, intermediateChecks = [], setIntermediateChecks = null, notify, initialCheckId, initialEquipId = null, guestMode = false, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, intermediateChecks = [], setIntermediateChecks = null, notify, initialCheckId, focusRequest = null, onBackToCalibration = null, guestMode = false, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const checkable = useMemo(() => equipment
     .filter(e => e.type !== "เครื่องปรับอากาศ" && (!guestMode || hasDailyForm(e)))
     .slice()
     .sort((a, b) => alphaCompare(a.code, b.code)), [equipment, guestMode]);
-  const [equipId, setEquipId] = useState(() => initialEquipId || checkable.find(hasDailyForm)?.id || checkable[0]?.id || "");
+  const [equipId, setEquipId] = useState(() => focusRequest?.id || checkable.find(hasDailyForm)?.id || checkable[0]?.id || "");
   const [editing, setEditing] = useState(null);
   const [editingIc, setEditingIc] = useState(null);
-  useEffect(() => { if (initialEquipId) setEquipId(initialEquipId); }, [initialEquipId]);
+  useEffect(() => { if (focusRequest?.id) setEquipId(focusRequest.id); }, [focusRequest]);
   const [showShare, setShowShare] = useState(false);
   const deepLinkHandled = useRef(false);
 
@@ -6410,6 +6635,11 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
 
   return (
     <div>
+      {onBackToCalibration && (
+        <button style={{ ...S.ghostBtn, marginBottom: 12 }} onClick={onBackToCalibration}>
+          <ChevronLeft size={14} /> กลับไปบันทึกการสอบเทียบ
+        </button>
+      )}
       <TabHeader title="ตรวจเช็คเครื่องมือ" sub="Daily check และ Intermediate check ระหว่างรอบสอบเทียบ (Sheet 04) รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที" />
 
       {checkable.length === 0 ? (
