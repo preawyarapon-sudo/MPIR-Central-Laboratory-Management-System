@@ -598,7 +598,8 @@ function compareCalPoints(a, b) {
   const pa = numOrNull(a.calibrationPoint), pb = numOrNull(b.calibrationPoint);
   return alphaCompare(a.parameter, b.parameter)
     || alphaCompare(a.rangeId, b.rangeId)
-    || ((pa ?? Number.MAX_VALUE) - (pb ?? Number.MAX_VALUE));
+    || ((pa ?? Number.MAX_VALUE) - (pb ?? Number.MAX_VALUE))
+    || (ADJ_RANK(a) - ADJ_RANK(b));
 }
 // Sheet 02 "รายการที่ขาด" — always computed, never typed by hand.
 function certMissingItems(c) {
@@ -659,7 +660,9 @@ function suggestCorrectionFromCerts(certs, instrumentId, parameter, referenceVal
   const own = certs.filter(c => c.instrumentId === instrumentId && derivedErrorOf(c) != null);
   const latest = latestCertDate(own);
   if (!latest) return null;
-  let pool = own.filter(c => c.calibrationDate === latest);
+  // After-adjustment values only: the correction to apply from now on is the
+  // one for the instrument as it was left, never the before-adjustment one.
+  let pool = asLeftPoints(own.filter(c => c.calibrationDate === latest));
   const p = (parameter || "").trim().toLowerCase();
   const sameParam = p ? pool.filter(c => { const cp = (c.parameter || "").toLowerCase(); return cp && (cp.includes(p) || p.includes(cp)); }) : [];
   if (sameParam.length) pool = sameParam;
@@ -977,37 +980,52 @@ function computeTrendRows(certificates, equipment) {
   });
   const out = [];
   Object.values(groups).forEach(list => {
-    const sorted = list.slice().sort((a, b) => (a.calibrationDate || "").localeCompare(b.calibrationDate || ""));
-    sorted.forEach((c, i) => {
+    // One round per calibration date. When the point was adjusted, the true
+    // drift over the interval is "as found now − as left last time"; the
+    // projection starts from the as-left value. Unadjusted: both are the
+    // same row, which reduces to the previous behaviour.
+    const byDate = new Map();
+    list.forEach(c => { const d = c.calibrationDate || ""; if (!byDate.has(d)) byDate.set(d, []); byDate.get(d).push(c); });
+    const rounds = [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, rows]) => {
+      const left = rows.find(isAfterAdj) || rows.find(r => !isBeforeAdj(r)) || rows[0];
+      const found = rows.find(isBeforeAdj) || left;
+      return { date, rows, left, found };
+    });
+    rounds.forEach((r, i) => {
+      const c = r.left;
       const instrument = byId[c.instrumentId];
       const error = derivedErrorOf(c);
+      const errFound = derivedErrorOf(r.found);
       const tol = resolveTolerance(criteriaFor(instrument, c), c);
-      const prev = sorted[i - 1];
+      const prev = rounds[i - 1]?.left;
       let drift = null, yearsBetween = null, driftRate = null, projected = null, projDate = "", yearsToOOT = null, flag = "ข้อมูลไม่พอ (จุดแรก)";
       if (prev) {
         const prevError = derivedErrorOf(prev);
-        if (error != null && prevError != null) drift = error - prevError;
+        if (errFound != null && prevError != null) drift = errFound - prevError;
         const d1 = new Date((prev.calibrationDate || "") + "T00:00:00"), d2 = new Date((c.calibrationDate || "") + "T00:00:00");
         if (!isNaN(d1) && !isNaN(d2)) yearsBetween = (d2 - d1) / (365.25 * 86400000);
         if (drift != null && yearsBetween) driftRate = drift / yearsBetween;
-        // Project to the next DUE round: the instrument's own interval when
-        // set (before: always "same spacing as the last two certificates").
+        // Project to the next DUE round: the instrument's own interval when set.
         const months = Number(instrument?.intervalMonths) || 0;
         const projYears = months ? months / 12 : yearsBetween;
         if (error != null && driftRate != null && projYears) {
           projected = error + driftRate * projYears;
           projDate = months ? addMonths(c.calibrationDate, months) : addDaysISO(c.calibrationDate, projYears * 365.25);
         }
-        // Moving away from zero → reaches the near limit; moving toward zero
-        // → must cross zero first and reach the opposite limit. (Before, both
-        // used the near limit, so an improving point looked about to fail.)
+        // Moving away from zero → reaches the near limit; toward zero → must
+        // cross zero and reach the opposite limit.
         if (tol != null && driftRate && error != null) {
           const away = error === 0 || Math.sign(driftRate) === Math.sign(error);
           yearsToOOT = Math.max(0, (away ? tol - Math.abs(error) : tol + Math.abs(error)) / Math.abs(driftRate));
         }
         flag = driftRate == null ? "ไม่สามารถคำนวณได้" : Math.abs(driftRate) < (tol || Infinity) * 0.02 ? "คงที่ (Stable)" : (driftRate > 0 ? "เพิ่มขึ้น (Increasing)" : "ลดลง (Decreasing)");
       }
-      out.push({ cert: c, instrument, error, tol, drift, yearsBetween, driftRate, projected, projDate, yearsToOOT, flag, calibYearBE: beYear(c.calibrationDate) });
+      const adjusted = r.found !== r.left;
+      r.rows.forEach(row => out.push({
+        cert: row, instrument, error: derivedErrorOf(row), tol, drift, yearsBetween, driftRate, projected, projDate, yearsToOOT,
+        flag: isBeforeAdj(row) && adjusted ? "ค่าก่อนปรับ (As found)" : flag,
+        adjusted, errFound: adjusted ? errFound : null, calibYearBE: beYear(row.calibrationDate),
+      }));
     });
   });
   return out.sort((a, b) => (b.cert.calibrationDate || "").localeCompare(a.cert.calibrationDate || ""));
@@ -1022,7 +1040,8 @@ function computeEquipmentStatusRows(equipment, certificates, intermediateChecks,
     const certs = certificates.filter(c => c.instrumentId === e.id);
     const latestDate = certs.reduce((max, c) => (c.calibrationDate || "") > max ? (c.calibrationDate || "") : max, "");
     const latestCerts = certs.filter(c => c.calibrationDate === latestDate && latestDate);
-    const evals = latestCerts.map(c => evaluateAcceptance(c, e));
+    const rs = roundSummary(latestCerts, e);
+    const evals = rs.current.map(x => x.ev); // as left — what the instrument is now
     const overall = evals.reduce((worst, ev) => (DECISION_RANK[ev.decision] || 0) > (DECISION_RANK[worst] || 0) ? ev.decision : worst, evals[0]?.decision || "-");
     const maxUtilization = evals.reduce((m, ev) => Math.max(m, ev.utilizationPct || 0), 0);
     const failingCount = evals.filter(ev => ev.decision === "FAIL" || ev.decision === "WARNING").length;
@@ -1034,7 +1053,7 @@ function computeEquipmentStatusRows(equipment, certificates, intermediateChecks,
     const failedChecks90 = failedIntermediate + failedDaily;
     const days = daysUntil(e.nextDue);
     const { rpn } = calcRPN(e.severity, e.occurrence, e.detectability);
-    return { e, days, cycleStatus: statusOf(days), overall, maxUtilization, failingCount, failedChecks90, rpn, calibYearBE: beYear(latestDate) };
+    return { e, days, cycleStatus: statusOf(days), overall, asFoundDecision: rs.asFoundDecision, adjusted: rs.adjusted, maxUtilization, failingCount, failedChecks90, rpn, calibYearBE: beYear(latestDate) };
   });
 }
 
@@ -1068,9 +1087,9 @@ function latestCalibrationSummary(instrument, certificates = []) {
   const certs = certificates.filter(c => c.instrumentId === instrument.id);
   const latestDate = certs.reduce((max, c) => (c.calibrationDate || "") > max ? (c.calibrationDate || "") : max, "");
   if (!latestDate) return null;
-  const evals = certs.filter(c => c.calibrationDate === latestDate).map(c => evaluateAcceptance(c, instrument));
-  const decision = evals.reduce((worst, ev) => (CALIB_DECISION_RANK[ev.decision] || 0) > (CALIB_DECISION_RANK[worst] || 0) ? ev.decision : worst, evals[0].decision);
-  return { date: latestDate, decision };
+  // Current fitness = after-adjustment values; before-adjustment reported separately.
+  const rs = roundSummary(certs.filter(c => c.calibrationDate === latestDate), instrument);
+  return { date: latestDate, decision: rs.decision, asFoundDecision: rs.asFoundDecision, adjusted: rs.adjusted };
 }
 
 /* ---------- return-tracking helpers (chemicals / consumables withdrawals) ---------- */
@@ -3961,14 +3980,18 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                 <tbody>
                   {byYear.get(y).map(g => {
                     const worst = worstRecordStatus(g.points);
-                    const decision = worstDecision(g.points.map(p => evaluateAcceptance(p, instrument)));
+                    const rs = roundSummary(g.points, instrument);
+                    const decision = rs.decision;
                     return (
                       <tr key={g.key} style={{ ...S.tr, cursor: "pointer" }} onClick={() => setSelectedGroupKey(g.key)}>
                         <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{g.certificateNo || "-"}</td>
                         <td style={S.td}>{g.provider || "-"}</td>
                         <td style={S.td}>{fmtDate(g.calibrationDate)}</td>
                         <td style={S.td}>{g.points.length} จุด</td>
-                        <td style={S.td}><span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[decision], color: CALIB_DECISION_COLOR[decision] }}>{decision}</span></td>
+                        <td style={S.td}>
+                          <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[decision], color: CALIB_DECISION_COLOR[decision] }}>{rs.adjusted ? `หลังปรับ ${decision}` : decision}</span>
+                          {rs.asFoundDecision && <div style={{ fontSize: 11, marginTop: 3, color: isBadDecision(rs.asFoundDecision) ? "var(--red)" : "var(--muted)" }}>ก่อนปรับ {rs.asFoundDecision}</div>}
+                        </td>
                         <td style={S.td}><span style={{ ...S.tag, borderColor: recordStatusColor(worst), color: recordStatusColor(worst) }}>{worst}</span></td>
                         <td style={S.td}><ChevronRight size={14} color="var(--muted)" /></td>
                       </tr>
@@ -3993,7 +4016,9 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     .slice().sort(compareCalPoints);
   const head = pointsForGroup[0] || { certificateNo: gCertNo, calibrationDate: gCalDate };
   const groupStatus = worstRecordStatus(pointsForGroup);
-  const groupDecision = worstDecision(pointsForGroup.map(c => evaluateAcceptance(c, instrument)));
+  const groupRs = roundSummary(pointsForGroup, instrument);
+  const groupDecision = groupRs.decision;
+  const ambiguous = ambiguousAdjPoints(pointsForGroup);
   // New point: header copied from the certificate, parameter/unit/range/k
   // carried over from the last point (the next point is usually the same
   // parameter at the next value) — only the numbers need typing.
@@ -4003,8 +4028,9 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
       ...blankCertificate(selectedInstrumentId), ...pickCertHeader(head),
       parameter: last.parameter || "", rangeId: last.rangeId || "", unit: last.unit || "",
       uReportedAs: last.uReportedAs || "Absolute", coverageFactor: last.coverageFactor ?? 2,
-      coverageProbabilityPct: last.coverageProbabilityPct ?? 95, adjustmentStatus: last.adjustmentStatus || "",
-      source: "manual",
+      coverageProbabilityPct: last.coverageProbabilityPct ?? 95,
+      adjustmentStatus: isBeforeAdj(last) || isAfterAdj(last) ? last.adjustmentStatus : "",
+      recordStatus: "", source: "manual",
     };
   }
   const info = (label, value) => (
@@ -4047,16 +4073,37 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           <span style={{ color: "var(--muted)" }}>สถานะ / ผลตัดสินทั้งใบ</span>
           <div style={{ display: "flex", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
             <span style={{ ...S.tag, borderColor: recordStatusColor(groupStatus), color: recordStatusColor(groupStatus) }}>{groupStatus}</span>
-            <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[groupDecision], color: CALIB_DECISION_COLOR[groupDecision] }}>{groupDecision}</span>
+            <span title={groupRs.adjusted ? "ใช้ค่าหลังปรับแก้ตัดสินสถานะเครื่อง" : ""} style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[groupDecision], color: CALIB_DECISION_COLOR[groupDecision] }}>{groupRs.adjusted ? `หลังปรับ ${groupDecision}` : groupDecision}</span>
+            {groupRs.asFoundDecision && (
+              <span style={{ ...S.tag, borderColor: isBadDecision(groupRs.asFoundDecision) ? "var(--red)" : "var(--line)", color: isBadDecision(groupRs.asFoundDecision) ? "var(--red)" : "var(--muted)" }}>ก่อนปรับ {groupRs.asFoundDecision}</span>
+            )}
           </div>
         </div>
         {head.pdfLink
           ? <div><span style={{ color: "var(--muted)" }}>ไฟล์ใบรับรอง</span><div><a href={head.pdfLink} target="_blank" rel="noreferrer" style={{ color: "var(--teal-dark)" }}>เปิดไฟล์ PDF</a></div></div>
           : info("ไฟล์ใบรับรอง", "")}
       </div>
+      {groupRs.adjusted && isBadDecision(groupRs.asFoundDecision) && !isBadDecision(groupDecision) && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12, background: "#FFF6E0", border: "1px solid #F3DDA5", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, lineHeight: 1.6 }}>
+          <Info size={15} color="#A86A00" style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>
+            <b>หลังปรับแก้ผ่านเกณฑ์ — เครื่องใช้งานต่อได้</b> แต่ค่าก่อนปรับไม่ผ่าน แปลว่าช่วงก่อนส่งสอบเทียบเครื่องอาจวัดคลาดเกินเกณฑ์
+            ต้องประเมินผลกระทบย้อนหลังต่อผลที่ออกไปแล้ว (ISO/IEC 17025 ข้อ 7.10) ที่หน้า "การแก้ไข & อนุมัติ"
+          </span>
+        </div>
+      )}
+      {ambiguous.length > 0 && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12, background: "#FDF1F1", border: "1px solid #F2C4C4", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, lineHeight: 1.6 }}>
+          <FileWarning size={15} color="var(--red)" style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>
+            มีจุดที่บันทึกซ้ำโดยไม่ระบุว่าเป็นค่าก่อนหรือหลังปรับแก้ ({ambiguous.map(c => calPointLabel(c)).join(", ")}) — ระบบจึงใช้ผลที่แย่ที่สุดตัดสิน
+            กดแก้ไขแต่ละแถวแล้วเลือก "สถานะการปรับแก้" ให้ถูกต้อง ระบบจะตัดสินสถานะเครื่องจากค่าหลังปรับ
+          </span>
+        </div>
+      )}
       <div style={{ ...S.tableWrap, overflowX: "auto" }}>
-        <table style={{ ...S.table, minWidth: 760 }}>
-          <thead><tr>{["พารามิเตอร์ / จุด", "ค่าอ้างอิง", "Error ที่ใช้คำนวณ", "U", "ผลตัดสิน", "สถานะ", "ที่มา", ""].map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+        <table style={{ ...S.table, minWidth: 820 }}>
+          <thead><tr>{["พารามิเตอร์ / จุด", "ก่อน/หลังปรับ", "ค่าอ้างอิง", "Error ที่ใช้คำนวณ", "U", "ผลตัดสิน", "สถานะ", "ที่มา", ""].map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
           <tbody>
             {pointsForGroup.map(c => {
               const ev = evaluateAcceptance(c, instrument);
@@ -4065,6 +4112,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
               return (
                 <tr key={c.id} style={S.tr}>
                   <td style={S.td}>{calPointLabel(c) || "-"}</td>
+                  <td style={S.td}><AdjTag c={c} /></td>
                   <td style={{ ...S.td, ...mono }}>{c.referenceValue !== "" && c.referenceValue != null ? c.referenceValue : "-"}</td>
                   <td style={{ ...S.td, ...mono }} title={errorSourceLabel(c)}>{err != null ? round4(err) : "-"}</td>
                   <td style={{ ...S.td, ...mono }}>{U != null ? `${round4(U)} (k=${c.coverageFactor || 2})` : "-"}</td>
@@ -4073,6 +4121,15 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                   <td style={{ ...S.td, fontSize: 11.5 }}>{c.source === "pdf-ai" ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--teal-dark)" }}><Sparkles size={12} /> นำเข้า</span> : "กรอกเอง"}</td>
                   <td style={S.td}>
                     <div style={{ display: "flex", gap: 4 }}>
+                      {isBeforeAdj(c) && !pointsForGroup.some(x => x !== c && isAfterAdj(x) && trendKeyOf(x) === trendKeyOf(c)) && (
+                        <button style={{ ...S.smallBtn, padding: "3px 8px" }} title="เพิ่มค่าหลังปรับแก้ของจุดเดียวกัน"
+                          onClick={() => setEditing({ mode: "point", row: {
+                            ...blankCertificate(selectedInstrumentId), ...pickCertHeader(head), recordStatus: "",
+                            parameter: c.parameter, rangeId: c.rangeId, calibrationPoint: c.calibrationPoint, unit: c.unit, referenceValue: c.referenceValue,
+                            uReportedAs: c.uReportedAs || "Absolute", coverageFactor: c.coverageFactor ?? 2, coverageProbabilityPct: c.coverageProbabilityPct ?? 95,
+                            adjustmentStatus: LK_ADJ[1], source: "manual",
+                          } })}><Plus size={12} /> หลังปรับ</button>
+                      )}
                       <button style={S.iconBtnSm} title="แก้ไขจุดนี้" onClick={() => setEditing({ row: c, mode: "point" })}><Pencil size={13} /></button>
                       <button style={S.iconBtnSm} title="ลบจุดนี้" onClick={() => remove(c.id)}><Trash2 size={13} /></button>
                     </div>
@@ -4080,7 +4137,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                 </tr>
               );
             })}
-            {pointsForGroup.length === 0 && <tr><td style={S.td} colSpan={8}><EmptyState text="ไม่มีจุดสอบเทียบในใบรับรองนี้" /></td></tr>}
+            {pointsForGroup.length === 0 && <tr><td style={S.td} colSpan={9}><EmptyState text="ไม่มีจุดสอบเทียบในใบรับรองนี้" /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -4094,6 +4151,13 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   );
 }
 
+// Small before/after-adjustment label used in certificate and result tables.
+function AdjTag({ c }) {
+  if (isBeforeAdj(c)) return <span style={{ ...S.tag, borderColor: "#F3DDA5", color: "#A86A00", background: "#FFF6E0" }}>ก่อนปรับ</span>;
+  if (isAfterAdj(c)) return <span style={{ ...S.tag, borderColor: "#BFD5F3", color: "#1D5FB8", background: "#EAF2FD" }}>หลังปรับ</span>;
+  if (/no adjustment|ไม่มีการปรับ/i.test(c.adjustmentStatus || "")) return <span style={{ fontSize: 11.5, color: "var(--muted)" }}>ไม่ได้ปรับ</span>;
+  return <span style={{ fontSize: 11.5, color: "#B4BFCC" }}>-</span>;
+}
 // mode "full"   — new certificate: header cards + first point
 // mode "point"  — add/edit one point: header is inherited, only point cards
 // mode "header" — edit the certificate header once for every point
@@ -4205,6 +4269,7 @@ function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
             <option value="">- ยังไม่ระบุ -</option>
             {LK_ADJ.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
+          {hint("ใบรับรองที่มีค่าก่อนและหลังปรับ: บันทึกเป็น 2 แถว — สถานะเครื่องตัดสินจากค่าหลังปรับ ค่าก่อนปรับใช้ประเมินผลกระทบย้อนหลัง")}
         </Field>
         <div style={{ gridColumn: "1 / -1", fontSize: 12.5 }}>
           Error ที่ใช้คำนวณ: <b style={mono}>{err != null ? round4(err) : "-"}</b>
@@ -4265,6 +4330,51 @@ function calPointLabel(c) {
 // parameter don't split one point's history, and includes the range so
 // different wavelengths/ranges with the same nominal never merge.
 const normTxt = (v) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+// Before/after adjustment ("As found" / "As left"). A certificate for an
+// instrument that the provider adjusted lists each point twice: the values
+// before adjustment and after. They answer different questions:
+//   • after (as left)  → is the instrument fit for use NOW   → status, Sheet 03/07
+//   • before (as found) → was it in tolerance while we were using it
+//                         → if not, results issued since the last calibration
+//                           need a retrospective impact evaluation (7.10, Sheet 08)
+// Before this, every row counted equally, so one before-adjustment FAIL made the
+// certificate and the instrument FAIL even though it passed after adjustment.
+const isBeforeAdj = (c) => /before adjustment|ก่อนปรับ/i.test(c?.adjustmentStatus || "");
+const isAfterAdj = (c) => /after adjustment|หลังปรับ/i.test(c?.adjustmentStatus || "");
+const ADJ_RANK = (c) => (isBeforeAdj(c) ? 0 : isAfterAdj(c) ? 2 : 1);
+// Rows that describe the instrument as it is now, per calibration point:
+// the after-adjustment row(s) if present, else the unmarked rows, else the
+// before rows (adjusted but no after values entered — judged conservatively).
+function asLeftPoints(points) {
+  const groups = new Map();
+  points.forEach(c => { const k = trendKeyOf(c); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); });
+  const out = [];
+  groups.forEach(rows => {
+    const after = rows.filter(isAfterAdj);
+    const plain = rows.filter(r => !isBeforeAdj(r) && !isAfterAdj(r));
+    out.push(...(after.length ? after : plain.length ? plain : rows));
+  });
+  return out;
+}
+// Same point entered more than once with nothing saying which is before /
+// after adjustment — the system can't tell, so it keeps the worst and warns.
+function ambiguousAdjPoints(points) {
+  const groups = new Map();
+  points.forEach(c => { const k = trendKeyOf(c); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); });
+  return [...groups.values()].filter(rows => rows.length > 1 && rows.filter(r => !isBeforeAdj(r) && !isAfterAdj(r)).length > 1).map(rows => rows[0]);
+}
+// Decision of one calibration round (one certificate / one date).
+function roundSummary(points, instrument) {
+  const current = asLeftPoints(points).map(c => ({ c, ev: evaluateAcceptance(c, instrument) }));
+  const found = points.filter(isBeforeAdj).map(c => ({ c, ev: evaluateAcceptance(c, instrument) }));
+  return {
+    decision: current.length ? worstDecision(current.map(x => x.ev)) : "-",
+    asFoundDecision: found.length ? worstDecision(found.map(x => x.ev)) : null,
+    adjusted: found.length > 0 || points.some(isAfterAdj),
+    current, found,
+  };
+}
+const isBadDecision = (d) => d === "FAIL" || d === "WARNING";
 function trendKeyOf(c) {
   const p = numOrNull(c.calibrationPoint);
   return `${c.instrumentId}|${normTxt(c.parameter)}|${normTxt(c.rangeId)}|${p != null ? p : normTxt(c.calibrationPoint)}`;
@@ -4282,7 +4392,7 @@ function TrendChart({ s, width = 300, height = 180 }) {
   let x0 = Math.min(...xs), x1 = Math.max(...xs);
   if (x0 === x1) { x0 -= 180 * 86400000; x1 += 180 * 86400000; }
   const ys = [0];
-  pts.forEach(p => { if (p.error != null) ys.push(p.error + (p.U || 0), p.error - (p.U || 0)); if (p.tol != null) ys.push(p.tol, -p.tol); });
+  pts.forEach(p => { if (p.error != null) ys.push(p.error + (p.U || 0), p.error - (p.U || 0)); if (p.tol != null) ys.push(p.tol, -p.tol); if (p.found?.error != null) ys.push(p.found.error); });
   if (s.projection) ys.push(s.projection.value);
   let y0 = Math.min(...ys), y1 = Math.max(...ys);
   if (y0 === y1) { y0 -= 1; y1 += 1; }
@@ -4329,9 +4439,17 @@ function TrendChart({ s, width = 300, height = 180 }) {
           </circle>
         </>
       )}
+      {withErr.filter(p => p.found?.error != null).map(p => (
+        <g key={`f${p.date}`}>
+          <line x1={X(p.date)} x2={X(p.date)} y1={Y(p.found.error)} y2={Y(p.error)} stroke="#B4BFCC" strokeWidth="1.2" strokeDasharray="2 2" />
+          <circle cx={X(p.date)} cy={Y(p.found.error)} r="4" fill="#fff" stroke={dotColor(p.found.decision)} strokeWidth="1.8">
+            <title>{`${fmtDate(p.date)} · ก่อนปรับแก้ (As found)\nError ${round4(p.found.error)} · ${p.found.decision}`}</title>
+          </circle>
+        </g>
+      ))}
       {withErr.map(p => (
         <circle key={p.date} cx={X(p.date)} cy={Y(p.error)} r="4" fill={dotColor(p.decision)} stroke="#fff" strokeWidth="1.5">
-          <title>{`${fmtDate(p.date)} · ใบรับรอง ${p.certificateNo || "-"}\nError ${round4(p.error)}${p.U ? ` ± ${round4(p.U)}` : ""}${p.tol != null ? ` · Tolerance ± ${round4(p.tol)}` : ""} · ${p.decision}`}</title>
+          <title>{`${fmtDate(p.date)} · ใบรับรอง ${p.certificateNo || "-"}${p.found ? " · หลังปรับแก้" : ""}\nError ${round4(p.error)}${p.U ? ` ± ${round4(p.U)}` : ""}${p.tol != null ? ` · Tolerance ± ${round4(p.tol)}` : ""} · ${p.decision}`}</title>
         </circle>
       ))}
       {(() => {
@@ -4358,10 +4476,20 @@ function TrendCharts({ equipment, certificates, trendById, query = "" }) {
   });
   let series = [...map.values()].map(({ key, c0, list }) => {
     const instrument = byId[c0.instrumentId];
-    const pts = list.slice().sort((a, b) => (a.calibrationDate || "").localeCompare(b.calibrationDate || ""))
-      .filter(c => c.calibrationDate)
-      .map(c => { const ev = evaluateAcceptance(c, instrument); return { date: c.calibrationDate, certificateNo: c.certificateNo, error: derivedErrorOf(c), U: derivedUOf(c), tol: ev.tol, decision: ev.decision }; });
-    const lastCert = list.slice().sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || ""))[0];
+    // One point per round: the line follows the as-left value (the state the
+    // instrument was left in); an adjusted round also carries its as-found
+    // value, drawn as a hollow marker joined to the as-left dot.
+    const byDate = new Map();
+    list.filter(c => c.calibrationDate).forEach(c => { if (!byDate.has(c.calibrationDate)) byDate.set(c.calibrationDate, []); byDate.get(c.calibrationDate).push(c); });
+    const pts = [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, rows]) => {
+      const left = rows.find(isAfterAdj) || rows.find(r => !isBeforeAdj(r)) || rows[0];
+      const found = rows.find(isBeforeAdj);
+      const ev = evaluateAcceptance(left, instrument);
+      const evF = found && found !== left ? evaluateAcceptance(found, instrument) : null;
+      return { date, certificateNo: left.certificateNo, error: derivedErrorOf(left), U: derivedUOf(left), tol: ev.tol, decision: ev.decision,
+        found: evF ? { error: derivedErrorOf(found), decision: evF.decision } : null };
+    });
+    const lastCert = list.slice().sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || "") || (ADJ_RANK(b) - ADJ_RANK(a)))[0];
     const tr = lastCert ? trendById[lastCert.id] : null;
     const projection = tr && tr.projected != null && tr.projDate ? { date: tr.projDate, value: tr.projected } : null;
     return { key, parameter: c0.parameter || "-", point: numOrNull(c0.calibrationPoint), label: calPointLabel(c0) || "-", unit: c0.unit || "", points: pts, projection, flag: tr?.flag || "", proposal: trendIntervalProposal(tr) };
@@ -4389,6 +4517,7 @@ function TrendCharts({ equipment, certificates, trendById, query = "" }) {
         <span><svg width="10" height="12"><line x1="5" x2="5" y1="1" y2="11" stroke="#9DB6D3" strokeWidth="1.5" /></svg> ± U</span>
         <span><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="var(--red)" strokeWidth="1.2" strokeDasharray="4 3" /></svg> ± Tolerance</span>
         <span><svg width="22" height="8"><line x1="0" x2="22" y1="4" y2="4" stroke="var(--amber)" strokeWidth="1.5" strokeDasharray="3 3" /></svg> คาดการณ์รอบถัดไป (*)</span>
+        <span><svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="#fff" stroke="#8795A6" strokeWidth="1.8" /></svg> ค่าก่อนปรับแก้ (ถ้ามี)</span>
         <span>สีจุด = ผลตัดสินรอบนั้น · ชี้ที่จุดเพื่อดูค่า</span>
       </div>
       {!multiRound && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>ตอนนี้มีใบรับรองรอบเดียว กราฟจะเป็นเส้นแนวโน้มเมื่อมีตั้งแต่ 2 รอบขึ้นไป</div>}
@@ -4428,7 +4557,8 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
       .map(g => {
         const instrument = byId[g.instrumentId];
         const points = g.points.slice().sort(compareCalPoints).map(c => ({ c, ev: evaluateAcceptance(c, instrument), tr: trendById[c.id] }));
-        return { ...g, instrument, points, decision: worstDecision(points.map(p => p.ev)) };
+        const rs = roundSummary(g.points, instrument);
+        return { ...g, instrument, points, decision: rs.decision, asFoundDecision: rs.asFoundDecision, adjusted: rs.adjusted };
       });
   }, [certificates, byId, trendById]);
   const ql = q.toLowerCase();
@@ -4505,7 +4635,10 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         <b style={mono}>{g.certificateNo || "-"}</b>
                         <span style={{ color: "var(--muted)", fontSize: 12 }}>สอบเทียบ {fmtDate(g.calibrationDate)} (พ.ศ. {beYear(g.calibrationDate) || "-"}){g.provider ? ` · ${g.provider}` : ""} · {g.points.length} จุด</span>
-                        <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[g.decision], color: CALIB_DECISION_COLOR[g.decision] }}>ทั้งใบ: {g.decision}</span>
+                        <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[g.decision], color: CALIB_DECISION_COLOR[g.decision] }}>ทั้งใบ{g.adjusted ? " (หลังปรับ)" : ""}: {g.decision}</span>
+                        {g.asFoundDecision && (
+                          <span title="ใช้ประเมินผลกระทบย้อนหลัง ไม่ใช้ตัดสินสถานะเครื่องปัจจุบัน" style={{ ...S.tag, borderColor: isBadDecision(g.asFoundDecision) ? "var(--red)" : "var(--line)", color: isBadDecision(g.asFoundDecision) ? "var(--red)" : "var(--muted)" }}>ก่อนปรับ: {g.asFoundDecision}</span>
+                        )}
                         {g.points[0]?.c.criteriaAt && (
                           <span title={`ล็อกเมื่อ ${fmtDate(g.points[0].c.criteriaAt.capturedAt)}`} style={{ fontSize: 11.5, color: criteriaChanged(g.instrument, g.points[0].c) ? "var(--amber)" : "var(--muted)" }}>
                             🔒 {criteriaText(g.points[0].c.criteriaAt)}{criteriaChanged(g.instrument, g.points[0].c) ? " — เกณฑ์ ณ วันประเมิน (ต่างจากปัจจุบัน)" : ""}
@@ -4533,8 +4666,8 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                     const U = derivedUOf(c);
                     const proposal = trendIntervalProposal(tr);
                     return (
-                      <tr key={c.id} style={S.tr}>
-                        <td style={S.td}>{calPointLabel(c) || "-"}</td>
+                      <tr key={c.id} style={{ ...S.tr, ...(isBeforeAdj(c) && g.adjusted ? { background: "#FFFCF3" } : {}) }}>
+                        <td style={S.td}>{calPointLabel(c) || "-"}{(isBeforeAdj(c) || isAfterAdj(c)) && <span style={{ marginLeft: 6 }}><AdjTag c={c} /></span>}</td>
                         <td style={{ ...S.td, ...mono }} title={errorSourceLabel(c)}>{fx(tr?.error ?? derivedErrorOf(c))}</td>
                         {detail && <td style={{ ...S.td, ...mono }}>{U != null ? round4(U) : "-"}</td>}
                         <td style={{ ...S.td, ...mono }}>{ev.tol != null ? `± ${round4(ev.tol)}` : <span style={{ fontFamily: "inherit", color: "var(--amber)" }}>ยังไม่ตั้ง</span>}</td>
@@ -5013,7 +5146,11 @@ function proposeActionImpact(instrument, certificates, checks, dailyChecks) {
   const own = certificates.filter(c => c.instrumentId === instrument.id);
   const latest = latestCertDate(own);
   const latestPts = own.filter(c => c.calibrationDate === latest);
-  const bad = latestPts.map(c => ({ c, ev: evaluateAcceptance(c, instrument) })).filter(x => ["FAIL", "WARNING", "CONDITIONAL PASS"].includes(x.ev.decision));
+  const rsLatest = roundSummary(latestPts, instrument);
+  // Current (as-left) failures → the instrument itself is the problem.
+  const bad = rsLatest.current.filter(x => ["FAIL", "WARNING", "CONDITIONAL PASS"].includes(x.ev.decision));
+  // Only the before-adjustment values failed → usable now, but past results need review.
+  const badFound = rsLatest.found.filter(x => isBadDecision(x.ev.decision));
   // Sheet 04 checks inside a period narrow the impact window: the last
   // PASS is evidence the instrument was fine on that date, so the period
   // can start there instead of at the beginning of the whole round.
@@ -5040,6 +5177,25 @@ function proposeActionImpact(instrument, certificates, checks, dailyChecks) {
       description: `ผลสอบเทียบรอบ ${fmtDate(latest)} (ใบรับรอง ${latestPts[0]?.certificateNo || "-"}) ไม่ผ่านเกณฑ์ ${bad.length} จุด: `
         + bad.slice(0, 6).map(x => `${calPointLabel(x.c)} = ${x.ev.decision}`).join(", ") + (bad.length > 6 ? " ..." : "") + evidence,
       impactPeriodFrom: lastPass?.c.checkDate || prevDate, impactPeriodTo: latest,
+      affectedTestMethods: instrument.relatedTestMethod || "",
+    };
+  }
+  if (badFound.length) {
+    const prevDate = own.map(c => c.calibrationDate || "").filter(d => d && d < latest).sort().pop() || "";
+    const list = checksIn(prevDate, latest);
+    const { lastPass, firstBad } = checkEvidence(list);
+    const evidence = !list.length
+      ? " · ไม่มี Intermediate check ในรอบนี้ ต้องประเมินย้อนทั้งรอบ"
+      : (lastPass ? ` · Intermediate check ผ่านครั้งล่าสุด ${fmtDate(lastPass.c.checkDate)}` : " · Intermediate check ในรอบนี้ไม่มีครั้งที่ผ่าน")
+        + (firstBad ? ` · เริ่มพบ ${firstBad.result} ${fmtDate(firstBad.c.checkDate)}` : "");
+    return {
+      ...base, sourceOfFinding: "ผลการสอบเทียบประจำปี (ค่าก่อนปรับแก้)", findingKey: `asfound:${instrument.id}:${latest}`,
+      assessedDecision: `ก่อนปรับ ${worstDecision(badFound.map(x => x.ev))} / หลังปรับ ${rsLatest.decision}`,
+      description: `ค่าก่อนปรับแก้ (As found) รอบ ${fmtDate(latest)} (ใบรับรอง ${latestPts[0]?.certificateNo || "-"}) ไม่ผ่านเกณฑ์ ${badFound.length} จุด: `
+        + badFound.slice(0, 6).map(x => `${calPointLabel(x.c)} = ${x.ev.decision}`).join(", ") + (badFound.length > 6 ? " ..." : "")
+        + ` — หลังปรับแก้ผ่านเกณฑ์ ใช้งานต่อได้ แต่ต้องประเมินผลที่ออกไปก่อนปรับแก้` + evidence,
+      impactPeriodFrom: lastPass?.c.checkDate || prevDate, impactPeriodTo: latest,
+      immediateCorrection: "ผู้สอบเทียบปรับแก้เครื่องแล้ว ผลหลังปรับผ่านเกณฑ์",
       affectedTestMethods: instrument.relatedTestMethod || "",
     };
   }
@@ -5289,6 +5445,7 @@ function ApprovalRecordForm({ row, equipment, certificates = [], onCancel, onSav
 const INSTRUMENT_STATUS = {
   overdue:  { label: "เกินกำหนด", color: "var(--red)", bg: "#FDF1F1", border: "#F2C4C4", icon: AlertTriangle },
   fail:     { label: "ไม่ผ่านเกณฑ์", color: "var(--red)", bg: "#FDF1F1", border: "#F2C4C4", icon: XCircle },
+  impact:   { label: "ผ่านหลังปรับ · รอประเมินผลกระทบ", color: "#A86A00", bg: "#FFF6E0", border: "#F3DDA5", icon: FileWarning },
   inAction: { label: "อยู่ระหว่างดำเนินการ", color: "#1D5FB8", bg: "#EAF2FD", border: "#BFD5F3", icon: Info },
   dueSoon:  { label: "ใกล้ครบกำหนด", color: "#A86A00", bg: "#FFF6E0", border: "#F3DDA5", icon: Clock },
   pending:  { label: "รอตรวจสอบ", color: "#6B7A8C", bg: "#F1F4F7", border: "#DCE3EA", icon: Clock },
@@ -5301,14 +5458,18 @@ function instrumentOverallStatus(e, certificates, actionImpacts) {
   const openAction = actionImpacts.some(a => a.instrumentId === e.id && a.actionStatus !== "ปิดเรื่อง");
   const pick = (key, title) => ({ key, ...INSTRUMENT_STATUS[key], title });
   if (statusOf(days) === "danger") return pick("overdue", `เลยวันครบกำหนดสอบเทียบ ${fmtDate(e.nextDue)}`);
-  if (sum && (sum.decision === "FAIL" || sum.decision === "WARNING")) return pick("fail", `ผลสอบเทียบรอบ ${fmtDate(sum.date)}: ${sum.decision}`);
+  if (sum && isBadDecision(sum.decision)) return pick("fail", `ผลสอบเทียบรอบ ${fmtDate(sum.date)}${sum.adjusted ? " (หลังปรับ)" : ""}: ${sum.decision}`);
+  // Passed after adjustment but was out of tolerance before it: usable now,
+  // but results issued before the adjustment still need an impact review.
+  if (sum && isBadDecision(sum.asFoundDecision) && !actionImpacts.some(a => a.instrumentId === e.id && (a.findingKey === `asfound:${e.id}:${sum.date}` || (a.dateIdentified || "") >= sum.date)))
+    return pick("impact", `หลังปรับแก้ผ่านเกณฑ์ แต่ค่าก่อนปรับ ${sum.asFoundDecision} — ยังไม่ได้เปิดเรื่องประเมินผลกระทบย้อนหลัง`);
   if (openAction) return pick("inAction", "มีเรื่องใน \"การดำเนินการ / ผลกระทบ\" ที่ยังไม่ปิด");
   if (statusOf(days) === "warn") return pick("dueSoon", `ครบกำหนดสอบเทียบ ${fmtDate(e.nextDue)}`);
   if (!sum) return pick("pending", "ยังไม่มีใบรับรองสอบเทียบในระบบ");
   if (sum.decision === "INCOMPLETE DATA") return pick("pending", "ข้อมูลใบรับรองหรือเกณฑ์ยังไม่ครบ ตัดสินผลไม่ได้");
   const latest = own.filter(c => c.calibrationDate === sum.date);
   if (latest.some(c => !c.evaluatedBy)) return pick("pending", "ผลรอบล่าสุดยังไม่ได้ลงชื่อผู้ประเมิน");
-  return pick("pass", `ผลสอบเทียบรอบ ${fmtDate(sum.date)}: ${sum.decision}`);
+  return pick("pass", `ผลสอบเทียบรอบ ${fmtDate(sum.date)}${sum.adjusted ? " (หลังปรับ)" : ""}: ${sum.decision}`);
 }
 // Photo when the instrument has one, otherwise an icon that matches its type.
 function InstrumentThumb({ e, size = 56 }) {
@@ -6137,6 +6298,7 @@ function CalibrationRecordsHub({
     { key: "results", sheets: "SHEET 03 · 06", title: "ผลตัดสิน & แนวโน้ม",
       sub: calSum ? `ผลรอบล่าสุด ${calSum.decision}` : "รอข้อมูลใบรับรอง",
       flag: calSum && calSum.decision !== "PASS" ? { text: calSum.decision, tone: decisionTone(calSum.decision) }
+        : calSum && isBadDecision(calSum.asFoundDecision) ? { text: `ก่อนปรับ ${calSum.asFoundDecision}`, tone: "var(--amber)" }
         : unsignedRound ? { text: "รอลงชื่อประเมิน", tone: "var(--amber)" } : null },
     { key: "checks", sheets: "SHEET 04", title: "ตรวจสอบระหว่างรอบ",
       sub: `Daily ${scopedDailyChecks.length} · Intermediate ${icSorted.length}`,
@@ -6164,7 +6326,8 @@ function CalibrationRecordsHub({
   // first unfinished one is offered as the next thing to do.
   const latestPts = latestCert ? scopedCertificates.filter(c => c.calibrationDate === latestCert) : [];
   const finding = instrument ? proposeActionImpact(instrument, scopedCertificates, scopedChecks, scopedDailyChecks) : null;
-  const needsAction = !!finding?.findingKey && finding.findingKey.startsWith("cert:");
+  const needsAction = !!finding?.findingKey && (finding.findingKey.startsWith("cert:") || finding.findingKey.startsWith("asfound:"));
+  const asFoundOnly = needsAction && finding.findingKey.startsWith("asfound:");
   const actionOpened = needsAction && scopedActionImpacts.some(a => a.findingKey === finding.findingKey || (a.dateIdentified || "") >= latestCert);
   const statusConfirmed = !!usageStatusOf(instrument || {}) && !!authorizedByOf(instrument || {}) && (!latestCert || (instrument?.statusApprovalDate || "") >= latestCert);
   const CYCLE_STEPS = [
@@ -6175,7 +6338,9 @@ function CalibrationRecordsHub({
     { key: "evaluate", label: "ลงชื่อประเมินผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.evaluatedBy), todo: "ผลรอบล่าสุดยังไม่ได้ลงชื่อผู้ประเมิน" },
     { key: "approve", label: "อนุมัติผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.approvedBy),
       todo: canApprove ? "รออนุมัติโดย Technical Manager" : "รอผู้มีสิทธิ์อนุมัติ (Technical Manager)" },
-    ...(needsAction ? [{ key: "action", label: "เปิดเรื่องแก้ไข / ประเมินผลกระทบ", view: "actions", done: actionOpened, todo: `ผลรอบล่าสุด ${calSum?.decision || ""} — ต้องประเมินผลกระทบ` }] : []),
+    ...(needsAction ? [{ key: "action", view: "actions", done: actionOpened,
+      label: asFoundOnly ? "ประเมินผลกระทบย้อนหลัง" : "เปิดเรื่องแก้ไข / ประเมินผลกระทบ",
+      todo: asFoundOnly ? `หลังปรับผ่าน แต่ค่าก่อนปรับ ${calSum?.asFoundDecision || ""} — ต้องประเมินผลที่ออกไปก่อนปรับแก้` : `ผลรอบล่าสุด ${calSum?.decision || ""} — ต้องประเมินผลกระทบ` }] : []),
     { key: "status", label: "ยืนยันสถานะการใช้งาน", view: "instrument", done: statusConfirmed,
       todo: !usageStatusOf(instrument || {}) || !authorizedByOf(instrument || {}) ? "ยังไม่ได้ระบุสถานะ/ผู้อนุมัติ" : "ยืนยันสถานะอีกครั้งหลังใบรับรองรอบล่าสุด" },
   ];
@@ -6198,7 +6363,8 @@ function CalibrationRecordsHub({
           <p style={S.h2sub}>
             สอบเทียบล่าสุด {instrument?.lastCalibration ? fmtDate(instrument.lastCalibration) : "-"}
             {" · "}ครบกำหนด {instrument?.nextDue ? fmtDate(instrument.nextDue) : "-"}
-            {" · "}ผลล่าสุด {calSum ? calSum.decision : "ยังไม่มีใบรับรอง"}
+            {" · "}ผลล่าสุด {calSum ? `${calSum.decision}${calSum.adjusted ? " (หลังปรับ)" : ""}` : "ยังไม่มีใบรับรอง"}
+            {calSum?.asFoundDecision ? ` · ก่อนปรับ ${calSum.asFoundDecision}` : ""}
           </p>
         </div>
         <button style={S.smallBtn} onClick={() => exportAll(selectedInstrumentId)}><FileDown size={13} /> ส่งออก Excel เฉพาะเครื่องนี้</button>
@@ -6374,7 +6540,8 @@ function InstrumentStatusCard({ instrument, certificates, intermediateChecks, da
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 8 }}>
         {cell("รอบสอบเทียบ", `${CYCLE_LABEL[r.cycleStatus]}${r.days != null ? ` (${r.days} วัน)` : ""}`, STATUS_COLOR[r.cycleStatus])}
-        {cell("ผลสอบเทียบล่าสุด", r.overall || "-", CALIB_DECISION_COLOR[r.overall])}
+        {cell(r.adjusted ? "ผลสอบเทียบล่าสุด (หลังปรับ)" : "ผลสอบเทียบล่าสุด", r.overall || "-", CALIB_DECISION_COLOR[r.overall])}
+        {r.asFoundDecision && cell("ค่าก่อนปรับ", r.asFoundDecision, isBadDecision(r.asFoundDecision) ? "var(--red)" : undefined)}
         {cell("Tolerance Utilization สูงสุด", r.maxUtilization ? `${r.maxUtilization.toFixed(1)}%` : "-")}
         {cell("จุด FAIL / WARNING", r.failingCount, r.failingCount ? "var(--red)" : undefined)}
         {cell("Check ไม่ผ่าน (90 วัน)", r.failedChecks90, r.failedChecks90 ? "var(--red)" : undefined)}
