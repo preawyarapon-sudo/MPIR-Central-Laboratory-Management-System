@@ -2181,7 +2181,7 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], activities, 
             <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden", height: "100%", ...(isDisabled ? { border: "1px solid var(--red)" } : {}) }} onClick={() => setSelected(e.id)}>
               <div style={{ position: "relative", flexShrink: 0 }}>
                 {e.imageUrl ? (
-                  <img src={e.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+                  <img src={toDisplayImageUrl(e.imageUrl)} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
                     style={{ width: "100%", height: 140, objectFit: "contain", background: "#EEF2F6", display: "block", ...(isDisabled ? { filter: "grayscale(1)", opacity: 0.55 } : {}) }} />
                 ) : (
                   <div style={{ width: "100%", height: 140, background: "linear-gradient(135deg, #E9F1FB, #F5F8FC)", display: "flex", alignItems: "center", justifyContent: "center", ...(isDisabled ? { filter: "grayscale(1)", opacity: 0.55 } : {}) }}>
@@ -2305,26 +2305,64 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], activities, 
   );
 }
 
-// Shared photo field for equipment/item forms — paste an image URL (e.g.
-// from the Google Apps Script + Drive uploader) and preview it. Kept as its
-// own component (rather than inlining into each form) so both forms stay
-// in sync if the image-hosting approach changes later.
+// ---- Google Drive image links ----
+// A Drive share link (drive.google.com/file/d/<id>/view?usp=sharing) opens
+// Drive's viewer PAGE, not the image, so <img src> can't show it. Drive's
+// thumbnail endpoint returns the image itself for the same file id, so any
+// Drive file link is rewritten to it. The file must be shared as "Anyone
+// with the link" (ทุกคนที่มีลิงก์) — otherwise Drive refuses to serve it.
+function driveFileId(url) {
+  const s = String(url || "").trim();
+  if (!/^https?:\/\/(drive|docs)\.google\.com\//i.test(s)) return null;
+  const m = s.match(/\/file\/(?:u\/\d+\/)?d\/([A-Za-z0-9_-]{15,})/) || s.match(/[?&]id=([A-Za-z0-9_-]{15,})/) || s.match(/\/d\/([A-Za-z0-9_-]{15,})/);
+  return m ? m[1] : null;
+}
+const isDriveFolderUrl = (url) => /drive\.google\.com\/(?:drive\/)?(?:u\/\d+\/)?folders\//i.test(String(url || ""));
+// Used everywhere an image is displayed, so links saved before this change
+// (raw share links) display too, without re-editing each record.
+function toDisplayImageUrl(url) {
+  const id = driveFileId(url);
+  return id ? `https://drive.google.com/thumbnail?id=${id}&sz=w1000` : (url || "");
+}
+
+// Shared photo field for equipment/item forms — paste an image link and
+// preview it. Google Drive share links are converted on paste/blur.
 function ImageUploadField({ label, value, onChange }) {
   const [imgError, setImgError] = useState(false);
+  const [converted, setConverted] = useState(false);
+  const commit = (raw) => {
+    const v = String(raw || "").trim();
+    if (driveFileId(v) && !/\/thumbnail\?/.test(v)) { onChange(toDisplayImageUrl(v)); setConverted(true); }
+    else onChange(v);
+  };
+  const isDrive = !!driveFileId(value);
   return (
     <Field label={label} full>
       <input
         style={S.input}
         value={value || ""}
-        onChange={(e) => { setImgError(false); onChange(e.target.value); }}
-        placeholder="วางลิงก์รูปภาพ เช่น https://..."
+        onChange={(e) => { setImgError(false); setConverted(false); onChange(e.target.value); }}
+        onPaste={(e) => { const t = e.clipboardData?.getData("text"); if (t && driveFileId(t)) { e.preventDefault(); setImgError(false); commit(t); } }}
+        onBlur={(e) => commit(e.target.value)}
+        placeholder="วางลิงก์รูปภาพ หรือลิงก์แชร์จาก Google Drive ได้เลย"
       />
-      {value && (
+      <span style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+        ลิงก์ Google Drive: ตั้งค่าแชร์ไฟล์เป็น "ทุกคนที่มีลิงก์" ก่อน แล้วคัดลอกลิงก์มาวาง ระบบแปลงเป็นลิงก์รูปให้อัตโนมัติ
+      </span>
+      {converted && !imgError && <span style={{ fontSize: 11.5, color: "var(--green)", marginTop: 4 }}>แปลงลิงก์ Google Drive เป็นลิงก์รูปภาพแล้ว</span>}
+      {value && isDriveFolderUrl(value) && (
+        <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>นี่คือลิงก์โฟลเดอร์ — ต้องใช้ลิงก์ของไฟล์รูป (คลิกขวาที่ไฟล์ › แชร์ › คัดลอกลิงก์)</div>
+      )}
+      {value && !isDriveFolderUrl(value) && (
         imgError ? (
-          <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>โหลดรูปภาพจากลิงก์นี้ไม่ได้ กรุณาตรวจสอบลิงก์</div>
+          <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>
+            {isDrive
+              ? "โหลดรูปจาก Google Drive ไม่ได้ — ตรวจว่าตั้งค่าแชร์ไฟล์เป็น \"ทุกคนที่มีลิงก์\" และเป็นไฟล์รูปภาพ (JPG/PNG)"
+              : "โหลดรูปภาพจากลิงก์นี้ไม่ได้ กรุณาตรวจสอบลิงก์ (ต้องเป็นลิงก์ของไฟล์รูป ไม่ใช่หน้าเว็บ)"}
+          </div>
         ) : (
           <img
-            src={value}
+            src={toDisplayImageUrl(value)}
             alt=""
             onError={() => setImgError(true)}
             style={{ width: "100%", maxHeight: 160, objectFit: "contain", background: "#EEF2F6", borderRadius: 8, marginTop: 8, border: "1px solid var(--line)" }}
@@ -2754,7 +2792,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
         <div style={S.equipDetailLeft}>
           {item.imageUrl && (
             <div style={{ position: "relative" }}>
-              <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+              <img src={toDisplayImageUrl(item.imageUrl)} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
                 style={{ width: "100%", maxHeight: 200, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
               <a
                 href={item.imageUrl} target="_blank" rel="noopener noreferrer"
@@ -5473,7 +5511,7 @@ function instrumentOverallStatus(e, certificates, actionImpacts) {
 }
 // Photo when the instrument has one, otherwise an icon that matches its type.
 function InstrumentThumb({ e, size = 56 }) {
-  if (e.imageUrl) return <Thumb src={e.imageUrl} size={size} radius={10} />;
+  if (e.imageUrl) return <Thumb src={toDisplayImageUrl(e.imageUrl)} size={size} radius={10} />;
   const t = `${e.type || ""} ${e.name || ""}`.toLowerCase();
   const Icon = /ชั่ง|balance|scale/.test(t) ? Scale
     : /microscope|จุลทรรศน์/.test(t) ? Microscope
@@ -6846,7 +6884,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
 
           {equip && (
             <div style={{ ...S.panel, display: "flex", gap: 14, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
-              <Thumb src={equip.imageUrl} size={60} radius={10} />
+              <Thumb src={toDisplayImageUrl(equip.imageUrl)} size={60} radius={10} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 15, fontWeight: 700 }}>{equip.code}{equip.name ? ` — ${equip.name}` : ""}</div>
                 <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2, wordBreak: "break-word" }}>
@@ -7266,7 +7304,7 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
         <div style={S.equipDetailLeft}>
           {equip.imageUrl && (
             <div style={{ position: "relative" }}>
-              <img src={equip.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+              <img src={toDisplayImageUrl(equip.imageUrl)} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
                 style={{ width: "100%", maxHeight: 200, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
               <a
                 href={equip.imageUrl} target="_blank" rel="noopener noreferrer"
@@ -7446,7 +7484,7 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
           const bk = itemBookingSummary(i.id, bookings, i.totalQty);
           return [
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <Thumb src={i.imageUrl} size={34} />
+              <Thumb src={toDisplayImageUrl(i.imageUrl)} size={34} />
               <div>
                 <div style={{ fontWeight: 600 }}>{i.name}</div>
                 {i.code && <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{i.code}</div>}
@@ -7533,7 +7571,7 @@ function ItemDetail({ item, bookings, onClose, onEdit, onDelete, onBook, onSetAv
     <Modal onClose={onClose} title={item.code || item.name} wide>
       {item.imageUrl && (
         <div style={{ position: "relative", marginBottom: 14 }}>
-          <img src={item.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+          <img src={toDisplayImageUrl(item.imageUrl)} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
             style={{ width: "100%", maxHeight: 260, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
           <a
             href={item.imageUrl} target="_blank" rel="noopener noreferrer"
@@ -11769,7 +11807,7 @@ function Thumb({ src, size = 40, radius = 8 }) {
   }
   return (
     <img
-      src={src} alt="" onError={() => setBroken(true)}
+      src={toDisplayImageUrl(src)} alt="" onError={() => setBroken(true)}
       style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", border: "1px solid var(--line)", background: "#EEF2F6", flexShrink: 0 }}
     />
   );
@@ -11854,7 +11892,7 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
               const isReservation = b.type === "reservation";
               return (
                 <div key={b.id} style={{ ...S.eqCard, display: "flex", gap: 10 }}>
-                  <Thumb src={asset?.imageUrl} size={52} radius={9} />
+                  <Thumb src={toDisplayImageUrl(asset?.imageUrl)} size={52} radius={9} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                       <div style={S.eqName}>{b.equipmentName}</div>
@@ -11942,7 +11980,7 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
               const isReservation = b.type === "reservation";
               return (
                 <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "center", border: "1px solid var(--line)", borderRadius: 10, padding: 10 }}>
-                  <Thumb src={asset?.imageUrl} size={48} radius={8} />
+                  <Thumb src={toDisplayImageUrl(asset?.imageUrl)} size={48} radius={8} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontWeight: 600, fontSize: 13 }}>{b.equipmentName}</div>
                     <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{eventLabel(b)}</div>
@@ -12012,7 +12050,7 @@ function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictT
             <div style={{ width: "100%", height: 160, background: "#EEF2F6", position: "relative", overflow: "hidden", flexShrink: 0 }}>
               {a.imageUrl ? (
                 <>
-                  <img src={a.imageUrl} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
+                  <img src={toDisplayImageUrl(a.imageUrl)} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
                     style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", cursor: "pointer" }}
                     onClick={() => setViewImage(a)}
                   />
@@ -12059,7 +12097,7 @@ function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictT
       {viewImage && (
         <Modal onClose={() => setViewImage(null)} title={viewImage.name}>
           <img
-            src={viewImage.imageUrl}
+            src={toDisplayImageUrl(viewImage.imageUrl)}
             alt=""
             style={{ width: "100%", maxHeight: "70vh", objectFit: "contain", borderRadius: 10, background: "#EEF2F6" }}
           />
