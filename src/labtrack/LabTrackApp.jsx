@@ -672,6 +672,51 @@ function suggestCorrectionFromCerts(certs, instrumentId, parameter, referenceVal
   return { value: round4(-derivedErrorOf(best)), cert: best };
 }
 
+// Auto "Correction ที่ใช้" for Sheet 04. The intermediate check must mirror
+// routine use: only instruments whose usage status says they are used WITH a
+// correction get one (taken from the latest certificate, as-left values,
+// linearly interpolated between the two calibration points that bracket the
+// check's reference value); every other instrument is read directly → 0.
+const USAGE_WITH_CORRECTION = "ใช้งานโดยต้องใช้ Correction (In use with correction)";
+function interpolatedCorrectionFromCerts(certs, instrumentId, parameter, referenceValue) {
+  const ref = numOrNull(referenceValue);
+  if (ref == null) return null;
+  const own = certs.filter(c => c.instrumentId === instrumentId && derivedErrorOf(c) != null);
+  const latest = latestCertDate(own);
+  if (!latest) return null;
+  let pool = asLeftPoints(own.filter(c => c.calibrationDate === latest));
+  const p = (parameter || "").trim().toLowerCase();
+  const sameParam = p ? pool.filter(c => { const cp = (c.parameter || "").toLowerCase(); return cp && (cp.includes(p) || p.includes(cp)); }) : [];
+  if (sameParam.length) pool = sameParam;
+  const at = (c) => numOrNull(c.calibrationPoint) ?? numOrNull(c.referenceValue);
+  const pts = pool.filter(c => at(c) != null).sort((a, b) => at(a) - at(b));
+  if (!pts.length) return null;
+  const corrOf = (c) => -derivedErrorOf(c);
+  const certNo = pts[0].certificateNo || "";
+  const exact = pts.find(c => at(c) === ref);
+  if (exact) return { value: round4(corrOf(exact)), certNo, how: `จุด ${at(exact)}` };
+  const lo = [...pts].reverse().find(c => at(c) < ref), hi = pts.find(c => at(c) > ref);
+  if (lo && hi) {
+    const t = (ref - at(lo)) / (at(hi) - at(lo));
+    return { value: round4(corrOf(lo) + t * (corrOf(hi) - corrOf(lo))), certNo, how: `เฉลี่ยตามสัดส่วนระหว่างจุด ${at(lo)} กับ ${at(hi)}` };
+  }
+  const near = lo || hi; // outside the calibrated range → nearest point
+  return { value: round4(corrOf(near)), certNo, how: `จุด ${at(near)} — ค่าอ้างอิงอยู่นอกช่วงที่สอบเทียบ ใช้จุดที่ใกล้ที่สุด` };
+}
+function autoCorrectionFor(instrument, certs, row) {
+  const status = instrument ? (instrument.currentStatus || instrument.usageStatus || "") : "";
+  if (status !== USAGE_WITH_CORRECTION) {
+    return { value: "0", source: "", note: status
+      ? `สถานะเครื่อง "${status}" — อ่านค่าตรง ไม่ใช้ค่าแก้ จึงใส่ 0`
+      : "ยังไม่ได้กำหนดสถานะการใช้งานของเครื่อง — ถือว่าอ่านค่าตรง ใส่ 0 (กำหนดสถานะได้ที่หน้าเครื่องมือ)" };
+  }
+  const sug = interpolatedCorrectionFromCerts(certs, row.instrumentId, row.parameter, row.referenceValue);
+  if (!sug) return { value: null, source: "", note: numOrNull(row.referenceValue) == null
+    ? "เครื่องนี้ใช้งานโดยต้องใช้ Correction — ใส่ค่าอ้างอิง (ขั้นที่ 2) ก่อน แล้วระบบจะดึงค่าแก้จากใบรับรองให้"
+    : "เครื่องนี้ใช้งานโดยต้องใช้ Correction แต่ไม่พบข้อมูลหลังปรับในใบรับรองล่าสุด — ใส่ค่าเอง" };
+  return { value: String(sug.value), source: sug.certNo, note: `ค่าแก้จากใบรับรอง ${sug.certNo || "-"} (${sug.how})` };
+}
+
 // ---- Criteria snapshot: "เกณฑ์ ณ วันบันทึก" ----
 // PASS/FAIL is derived, not stored, so it used to be recomputed with
 // *today's* Sheet 01 Tolerance — tightening Tolerance next year silently
@@ -681,17 +726,36 @@ function suggestCorrectionFromCerts(certs, instrumentId, parameter, referenceVal
 // (Sheet 03 sign-off). Everything that evaluates a record goes through
 // criteriaFor(), so screens, Sheet 07 and the Excel export all agree.
 const CRITERIA_KEYS = ["tolerance", "toleranceType", "workingRangeMax", "basisOfCriteria", "decisionRule", "guardBandFactor"];
-function snapshotCriteria(instrument) {
-  if (!instrument || numOrNull(instrument.tolerance) == null) return null; // nothing to lock yet
-  return { ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, instrument[k] ?? ""])), capturedAt: todayISO() };
+// Criteria can differ from year to year. Sheet 01 keeps the CURRENT criteria
+// on the instrument itself (in force from criteriaEffectiveFrom) plus a
+// history of earlier ones, each valid up to and including `validUntil`.
+// A record is always judged by the criteria in force on ITS OWN date
+// (calibration date / check date), never simply by today's Tolerance.
+const recDateOf = (rec) => rec?.calibrationDate || rec?.checkDate || rec?.date || "";
+function criteriaHistoryOf(instrument) {
+  return (Array.isArray(instrument?.criteriaHistory) ? instrument.criteriaHistory : [])
+    .filter(h => h && h.validUntil).slice().sort((a, b) => a.validUntil.localeCompare(b.validUntil));
+}
+function criteriaAsOf(instrument, date) {
+  if (!instrument || !date) return instrument;
+  const h = criteriaHistoryOf(instrument).find(x => date <= x.validUntil);
+  if (!h) return instrument;
+  return { ...instrument, ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, h[k] ?? instrument[k] ?? ""])), _criteriaPeriodUntil: h.validUntil };
+}
+function snapshotCriteria(instrument, date) {
+  const c = criteriaAsOf(instrument, date);
+  if (!c || numOrNull(c.tolerance) == null) return null; // nothing to lock yet
+  return { ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, c[k] ?? ""])), capturedAt: todayISO(), ...(date ? { asOf: date } : {}) };
 }
 function criteriaFor(instrument, rec) {
-  return rec?.criteriaAt ? { ...(instrument || {}), ...rec.criteriaAt } : instrument;
+  return rec?.criteriaAt ? { ...(instrument || {}), ...rec.criteriaAt } : criteriaAsOf(instrument, recDateOf(rec));
 }
 function criteriaChanged(instrument, rec, keys = ["tolerance", "toleranceType", "decisionRule", "guardBandFactor"]) {
   if (!rec?.criteriaAt || !instrument) return false;
-  return keys.some(k => String(rec.criteriaAt[k] ?? "") !== String(instrument[k] ?? ""));
+  const expected = criteriaAsOf(instrument, recDateOf(rec));
+  return keys.some(k => String(rec.criteriaAt[k] ?? "") !== String(expected[k] ?? ""));
 }
+const dayBeforeISO = (d) => addDaysISO(d, -1);
 function criteriaText(c) {
   if (!c) return "";
   return `Tolerance ± ${c.tolerance} (${c.toleranceType || "absolute"})`;
@@ -1773,7 +1837,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} />
           )}
           {!restrictToBooking && tab === "reports" && (
-            <ReportsTab equipment={equipment} activities={activities} dailyChecks={dailyChecks} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests}
+            <ReportsTab equipment={equipment} setEquipment={persist.equipment} activities={activities} dailyChecks={dailyChecks} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests}
               certificates={certificates} intermediateChecks={intermediateChecks} uncertaintyBudgets={uncertaintyBudgets}
               actionImpacts={actionImpacts} approvalRecords={approvalRecords} />
           )}
@@ -3447,7 +3511,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
   const ecResult = isEc ? computeEcResult(f.ecStandard, f.ecReading) : null;
   const polarimeterResult = isPolarimeter ? computePolarimeterResult(equip, f.polarimeterReading) : null;
   const ovenResult = isOven ? computeOvenResult(equip, f.ovenReading) : null;
-  const refractometerResult = isRefractometer ? computeRefractometerResult(equip, f.brixReading) : null;
+  const refractometerResult = isRefractometer ? computeRefractometerResult(criteriaAsOf(equip, f.date || f.checkDate || ""), f.brixReading) : null;
   const coolingBathResult = isCoolingBath ? computeCoolingBathTempResult(equip, f.coolingBathReading) : null;
   const humidityResult = isHumidity ? computeHumidityResult(equip, f.humidityReading) : null;
   // Link back to the calibration record: warn when the instrument is past its
@@ -4637,7 +4701,7 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
       ? { approvedBy: name, approvalDate: clear ? "" : todayISO() }
       : clear
         ? { evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", criteriaAt: null }
-        : { evaluatedBy: name, evaluationDate: todayISO(), criteriaAt: snapshotCriteria(g.instrument) };
+        : { evaluatedBy: name, evaluationDate: todayISO(), criteriaAt: snapshotCriteria(g.instrument, g.points[0]?.c.calibrationDate) };
     setCertificates(certificates.map(c => ids.has(c.id) ? { ...c, ...patch } : c));
     notify(clear ? "ยกเลิกการลงชื่อแล้ว" : field === "approved" ? `อนุมัติผลใบรับรอง ${g.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${g.certificateNo || "-"} แล้ว`);
   }
@@ -4679,7 +4743,7 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                         )}
                         {g.points[0]?.c.criteriaAt && (
                           <span title={`ล็อกเมื่อ ${fmtDate(g.points[0].c.criteriaAt.capturedAt)}`} style={{ fontSize: 11.5, color: criteriaChanged(g.instrument, g.points[0].c) ? "var(--amber)" : "var(--muted)" }}>
-                            🔒 {criteriaText(g.points[0].c.criteriaAt)}{criteriaChanged(g.instrument, g.points[0].c) ? " — เกณฑ์ ณ วันประเมิน (ต่างจากปัจจุบัน)" : ""}
+                            🔒 {criteriaText(g.points[0].c.criteriaAt)}{criteriaChanged(g.instrument, g.points[0].c) ? " — ต่างจากเกณฑ์ ณ วันสอบเทียบใน Sheet 01 (ยกเลิกการลงชื่อแล้วลงใหม่เพื่อประเมินใหม่)" : ""}
                           </span>
                         )}
                         <div style={{ flex: 1 }} />
@@ -4756,9 +4820,15 @@ function IntermediateCheckForm({ row, equipment, certificates = [], currentDispl
   const instrument = equipment.find(e => e.id === f.instrumentId);
   const calc = calcIntermediateCheck(f, instrument);
   const fmt = (v, d = 4) => (v != null ? v.toFixed(d) : "-");
-  const refPh = f.referenceValue !== "" && f.referenceValue != null ? `เช่น ${f.referenceValue}` : "เช่น 360.0";
+  const refPh = f.referenceValue !== "" && f.referenceValue != null ? `เช่น ${f.referenceValue}` : "ค่าที่อ่านได้";
   const resultColor = calc.result === "PASS" ? "var(--green)" : calc.result === "WARNING" ? "var(--amber)" : calc.result === "FAIL" ? "var(--red)" : "var(--muted)";
-  const corrSug = suggestCorrectionFromCerts(certificates, f.instrumentId, f.parameter, f.referenceValue);
+  const autoCorr = autoCorrectionFor(instrument, certificates, f);
+  useEffect(() => {
+    if (f.correctionManual || autoCorr.value == null) return;
+    if (String(f.appliedCorrection) !== autoCorr.value || (f.correctionSourceCert || "") !== autoCorr.source) {
+      setF(prev => ({ ...prev, appliedCorrection: autoCorr.value, correctionSourceCert: autoCorr.source }));
+    }
+  }, [f.instrumentId, f.parameter, f.referenceValue, f.correctionManual, autoCorr.value, autoCorr.source]);
   const corr = Number(f.appliedCorrection);
   const corrLooksBig = calc.mean != null && !!corr && Math.abs(corr) >= Math.abs(calc.mean) * 0.5;
   const mono = { fontFamily: "var(--font-mono)" };
@@ -4816,14 +4886,16 @@ function IntermediateCheckForm({ row, equipment, certificates = [], currentDispl
           <Field key={n} label={`ค่าอ่านครั้งที่ ${n}`}><input type="number" step="any" style={S.input} value={f[`reading${n}`]} onChange={set(`reading${n}`)} placeholder={refPh} /></Field>
         ))}
         <Field label="Correction ที่ใช้">
-          <input type="number" step="any" style={S.input} value={f.appliedCorrection} onChange={e => setF({ ...f, appliedCorrection: e.target.value, correctionSourceCert: "" })} placeholder="เช่น 0" />
-          {f.correctionSourceCert && <span style={{ ...WIZ_HINT, color: "var(--teal-dark)" }}>ค่าจากใบรับรอง {f.correctionSourceCert}</span>}
-          <span style={WIZ_HINT}>ค่าที่ “บวกเพิ่ม” เข้าค่าเฉลี่ย ไม่ใช่ค่าอ้างอิง ถ้าใบรับรองไม่ระบุให้ใส่ 0</span>
-          {corrSug && String(f.appliedCorrection) !== String(corrSug.value) && (
-            <button type="button" style={{ ...S.smallBtn, marginTop: 4, alignSelf: "flex-start" }} onClick={() => setF({ ...f, appliedCorrection: String(corrSug.value), correctionSourceCert: corrSug.cert.certificateNo || "" })}>
-              <Sparkles size={12} /> ใช้ {corrSug.value} จากใบรับรอง {corrSug.cert.certificateNo || "-"} ({calPointLabel(corrSug.cert)})
-            </button>
-          )}
+          <input type="number" step="any" style={S.input} value={f.appliedCorrection} onChange={e => setF({ ...f, appliedCorrection: e.target.value, correctionSourceCert: "", correctionManual: true })} placeholder="เช่น 0" />
+          {!f.correctionManual
+            ? <span style={{ ...WIZ_HINT, color: "var(--teal-dark)" }}><Sparkles size={11} style={{ verticalAlign: "-1px" }} /> ใส่อัตโนมัติ: {autoCorr.note}</span>
+            : (<>
+                <span style={{ ...WIZ_HINT, color: "var(--amber)" }}>แก้ค่าเอง (ระบบหยุดใส่อัตโนมัติ)</span>
+                <button type="button" style={{ ...S.smallBtn, marginTop: 4, alignSelf: "flex-start" }} onClick={() => setF({ ...f, correctionManual: false })}>
+                  <Sparkles size={12} /> กลับไปใช้ค่าอัตโนมัติ{autoCorr.value != null ? ` (${autoCorr.value})` : ""}
+                </button>
+              </>)}
+          <span style={WIZ_HINT}>ค่าที่ “บวกเพิ่ม” เข้าค่าเฉลี่ย ไม่ใช่ค่าอ้างอิง</span>
         </Field>
         {corrLooksBig && (
           <div style={{ gridColumn: "1 / -1", fontSize: 12.5, color: "var(--amber)", background: "#FFF8EC", border: "1px solid #F3DDB5", borderRadius: 8, padding: "8px 10px" }}>
@@ -4877,13 +4949,14 @@ function IntermediateCheckForm({ row, equipment, certificates = [], currentDispl
             </div>
           )}
           {(() => {
-            const live = snapshotCriteria(instrument);
+            const live = snapshotCriteria(instrument, f.checkDate);
             if (f.criteriaAt) {
               const changed = criteriaChanged(instrument, f, ["tolerance", "toleranceType"]);
+              const due = criteriaAsOf(instrument, f.checkDate);
               return (
                 <div style={{ fontSize: 12.5, color: changed ? "var(--amber)" : "var(--muted)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span>🔒 ใช้เกณฑ์ ณ วันบันทึก ({fmtDate(f.criteriaAt.capturedAt)}): {criteriaText(f.criteriaAt)}{changed ? ` — ปัจจุบันเป็น ± ${instrument?.tolerance}` : ""}</span>
-                  {changed && live && <button type="button" style={S.smallBtn} onClick={() => setF({ ...f, criteriaAt: live })}>ประเมินใหม่ด้วยเกณฑ์ปัจจุบัน</button>}
+                  <span>🔒 ใช้เกณฑ์ ณ วันบันทึก ({fmtDate(f.criteriaAt.capturedAt)}): {criteriaText(f.criteriaAt)}{changed ? ` — เกณฑ์ที่ใช้ ณ วันตรวจตาม Sheet 01 คือ ± ${due?.tolerance}` : ""}</span>
+                  {changed && live && <button type="button" style={S.smallBtn} onClick={() => setF({ ...f, criteriaAt: live })}>ประเมินใหม่ด้วยเกณฑ์ ณ วันตรวจ</button>}
                 </div>
               );
             }
@@ -5570,6 +5643,7 @@ const SHEET01_KEYS = [
   "workingRangeMin", "workingRangeMax", "resolution", "tolerance", "toleranceType", "basisOfCriteria",
   "referenceDocument", "decisionRule", "guardBandFactor", "checkFrequency", "severity", "occurrence",
   "detectability", "currentStatus", "authorizedBy", "brixMin", "brixMax",
+  "criteriaEffectiveFrom", "criteriaHistory",
 ];
 function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates = [], notify }) {
   const pick = (e) => Object.fromEntries(SHEET01_KEYS.map(k => [k, e?.[k] ?? ""]));
@@ -5616,6 +5690,27 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
   }
   function save() {
     const patch = pick(f);
+    patch.criteriaHistory = Array.isArray(f.criteriaHistory) ? f.criteriaHistory.filter(h => h.validUntil) : [];
+    // Changing the acceptance criteria of an instrument that already had
+    // them: keep the old ones as history so earlier records stay judged by
+    // the criteria that applied at the time (unless it was only a typo fix).
+    const critKeys = ["tolerance", "toleranceType", "decisionRule", "guardBandFactor"];
+    const hadCriteria = numOrNull(instrument.tolerance) != null;
+    const changedCrit = critKeys.some(k => String(instrument[k] ?? "") !== String(f[k] ?? ""));
+    if (hadCriteria && changedCrit) {
+      const from = f.criteriaEffectiveFrom && f.criteriaEffectiveFrom !== (instrument.criteriaEffectiveFrom || "") ? f.criteriaEffectiveFrom : todayISO();
+      const keep = window.confirm(
+        `เกณฑ์เปลี่ยนจาก ± ${instrument.tolerance} (${instrument.toleranceType || "absolute"}) เป็น ± ${f.tolerance} (${f.toleranceType || "absolute"})\n\n` +
+        `OK = เกณฑ์ใหม่มีผลตั้งแต่ ${fmtDate(from)} — เก็บเกณฑ์เดิมไว้ใช้กับรายการก่อนวันนั้น\n` +
+        `Cancel = แค่แก้ค่าที่กรอกผิด (ใช้ค่าใหม่กับทุกรายการที่ยังไม่ล็อกเกณฑ์)`);
+      if (keep) {
+        patch.criteriaHistory = [...patch.criteriaHistory, {
+          ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, instrument[k] ?? ""])),
+          validUntil: dayBeforeISO(from), validFrom: instrument.criteriaEffectiveFrom || "",
+        }];
+        patch.criteriaEffectiveFrom = from;
+      }
+    }
     if ((patch.authorizedBy || "") !== authorizedByOf(instrument)) patch.statusApprovalDate = patch.authorizedBy ? todayISO() : "";
     setEquipment(equipment.map(e => e.id === f.id ? { ...e, ...patch } : e));
     notify("บันทึกข้อมูลเครื่องมือ (Sheet 01) แล้ว");
@@ -5678,7 +5773,8 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
         // values read "ยังไม่กรอก" instead of a wall of dashes.
         const sections = [
           { icon: <ShieldCheck size={13} />, title: "เกณฑ์การยอมรับ", rows: [
-            ["Tolerance / MPE", toleranceText !== "-" ? toleranceText : ""],
+            ["Tolerance / MPE", toleranceText !== "-" ? toleranceText + (instrument.criteriaEffectiveFrom ? ` · ตั้งแต่ ${fmtDate(instrument.criteriaEffectiveFrom)}` : "") : ""],
+            ...(criteriaHistoryOf(instrument).length ? [["เกณฑ์ช่วงก่อนหน้า", criteriaHistoryOf(instrument).map(h => `± ${h.tolerance} (${h.toleranceType || "absolute"}) ถึง ${fmtDate(h.validUntil)}`).join(" · ")]] : []),
             ["Decision Rule", decisionRuleText !== "-" ? decisionRuleText : ""],
             ...(instrument.decisionRule === "guardband" ? [["Guard band factor (g)", instrument.guardBandFactor]] : []),
             ["แหล่งอ้างอิงของเกณฑ์", instrument.basisOfCriteria],
@@ -5791,6 +5887,41 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
             {f.decisionRule === "guardband" && (
               <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.guardBandFactor ?? ""} onChange={set("guardBandFactor")} placeholder="เช่น 1" /></Field>
             )}
+            <Field label="เกณฑ์ชุดนี้มีผลตั้งแต่">
+              <input type="date" style={S.input} value={f.criteriaEffectiveFrom || ""} onChange={set("criteriaEffectiveFrom")} />
+              <span style={WIZ_HINT}>ใบรับรอง/การตรวจที่ลงวันที่ก่อนหน้านี้ จะใช้เกณฑ์จากประวัติด้านล่าง</span>
+            </Field>
+            {(() => {
+              const hist = Array.isArray(f.criteriaHistory) ? f.criteriaHistory : [];
+              const setHist = (next) => setF({ ...f, criteriaHistory: next });
+              const upd = (i, k, v) => setHist(hist.map((h, j) => j === i ? { ...h, [k]: v } : h));
+              const cell = { ...S.input, padding: "5px 7px", fontSize: 12 };
+              return (
+                <div style={{ gridColumn: "1 / -1", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", background: "#FAFBFD" }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>ประวัติเกณฑ์ (ช่วงก่อนหน้า)</div>
+                  <div style={{ ...WIZ_HINT, marginBottom: 8 }}>ใส่เกณฑ์ที่เคยใช้ในปีก่อน ๆ พร้อมวันสุดท้ายที่ใช้ — ผลการสอบเทียบ/การตรวจแต่ละรายการจะถูกประเมินด้วยเกณฑ์ ณ วันที่ของรายการนั้น</div>
+                  {hist.length > 0 && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 1.1fr 1.3fr 0.6fr auto", gap: 6, alignItems: "center", fontSize: 11.5 }}>
+                      <span style={WIZ_HINT}>ใช้ถึงวันที่</span><span style={WIZ_HINT}>Tolerance</span><span style={WIZ_HINT}>ชนิด</span><span style={WIZ_HINT}>Decision Rule</span><span style={WIZ_HINT}>g</span><span />
+                      {hist.map((h, i) => (
+                        <Fragment key={i}>
+                          <input type="date" style={cell} value={h.validUntil || ""} onChange={e => upd(i, "validUntil", e.target.value)} />
+                          <input type="number" step="any" style={cell} value={h.tolerance ?? ""} onChange={e => upd(i, "tolerance", e.target.value)} />
+                          <select style={cell} value={h.toleranceType || "absolute"} onChange={e => upd(i, "toleranceType", e.target.value)}>{LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}</select>
+                          <select style={cell} value={h.decisionRule || "simple"} onChange={e => upd(i, "decisionRule", e.target.value)}>{LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}</select>
+                          <input type="number" step="any" style={cell} value={h.guardBandFactor ?? ""} disabled={h.decisionRule !== "guardband"} onChange={e => upd(i, "guardBandFactor", e.target.value)} />
+                          <button type="button" style={S.smallBtn} title="ลบ" onClick={() => setHist(hist.filter((_, j) => j !== i))}><Trash2 size={12} /></button>
+                        </Fragment>
+                      ))}
+                    </div>
+                  )}
+                  <button type="button" style={{ ...S.smallBtn, marginTop: 8 }} onClick={() => setHist([...hist, {
+                    validUntil: f.criteriaEffectiveFrom ? dayBeforeISO(f.criteriaEffectiveFrom) : "", tolerance: "", toleranceType: f.toleranceType || "absolute",
+                    decisionRule: f.decisionRule || "simple", guardBandFactor: "", workingRangeMax: f.workingRangeMax ?? "", basisOfCriteria: f.basisOfCriteria || "",
+                  }])}><Plus size={12} /> เพิ่มเกณฑ์ช่วงก่อนหน้า</button>
+                </div>
+              );
+            })()}
 
             {sectionHead(<TrendingUp size={13} />, "การประเมินความเสี่ยง (Risk Assessment)")}
             <Field label="ความถี่ Daily/Intermediate Check"><input style={S.input} value={f.checkFrequency || ""} onChange={set("checkFrequency")} placeholder="เช่น ทุกวัน, ทุกสัปดาห์" /></Field>
@@ -6620,10 +6751,12 @@ function newIntermediateCheckFor(inst, checks, certificates, currentDisplayName)
   const base = { ...blankIntermediateCheck(inst?.id || ""), checkedBy: currentDisplayName };
   const last = checks.filter(c => c.instrumentId === base.instrumentId).sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""))[0];
   if (!last) return { ...base, parameter: inst?.measuredParameter || "", unit: inst?.calUnit || "" };
-  const carry = ["parameter", "checkType", "checkItem", "checkStandard", "checkStandardId", "referenceValue", "uOfCheckStandard", "unit", "appliedCorrection", "correctionSourceCert", "reviewedBy"];
+  const carry = ["parameter", "checkType", "checkItem", "checkStandard", "checkStandardId", "referenceValue", "uOfCheckStandard", "unit", "appliedCorrection", "correctionSourceCert", "correctionManual", "reviewedBy"];
   const row = { ...base, ...Object.fromEntries(carry.map(k => [k, last[k] ?? ""])) };
   const newest = latestCertDate(certificates.filter(c => c.instrumentId === row.instrumentId));
-  if (newest && newest > (last.checkDate || "")) {
+  // Auto-filled corrections are recomputed by the form itself; only a value
+  // the user typed by hand needs the "new certificate" warning.
+  if (newest && newest > (last.checkDate || "") && row.correctionManual) {
     const sug = suggestCorrectionFromCerts(certificates, row.instrumentId, row.parameter, row.referenceValue);
     if (sug && String(sug.value) !== String(row.appliedCorrection)) {
       return { ...row, appliedCorrection: String(sug.value), correctionSourceCert: sug.cert.certificateNo || "",
@@ -6636,7 +6769,7 @@ function newIntermediateCheckFor(inst, checks, certificates, currentDisplayName)
 // Save: strips UI-only fields and locks the criteria on first save.
 function saveIntermediateCheckInto(checks, row, instrument) {
   const { _notice, ...clean } = row;
-  const rec = clean.criteriaAt ? clean : { ...clean, criteriaAt: snapshotCriteria(instrument) };
+  const rec = clean.criteriaAt ? clean : { ...clean, criteriaAt: snapshotCriteria(instrument, clean.checkDate) };
   return checks.some(c => c.id === rec.id) ? checks.map(c => c.id === rec.id ? rec : c) : [rec, ...checks];
 }
 // One history for both kinds of check (Sheet 04), newest first, grouped by
@@ -6824,8 +6957,8 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
   const unlockedIc = icForEquip.filter(c => !c.criteriaAt);
   function lockLegacyIc() {
     if (!equip || !snapshotCriteria(equip)) return;
-    if (!window.confirm(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการเก่า ด้วย Tolerance ปัจจุบันของเครื่องมือ?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
-    setIntermediateChecks(intermediateChecks.map(c => (c.instrumentId === equipId && !c.criteriaAt ? { ...c, criteriaAt: snapshotCriteria(equip) } : c)));
+    if (!window.confirm(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการเก่า ด้วยเกณฑ์ที่ใช้ ณ วันตรวจของแต่ละรายการ (ตามประวัติเกณฑ์ใน Sheet 01)?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
+    setIntermediateChecks(intermediateChecks.map(c => (c.instrumentId === equipId && !c.criteriaAt ? { ...c, criteriaAt: snapshotCriteria(equip, c.checkDate) } : c)));
     notify(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการแล้ว`);
   }
   function approve(entry) {
@@ -7192,7 +7325,7 @@ function escapeHtml(s) {
 // every other print-to-PDF flow, no extra dependency to install. Reuses the
 // exact same link shape / QR endpoint as the single-equipment modal above,
 // so scanning a sticker behaves identically either way.
-function printAllEquipQR(equipmentList, mode) {
+function printAllEquipQR(equipmentList, mode, scopeLabel = "ทุกเครื่องมือ") {
   if (!equipmentList || equipmentList.length === 0) return;
   const base = typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}` : "";
   const items = equipmentList.map(e => {
@@ -7202,7 +7335,7 @@ function printAllEquipQR(equipmentList, mode) {
   });
   const win = window.open("", "_blank");
   if (!win) { alert("เบราว์เซอร์บล็อกป๊อปอัพ กรุณาอนุญาตป๊อปอัพสำหรับหน้านี้แล้วลองอีกครั้ง"); return; }
-  const pageTitle = mode === "equipmentView" ? "QR ดูข้อมูลเครื่องมือ — ทุกเครื่องมือ" : "QR เดลี่เช็ค — ทุกเครื่องมือ";
+  const pageTitle = `${mode === "equipmentView" ? "QR ดูข้อมูลเครื่องมือ" : "QR เดลี่เช็ค"} — ${scopeLabel}`;
   const showDailyCheckLabel = mode === "dailyCheck";
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(pageTitle)}</title>
 <style>
@@ -10990,7 +11123,95 @@ function dailyCheckSummaryText(c) {
   return parts.join(" · ");
 }
 
-function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consumables, purchaseRequests,
+// Sticker printing by category, with a per-equipment "printed on" mark per
+// QR kind (qrPrinted: { dailyCheck, equipmentView }) so the lab can print
+// just the stickers still missing instead of the whole register again.
+function QRPrintPanel({ equipment, setEquipment }) {
+  const groups = useMemo(() => [...new Set(equipment.map(resolveEquipGroup))].sort(alphaCompare), [equipment]);
+  const isoGuess = groups.find(g => /iso|17025/i.test(g)) || "";
+  const [group, setGroup] = useState(isoGuess);
+  const [mode, setMode] = useState("dailyCheck");
+  const [onlyMissing, setOnlyMissing] = useState(true);
+  const [picked, setPicked] = useState(null); // null = everything in view
+  const [justPrinted, setJustPrinted] = useState([]);
+  const printedOn = (e) => (e.qrPrinted && e.qrPrinted[mode]) || "";
+  const inGroup = equipment.filter(e => !group || resolveEquipGroup(e) === group)
+    .slice().sort((a, b) => alphaCompare(a.code || "", b.code || ""));
+  const view = inGroup.filter(e => !onlyMissing || !printedOn(e));
+  const sel = picked ? view.filter(e => picked.has(e.id)) : view;
+  const toggle = (id) => {
+    const next = new Set(picked || view.map(e => e.id));
+    next.has(id) ? next.delete(id) : next.add(id);
+    setPicked(next);
+  };
+  const reset = (fn) => (v) => { fn(v); setPicked(null); setJustPrinted([]); };
+  function doPrint() {
+    if (!sel.length) return;
+    printAllEquipQR(sel, mode, group ? `หมวด ${group}` : "ทุกหมวด");
+    setJustPrinted(sel.map(e => e.id));
+  }
+  function markPrinted(ids) {
+    if (!setEquipment || !ids.length) return;
+    const today = todayISO(), set = new Set(ids);
+    setEquipment(equipment.map(e => set.has(e.id) ? { ...e, qrPrinted: { ...(e.qrPrinted || {}), [mode]: today } } : e));
+    setJustPrinted([]); setPicked(null);
+  }
+  const modeLabel = mode === "dailyCheck" ? "QR เดลี่เช็ค" : "QR ดูข้อมูลเครื่องมือ";
+  return (
+    <div style={{ ...S.panel, marginBottom: 20 }}>
+      <div style={S.panelHead}><Printer size={16} color="var(--teal)" /><span style={S.panelTitle}>พิมพ์ QR โค้ดเครื่องมือ</span></div>
+      <div style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 12px" }}>
+        เลือกหมวดและเครื่องที่ต้องการ แล้วกดพิมพ์ — เปิดในแท็บใหม่พร้อมหน้าต่างพิมพ์ (เลือก "บันทึกเป็น PDF" ได้) ติดสติกเกอร์แล้วกดทำเครื่องหมายว่าพิมพ์แล้ว ครั้งหน้าจะเหลือเฉพาะเครื่องที่ยังไม่ได้พิมพ์
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <select style={{ ...S.input, width: "auto" }} value={group} onChange={e => reset(setGroup)(e.target.value)}>
+          <option value="">ทุกหมวด</option>
+          {groups.map(g => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select style={{ ...S.input, width: "auto" }} value={mode} onChange={e => reset(setMode)(e.target.value)}>
+          <option value="dailyCheck">QR เดลี่เช็ค</option>
+          <option value="equipmentView">QR ดูข้อมูลเครื่องมือ</option>
+        </select>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+          <input type="checkbox" checked={onlyMissing} onChange={e => reset(setOnlyMissing)(e.target.checked)} /> เฉพาะที่ยังไม่ได้พิมพ์
+        </label>
+      </div>
+      <div style={{ border: "1px solid var(--line)", borderRadius: 8, maxHeight: 280, overflowY: "auto" }}>
+        {view.length === 0 ? (
+          <div style={{ padding: 14, fontSize: 12.5, color: "var(--muted)", textAlign: "center" }}>
+            {inGroup.length ? `พิมพ์ ${modeLabel} ครบทุกเครื่องในหมวดนี้แล้ว` : "ไม่มีเครื่องมือในหมวดนี้"}
+          </div>
+        ) : view.map(e => (
+          <label key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 12px", borderBottom: "1px solid var(--line)", fontSize: 12.5, cursor: "pointer" }}>
+            <input type="checkbox" checked={!picked || picked.has(e.id)} onChange={() => toggle(e.id)} />
+            <b style={{ fontFamily: "var(--font-mono)", minWidth: 110 }}>{e.code || "-"}</b>
+            <span style={{ flex: 1 }}>{e.name}</span>
+            <span style={{ fontSize: 11.5, color: printedOn(e) ? "var(--green)" : "var(--muted)" }}>
+              {printedOn(e) ? `พิมพ์แล้ว ${fmtDate(printedOn(e))}` : "ยังไม่ได้พิมพ์"}
+            </span>
+          </label>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
+        <button style={S.smallBtn} disabled={!sel.length} onClick={doPrint}>
+          <QrCode size={13} /> พิมพ์ {modeLabel} ({sel.length} รายการ)
+        </button>
+        {view.length > 0 && <button style={S.smallBtn} onClick={() => setPicked(picked && picked.size === 0 ? null : new Set())}>{picked && picked.size === 0 ? "เลือกทั้งหมด" : "ไม่เลือกเลย"}</button>}
+        {justPrinted.length > 0 ? (
+          <button style={{ ...S.smallBtn, color: "var(--green)" }} onClick={() => markPrinted(justPrinted)}>
+            <CheckCircle2 size={13} /> ติดแล้ว — ทำเครื่องหมายว่าพิมพ์แล้ว ({justPrinted.length})
+          </button>
+        ) : sel.length > 0 && (
+          <button style={S.smallBtn} title="ใช้กับเครื่องที่เคยพิมพ์ติดไว้แล้วก่อนมีระบบนี้" onClick={() => {
+            if (window.confirm(`ทำเครื่องหมายว่าพิมพ์ ${modeLabel} แล้ว ${sel.length} รายการ (ไม่พิมพ์ใหม่)?`)) markPrinted(sel.map(e => e.id));
+          }}>ทำเครื่องหมายว่าเคยพิมพ์แล้ว</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReportsTab({ equipment, setEquipment, activities, dailyChecks = [], chemicals, consumables, purchaseRequests,
   certificates = [], intermediateChecks = [], uncertaintyBudgets = [], actionImpacts = [], approvalRecords = [] }) {
   // Turns a header row + body rows (where a cell can be a plain value or a
   // { text, url } pair from link() above) into a worksheet with genuine
@@ -11152,20 +11373,7 @@ function ReportsTab({ equipment, activities, dailyChecks = [], chemicals, consum
         </button>
       </div>
 
-      <div style={{ ...S.panel, marginBottom: 20 }}>
-        <div style={S.panelHead}><Printer size={16} color="var(--teal)" /><span style={S.panelTitle}>พิมพ์ QR โค้ดเครื่องมือ — ทุกเครื่องมือ</span></div>
-        <div style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 12px" }}>
-          สร้างชีตสติกเกอร์ QR สำหรับทุกเครื่องมือ ({equipment.length} รายการ) เปิดในแท็บใหม่พร้อมหน้าต่างพิมพ์ — เลือก "บันทึกเป็น PDF" เพื่อเซฟเป็นไฟล์ PDF หรือพิมพ์แล้วตัดไปติดที่ตัวเครื่องได้เลย
-        </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button style={S.smallBtn} disabled={equipment.length === 0} onClick={() => printAllEquipQR(equipment, "dailyCheck")}>
-            <QrCode size={13} /> พิมพ์ QR เดลี่เช็ค (PDF)
-          </button>
-          <button style={S.smallBtn} disabled={equipment.length === 0} onClick={() => printAllEquipQR(equipment, "equipmentView")}>
-            <QrCode size={13} /> พิมพ์ QR ดูข้อมูลเครื่องมือ (PDF)
-          </button>
-        </div>
-      </div>
+      <QRPrintPanel equipment={equipment} setEquipment={setEquipment} />
 
       <div style={{ ...S.panel, marginBottom: 20 }}>
         <div style={S.panelHead}><ClipboardList size={16} color="var(--teal)" /><span style={S.panelTitle}>MPIR Calibration Record (RDI-LF-070)</span></div>
