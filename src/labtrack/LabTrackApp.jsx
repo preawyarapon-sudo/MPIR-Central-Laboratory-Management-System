@@ -3281,8 +3281,14 @@ function computeOvenResult(equip, reading) {
 // against its acceptance range — same fixed-range-on-the-equipment pattern
 // as the Oven / Cooling Bath (humidityMin / humidityMax, set in
 // EquipmentForm), plus a quick "display working normally" pre-use item.
+// Dehumidifier-type controllers (e.g. PARKOO): besides the display, the
+// daily walk-by covers the things that actually stop one from holding the
+// room's %RH — the unit running, the drain path, and blocked air intake.
 const HUMIDITY_PREUSE_ITEMS = [
   { key: "display", label: "หน้าจอเครื่องแสดงผลปกติ" },
+  { key: "running", label: "เครื่องทำงาน มีลมเป่าออก ไม่มีเสียงหรือกลิ่นผิดปกติ" },
+  { key: "drain", label: "ท่อระบายน้ำต่อแน่น ไม่หัก ไม่รั่ว (หรือถังพักน้ำยังไม่เต็ม)" },
+  { key: "airflow", label: "ช่องลมเข้า–ออกและแผ่นกรองสะอาด ไม่มีสิ่งกีดขวาง" },
 ];
 function computeHumidityResult(equip, reading) {
   const min = Number(equip?.humidityMin);
@@ -7087,7 +7093,10 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
                           : equip?.type === "Refractometer" ? REFRACTOMETER_PREUSE_ITEMS
                           : equip?.type === "Glass Thermometer" ? GLASS_THERMOMETER_PREUSE_ITEMS
                           : METER_PREUSE_ITEMS;
-                        return `${items.filter(i => lastCheck.preUse?.[i.key] === "OK").length}/${items.length}`;
+                        // count only the items that existed when this check was recorded
+                        const asked = items.filter(i => lastCheck.preUse?.[i.key] !== undefined);
+                        const base = asked.length ? asked : items;
+                        return `${base.filter(i => lastCheck.preUse?.[i.key] === "OK").length}/${base.length}`;
                       })()}
                 </div>
                 <div style={S.statSub}>{lastCheck ? (isScale ? "จุดผ่านเกณฑ์" : "ข้อผ่านเกณฑ์") : ""}</div>
