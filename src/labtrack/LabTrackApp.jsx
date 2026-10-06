@@ -5649,9 +5649,9 @@ const SHEET01_KEYS = [
   "workingRangeMin", "workingRangeMax", "resolution", "tolerance", "toleranceType", "basisOfCriteria",
   "referenceDocument", "decisionRule", "guardBandFactor", "checkFrequency", "severity", "occurrence",
   "detectability", "currentStatus", "authorizedBy", "brixMin", "brixMax",
-  "criteriaEffectiveFrom", "criteriaHistory",
+  "criteriaEffectiveFrom", "criteriaHistory", "criteriaChangeLog",
 ];
-function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates = [], notify }) {
+function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates = [], setCertificates = null, intermediateChecks = [], setIntermediateChecks = null, currentDisplayName = "", notify }) {
   const pick = (e) => Object.fromEntries(SHEET01_KEYS.map(k => [k, e?.[k] ?? ""]));
   // Default view is a read-only summary list — this data is filled in once
   // per instrument and mostly just referenced afterward. Editing happens in
@@ -5659,6 +5659,9 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
   // saved record, and Save/Cancel inside that card decide whether it sticks.
   const [editing, setEditing] = useState(false);
   const [f, setF] = useState(() => ({ ...instrument }));
+  // Criteria-change dialog: opened by save() when the acceptance criteria
+  // (current or history) change on an instrument that already had them.
+  const [critDlg, setCritDlg] = useState(null); // { mode, from, reason, by, historyOnly }
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const dirty = JSON.stringify(pick(f)) !== JSON.stringify(pick(instrument));
   const suggestion = useMemo(() => suggestCriteriaByType(f.type, equipment, f.id), [f.type, equipment, f.id]);
@@ -5694,33 +5697,93 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
       measuredParameter: f.measuredParameter || "%Brix", calUnit: f.calUnit || "°Brix", brixMin: "", brixMax: "",
     });
   }
-  function save() {
+  // ---- Changing acceptance criteria ----
+  // Two very different situations, handled explicitly (the old window.confirm
+  // made "Cancel" mean "typo fix", so pressing Cancel to abort still saved):
+  //  • correction — the value was entered wrong. Every record judged with the
+  //    wrong value is re-judged: its Sheet 03 sign-off (evaluation/approval)
+  //    is withdrawn so it must be signed again on the corrected criteria,
+  //    and Sheet 04 checks are re-locked to the corrected criteria.
+  //  • newPeriod — the criteria really changed from a date onward. The old
+  //    ones go to history; earlier records keep being judged by them.
+  // Either way a reason is required and the change is logged
+  // (criteriaChangeLog) with old/new values, who, when and what it affected.
+  const critKeys = ["tolerance", "toleranceType", "decisionRule", "guardBandFactor"];
+  const critSnap = (o) => Object.fromEntries(critKeys.map(k => [k, o?.[k] ?? ""]));
+  const histJSON = (h) => JSON.stringify((Array.isArray(h) ? h : []).filter(x => x && x.validUntil).map(x => ({ validUntil: x.validUntil, ...critSnap(x) })));
+  function buildPatch() {
     const patch = pick(f);
     patch.criteriaHistory = Array.isArray(f.criteriaHistory) ? f.criteriaHistory.filter(h => h.validUntil) : [];
-    // Changing the acceptance criteria of an instrument that already had
-    // them: keep the old ones as history so earlier records stay judged by
-    // the criteria that applied at the time (unless it was only a typo fix).
-    const critKeys = ["tolerance", "toleranceType", "decisionRule", "guardBandFactor"];
-    const hadCriteria = numOrNull(instrument.tolerance) != null;
-    const changedCrit = critKeys.some(k => String(instrument[k] ?? "") !== String(f[k] ?? ""));
-    if (hadCriteria && changedCrit) {
-      const from = f.criteriaEffectiveFrom && f.criteriaEffectiveFrom !== (instrument.criteriaEffectiveFrom || "") ? f.criteriaEffectiveFrom : todayISO();
-      const keep = window.confirm(
-        `เกณฑ์เปลี่ยนจาก ± ${instrument.tolerance} (${instrument.toleranceType || "absolute"}) เป็น ± ${f.tolerance} (${f.toleranceType || "absolute"})\n\n` +
-        `OK = เกณฑ์ใหม่มีผลตั้งแต่ ${fmtDate(from)} — เก็บเกณฑ์เดิมไว้ใช้กับรายการก่อนวันนั้น\n` +
-        `Cancel = แค่แก้ค่าที่กรอกผิด (ใช้ค่าใหม่กับทุกรายการที่ยังไม่ล็อกเกณฑ์)`);
-      if (keep) {
-        patch.criteriaHistory = [...patch.criteriaHistory, {
-          ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, instrument[k] ?? ""])),
-          validUntil: dayBeforeISO(from), validFrom: instrument.criteriaEffectiveFrom || "",
-        }];
-        patch.criteriaEffectiveFrom = from;
-      }
-    }
+    patch.criteriaChangeLog = Array.isArray(instrument.criteriaChangeLog) ? instrument.criteriaChangeLog : [];
     if ((patch.authorizedBy || "") !== authorizedByOf(instrument)) patch.statusApprovalDate = patch.authorizedBy ? todayISO() : "";
+    return patch;
+  }
+  // Records locked with the OLD criteria that the NEW criteria would judge
+  // differently (records that were already out of step are left alone).
+  function affectedBy(newInstrument) {
+    const certs = certificates.filter(c => c.instrumentId === instrument.id && c.criteriaAt
+      && !criteriaChanged(instrument, c) && criteriaChanged(newInstrument, c));
+    const checks = intermediateChecks.filter(c => c.instrumentId === instrument.id && c.criteriaAt
+      && !criteriaChanged(instrument, c, ["tolerance", "toleranceType"]) && criteriaChanged(newInstrument, c, ["tolerance", "toleranceType"]));
+    return { certs, checks };
+  }
+  function save() {
+    const hadCriteria = numOrNull(instrument.tolerance) != null || criteriaHistoryOf(instrument).length > 0;
+    const changedCurrent = critKeys.some(k => String(instrument[k] ?? "") !== String(f[k] ?? ""));
+    const changedHistory = histJSON(instrument.criteriaHistory) !== histJSON(f.criteriaHistory);
+    if (hadCriteria && (changedCurrent || changedHistory)) {
+      setCritDlg({
+        mode: "correction", reason: "", by: currentDisplayName || "",
+        from: f.criteriaEffectiveFrom && f.criteriaEffectiveFrom !== (instrument.criteriaEffectiveFrom || "") ? f.criteriaEffectiveFrom : todayISO(),
+        historyOnly: !changedCurrent,
+      });
+      return;
+    }
+    commitSave(buildPatch());
+  }
+  function commitSave(patch, extraMsg = "") {
     setEquipment(equipment.map(e => e.id === f.id ? { ...e, ...patch } : e));
-    notify("บันทึกข้อมูลเครื่องมือ (Sheet 01) แล้ว");
+    notify("บันทึกข้อมูลเครื่องมือ (Sheet 01) แล้ว" + extraMsg, extraMsg ? 6000 : 2200);
     setEditing(false);
+    setCritDlg(null);
+  }
+  function confirmCriteriaChange() {
+    const d = critDlg;
+    const patch = buildPatch();
+    const mode = d.historyOnly ? "correction" : d.mode;
+    if (mode === "newPeriod") {
+      patch.criteriaHistory = [...patch.criteriaHistory, {
+        ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, instrument[k] ?? ""])),
+        validUntil: dayBeforeISO(d.from), validFrom: instrument.criteriaEffectiveFrom || "",
+      }];
+      patch.criteriaEffectiveFrom = d.from;
+    }
+    const newInstrument = { ...instrument, ...patch };
+    const { certs, checks } = mode === "correction" ? affectedBy(newInstrument) : { certs: [], checks: [] };
+    const certNos = [...new Set(certs.map(c => c.certificateNo || "-"))];
+    patch.criteriaChangeLog = [...patch.criteriaChangeLog, {
+      at: todayISO(), by: d.by.trim(), mode, reason: d.reason.trim(),
+      ...(mode === "newPeriod" ? { effectiveFrom: d.from } : {}),
+      before: { ...critSnap(instrument), history: histJSON(instrument.criteriaHistory) },
+      after: { ...critSnap(f), history: histJSON(patch.criteriaHistory) },
+      resignedCertificates: certNos, relockedChecks: checks.length,
+    }];
+    let msg = "";
+    if (certs.length && setCertificates) {
+      const ids = new Set(certs.map(c => c.id));
+      setCertificates(certificates.map(c => ids.has(c.id)
+        ? { ...c, evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", criteriaAt: null }
+        : c));
+      msg += ` · ยกเลิกการลงชื่อประเมิน/อนุมัติของใบรับรอง ${certNos.join(", ")} — ลงชื่อใหม่ด้วยเกณฑ์ที่แก้แล้ว`;
+    }
+    if (checks.length && setIntermediateChecks) {
+      const ids = new Set(checks.map(c => c.id));
+      setIntermediateChecks(intermediateChecks.map(c => ids.has(c.id)
+        ? { ...c, criteriaAt: snapshotCriteria(newInstrument, c.checkDate) }
+        : c));
+      msg += ` · ประเมินผลตรวจสอบระหว่างรอบใหม่ ${checks.length} รายการ`;
+    }
+    commitSave(patch, msg);
   }
   const banner = (tone, children) => (
     <div style={{
@@ -5826,6 +5889,33 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
           </div>
         );
       })()}
+
+      {Array.isArray(instrument.criteriaChangeLog) && instrument.criteriaChangeLog.length > 0 && (
+        <details style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.7 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>ประวัติการเปลี่ยนเกณฑ์ ({instrument.criteriaChangeLog.length})</summary>
+          <div style={{ overflowX: "auto", marginTop: 6 }}>
+            <table style={{ ...S.table, fontSize: 12 }}>
+              <thead><tr>{["วันที่", "ผู้แก้ไข", "ประเภท", "เดิม", "ใหม่", "เหตุผล", "ผลที่ตามมา"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {instrument.criteriaChangeLog.slice().reverse().map((l, i) => (
+                  <tr key={i}>
+                    <td style={S.td}>{fmtDate(l.at)}</td>
+                    <td style={S.td}>{l.by || "-"}</td>
+                    <td style={S.td}>{l.mode === "correction" ? "แก้ค่าที่กรอกผิด" : `เกณฑ์ใหม่ตั้งแต่ ${fmtDate(l.effectiveFrom)}`}</td>
+                    <td style={S.td}>± {l.before?.tolerance} ({l.before?.toleranceType || "absolute"})</td>
+                    <td style={S.td}>± {l.after?.tolerance} ({l.after?.toleranceType || "absolute"})</td>
+                    <td style={S.td}>{l.reason}</td>
+                    <td style={S.td}>{[
+                      l.resignedCertificates?.length ? `ลงชื่อใหม่: ${l.resignedCertificates.join(", ")}` : "",
+                      l.relockedChecks ? `ประเมินตรวจระหว่างรอบใหม่ ${l.relockedChecks} รายการ` : "",
+                    ].filter(Boolean).join(" · ") || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
 
       <details style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.7 }}>
         <summary style={{ cursor: "pointer", color: "var(--teal-dark)", fontWeight: 600 }}>ค่าเหล่านี้ถูกนำไปใช้ที่ไหนบ้าง</summary>
@@ -5958,6 +6048,59 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
           <ModalFooter onCancel={() => setEditing(false)} onSave={save} disabled={!dirty} />
         </Modal>
       )}
+      {critDlg && (() => {
+        const d = critDlg;
+        const mode = d.historyOnly ? "correction" : d.mode;
+        const upd = (k, v) => setCritDlg({ ...d, [k]: v });
+        const preview = mode === "correction" ? affectedBy({ ...instrument, ...buildPatch() }) : { certs: [], checks: [] };
+        const certNos = [...new Set(preview.certs.map(c => c.certificateNo || "-"))];
+        const blocked = !d.reason.trim() ? "ระบุเหตุผลการเปลี่ยนเกณฑ์" : !d.by.trim() ? "ระบุชื่อผู้แก้ไข" : mode === "newPeriod" && !d.from ? "ระบุวันที่เกณฑ์ใหม่มีผล" : "";
+        const optStyle = (on) => ({ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", borderRadius: 8, cursor: "pointer", border: `1px solid ${on ? "var(--teal)" : "var(--line)"}`, background: on ? "#E9F1FB" : "transparent" });
+        return (
+          <Modal title="เปลี่ยนเกณฑ์การยอมรับ" wide onClose={() => setCritDlg(null)}>
+            <div style={{ fontSize: 12.5, marginBottom: 12, lineHeight: 1.6 }}>
+              {d.historyOnly
+                ? <>แก้ไขเกณฑ์ในประวัติช่วงก่อนหน้า</>
+                : <>Tolerance <b>± {instrument.tolerance} ({instrument.toleranceType || "absolute"})</b> → <b>± {f.tolerance} ({f.toleranceType || "absolute"})</b>
+                  {String(instrument.decisionRule ?? "") !== String(f.decisionRule ?? "") && <> · Decision Rule {instrument.decisionRule || "-"} → {f.decisionRule || "-"}</>}</>}
+            </div>
+            <div style={{ display: "grid", gap: 8, marginBottom: 14 }}>
+              <label style={optStyle(mode === "correction")}>
+                <input type="radio" checked={mode === "correction"} onChange={() => upd("mode", "correction")} />
+                <span><b>แก้ค่าที่กรอกผิด</b><div style={WIZ_HINT}>เกณฑ์ที่ถูกต้องเป็นค่านี้มาตั้งแต่ต้น — ประเมินผลทุกรายการที่ตัดสินด้วยค่าผิดใหม่</div></span>
+              </label>
+              {!d.historyOnly && (
+                <label style={optStyle(mode === "newPeriod")}>
+                  <input type="radio" checked={mode === "newPeriod"} onChange={() => upd("mode", "newPeriod")} />
+                  <span><b>เปลี่ยนเกณฑ์ใหม่ตั้งแต่วันที่กำหนด</b><div style={WIZ_HINT}>เกณฑ์เดิมถูกต้องในช่วงก่อนหน้า — รายการก่อนวันนั้นยังใช้เกณฑ์เดิม</div></span>
+                </label>
+              )}
+            </div>
+            <div style={{ display: "grid", gap: 10 }}>
+              {mode === "newPeriod" && (
+                <Field label="เกณฑ์ใหม่มีผลตั้งแต่"><input type="date" style={S.input} value={d.from} onChange={e => upd("from", e.target.value)} /></Field>
+              )}
+              <Field label="เหตุผล / หลักฐานอ้างอิง">
+                <textarea style={{ ...S.input, minHeight: 64 }} value={d.reason} onChange={e => upd("reason", e.target.value)}
+                  placeholder={mode === "correction" ? "เช่น กรอก Tolerance ผิดเป็น 0.009 ที่ถูกคือ 0.09 °Brix ตามคู่มือผู้ผลิต" : "เช่น ปรับเกณฑ์ตามวิธีทดสอบฉบับแก้ไขใหม่ ICUMSA GS4/3-13"} />
+              </Field>
+              <Field label="ผู้แก้ไข"><input style={S.input} value={d.by} onChange={e => upd("by", e.target.value)} placeholder="ชื่อ-นามสกุล" /></Field>
+            </div>
+            {mode === "correction" && (preview.certs.length > 0 || preview.checks.length > 0) && (
+              <div style={{ marginTop: 14, fontSize: 12, lineHeight: 1.6, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 8, padding: "9px 12px" }}>
+                {preview.certs.length > 0 && <div>การลงชื่อประเมินและอนุมัติของใบรับรอง <b>{certNos.join(", ")}</b> จะถูกยกเลิก เพราะตัดสินด้วยเกณฑ์ที่ผิด ต้องลงชื่อประเมินและอนุมัติใหม่ด้วยเกณฑ์ที่แก้แล้ว</div>}
+                {preview.checks.length > 0 && <div>ผลตรวจสอบระหว่างรอบ {preview.checks.length} รายการ จะประเมินใหม่ด้วยเกณฑ์ที่แก้แล้ว</div>}
+              </div>
+            )}
+            <div style={{ ...S.modalFoot, marginTop: 16 }}>
+              {blocked && <span style={{ fontSize: 12, color: "var(--muted)" }}>{blocked}</span>}
+              <div style={{ flex: 1 }} />
+              <button style={S.ghostBtn} onClick={() => setCritDlg(null)}>กลับไปแก้ไข</button>
+              <button style={{ ...S.primaryBtn, opacity: blocked ? 0.5 : 1 }} disabled={!!blocked} onClick={confirmCriteriaChange}>บันทึกการเปลี่ยนเกณฑ์</button>
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
@@ -6614,7 +6757,9 @@ function CalibrationRecordsHub({
         <InstrumentMasterTab
           key={instrument.id}
           instrument={instrument} equipment={equipment} setEquipment={setEquipment}
-          certificates={scopedCertificates} notify={notify}
+          certificates={scopedCertificates} setCertificates={scopedCertSetter}
+          intermediateChecks={scopedChecks} setIntermediateChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
+          currentDisplayName={currentDisplayName} notify={notify}
         />
       </>)}
       {current === "certificates" && (
