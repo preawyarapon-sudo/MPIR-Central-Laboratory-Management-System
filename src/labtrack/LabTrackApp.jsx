@@ -2822,6 +2822,9 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
   const [showDisable, setShowDisable] = useState(false);
   const [showShareView, setShowShareView] = useState(false);
   const [dailyCheckEntry, setDailyCheckEntry] = useState(null);
+  const [dailyCheckExisting, setDailyCheckExisting] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const isMobile = useIsMobile();
   // Daily check has dedicated forms for เครื่องชั่ง (weight-deviation check),
   // pH Meter / EC Meter (buffer / standard-solution check), Polarimeter
   // (quartz control plate check), and Oven (temperature check) — all per
@@ -2856,179 +2859,246 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
   };
   const shownActivities = activityFilter === "all" ? activities : activities.filter(a => a.type === activityFilter);
 
-  const filterTab = (key, label) => (
-    <button
-      key={key}
-      onClick={() => setActivityFilter(key)}
-      style={{
-        display: "flex", alignItems: "center", gap: 6,
-        background: activityFilter === key ? "#E9F1FB" : "transparent",
-        border: `1px solid ${activityFilter === key ? "var(--teal)" : "var(--line)"}`,
-        color: activityFilter === key ? "var(--teal-dark)" : "var(--muted)",
-        borderRadius: 999, padding: "5px 11px", fontSize: 12, fontWeight: 600,
-        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
-      }}
-    >
-      {label} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>({typeCounts[key]})</span>
+  // ---- one timeline: activities + bookings + daily checks ----
+  const newDailyEntry = () => (isMeter ? blankMeterCheckEntry(item.id) : {
+    id: uid(), equipmentId: item.id, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
+    condition: "", level: "", clean: "", zero: "",
+    weights: { w10: "", w50: "", w200: "" },
+    checkedBy: "", remarks: "",
+    approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
+  });
+  const openDaily = (entry, existing) => { setDailyCheckExisting(existing); setDailyCheckEntry(entry); };
+  const DONE = { fg: "#1E8A57", bg: "#EAF7F0", line: "#BFE6D0" };
+  const timeline = [
+    ...sortedDailyChecks.map(c => {
+      const h = checkHeadline(c);
+      return {
+        key: "d" + c.id, cat: "dailyCheck", icon: FlaskConical, title: "Daily check",
+        when: `${fmtDate(c.date)}${c.time ? ` ${c.time}` : ""}`, sortKey: (c.date || "") + (c.time || ""),
+        who: c.checkedBy || "-", whoSub: c.approved ? `อนุมัติโดย ${c.approvedByName || "-"}` : "รออนุมัติ",
+        status: c.result === true ? { text: "ผ่าน", ...DONE } : c.result === false ? { text: "ไม่ผ่าน", fg: "#C6493B", bg: "#FDF1F1", line: "#F2C4C4" } : null,
+        note: h.value != null ? { tone: "info", icon: ClipboardCheck, text: <>ผลตรวจ : <b>{h.value}{h.unit ? ` ${h.unit}` : ""}</b></> } : null,
+        onOpen: () => openDaily(c, true),
+      };
+    }),
+    ...bookings.map(bkg => {
+      const endDate = bkg.endDate || bkg.dueBackDate;
+      const overdue = !bkg.returnedAt && isBookingOverdue(bkg);
+      const timeLine = bkg.type === "reservation"
+        ? `${bkg.startTime || ""}${endDate ? ` - ${fmtDate(endDate)}` : ""}${bkg.endTime ? ` ${bkg.endTime}` : ""}`.trim()
+        : [bkg.startTime, bkg.endTime].filter(Boolean).join(" - ");
+      const stText = bookingHistoryStatusLabel(bkg);
+      return {
+        key: "b" + bkg.id, cat: "bookings", icon: bkg.type === "reservation" ? CalendarClock : CalendarCheck,
+        title: BOOKING_TYPE_LABEL[bkg.type] || "จอง/ยืม", when: fmtDate(bkg.startDate), when2: timeLine,
+        sortKey: (bkg.startDate || bkg.requestedAt || "") + (bkg.startTime || ""),
+        who: bkg.requestedBy || "-", whoSub: bkg.purpose || "",
+        status: stText ? (bkg.returnedAt ? { text: stText, ...DONE }
+          : { text: stText, fg: BOOKING_STATUS_COLOR[bkg.status] || "#6B7A8C", bg: "#fff", line: "var(--line)" }) : null,
+        note: bkg.returnedAt ? { tone: "ok", icon: Undo2, text: `คืนแล้ว ${fmtDate(String(bkg.returnedAt).slice(0, 10))}${String(bkg.returnedAt).length > 10 ? ` ${String(bkg.returnedAt).slice(11, 16)}` : ""}` }
+          : overdue ? { tone: "bad", icon: AlertTriangle, text: `เลยกำหนดคืน ${fmtDate(bkg.dueBackDate)}` } : null,
+        onOpen: null,
+      };
+    }),
+    ...activities.map(act => ({
+      key: "a" + act.id, cat: act.type === "request" ? "repair" : (act.type in typeCounts ? act.type : "other"),
+      icon: act.type === "calibration" ? FlaskConical : act.type === "repair" || act.type === "request" ? Wrench : ClipboardList,
+      title: act.type === "repair" ? "ซ่อมบำรุง" : (typeLabel[act.type] || act.type), when: fmtDate(act.date), sortKey: act.date || "",
+      who: act.detail || "-", whoSub: act.by ? `โดย ${act.by}` : "",
+      status: { text: "เสร็จสิ้นแล้ว", ...DONE },
+      note: act.certUrl || act.poNo || act.poUrl ? { tone: "info", icon: FileDown, text: (
+        <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
+          {act.certUrl && <a href={act.certUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal-dark)" }}>ดูใบ Certificate</a>}
+          {(act.poNo || act.poUrl) && (act.poUrl
+            ? <a href={act.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal-dark)" }}>{act.poNo ? `PO: ${act.poNo}` : "ไฟล์ PO"}</a>
+            : <span>PO: {act.poNo}</span>)}
+        </span>
+      ) } : null,
+      onOpen: () => setEditingAct(act),
+    })),
+  ].sort((x, y) => y.sortKey.localeCompare(x.sortKey));
+  const catCount = (k) => k === "all" ? timeline.length : timeline.filter(t => t.cat === k).length;
+  const shown = activityFilter === "all" ? timeline : timeline.filter(t => t.cat === activityFilter);
+  const CHIPS = [["all", "ทั้งหมด"], ...((isScale || isMeter) ? [["dailyCheck", isMobile ? "Daily" : "Daily check"]] : []), ["calibration", "สอบเทียบ"], ["repair", "ซ่อม"], ["bookings", "จอง/ยืม"], ["other", "อื่นๆ"]];
+  const chip = ([key, label]) => {
+    const on = activityFilter === key;
+    return (
+      <button key={key} type="button" onClick={() => setActivityFilter(key)} style={{
+        background: on ? "#E6F0FC" : "#F4F7FA", border: `1px solid ${on ? "#8DB6E6" : "var(--line)"}`, color: on ? "var(--teal-dark)" : "#4B5C72",
+        borderRadius: 999, padding: isMobile ? "5px 12px" : "7px 16px", fontSize: isMobile ? 12 : 13.5, fontWeight: on ? 700 : 500, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+      }}>{label} ({catCount(key)})</button>
+    );
+  };
+  const NOTE_TONE = { ok: { bg: "#EEF8F2", fg: "#1E8A57" }, info: { bg: "#EEF4FC", fg: "#1D5FB8" }, bad: { bg: "#FDF1F1", fg: "#C6493B" } };
+
+  // ---- left column pieces ----
+  const statusInfo = item.status === "active"
+    ? { title: "ใช้งานอยู่", sub: !bk.text || bk.text === "-" || bk.text === "ว่าง" ? "พร้อมใช้งานปกติ" : bk.text, fg: "#1E8A57", bg: "#EEF8F2", line: "#CDEBDA", Icon: CheckCircle2 }
+    : item.status === "maintenance"
+      ? { title: "ปิดใช้งานชั่วคราว", sub: item.unavailableReason || "ซ่อมบำรุง", fg: "#A86A00", bg: "#FFF6E0", line: "#F3DDA5", Icon: AlertTriangle }
+      : { title: "ปิดใช้งาน", sub: "", fg: "#6B7A8C", bg: "#F3F6F9", line: "#DCE3EA", Icon: XCircle };
+  const infoRow = (Icon, label, value, color) => (
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "18px 84px 1fr" : "20px 104px 1fr", alignItems: "center", gap: 10, fontSize: isMobile ? 12.5 : 14 }}>
+      <Icon size={isMobile ? 14 : 16} color="#5B7A96" />
+      <span style={{ color: "#4B5C72" }}>{label}</span>
+      <span style={{ color: color || "var(--ink)", wordBreak: "break-word" }}>{value || "-"}</span>
+    </div>
+  );
+  const bigBtn = (extra) => ({ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, height: isMobile ? 40 : 48, borderRadius: 12, fontSize: isMobile ? 13.5 : 14.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: "0 12px", ...extra });
+  const btnPrimary = bigBtn({ background: "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)", color: "#fff", border: "none" });
+  const btnSoft = bigBtn({ background: "#EEF4FC", color: "var(--teal-dark)", border: "1px solid #D3E3F6" });
+  const btnLine = bigBtn({ background: "#fff", color: "var(--ink)", border: "1px solid var(--line)" });
+  const btnDanger = bigBtn({ background: "#FFF5F4", color: "#C6493B", border: "1px solid #F2C4C4" });
+  const btnOk = bigBtn({ background: "#EEF8F2", color: "#1E8A57", border: "1px solid #CDEBDA" });
+  const toggleAvailBtn = item.status === "maintenance"
+    ? <button type="button" style={btnOk} onClick={() => onSetAvailability(false, "")}><CheckCircle2 size={17} /> เปิดใช้งานอีกครั้ง</button>
+    : <button type="button" style={btnDanger} onClick={() => setShowDisable(true)}><XCircle size={17} /> ปิดใช้งานชั่วคราว</button>;
+  const menuItem = (Icon, label, onClick, danger) => (
+    <button type="button" onClick={() => { setMoreOpen(false); onClick(); }} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", background: "none", border: "none", padding: "9px 12px", fontSize: 13.5, fontFamily: "inherit", cursor: "pointer", color: danger ? "#C6493B" : "var(--ink)", borderRadius: 8 }}>
+      <Icon size={15} /> {label}
     </button>
+  );
+  const moreMenu = (
+    <div style={{ position: "relative" }}>
+      <button type="button" aria-label="เพิ่มเติม" style={{ ...btnLine, width: "100%" }} onClick={() => setMoreOpen(!moreOpen)}><span style={{ fontSize: 20, lineHeight: 0, letterSpacing: 1 }}>···</span></button>
+      {moreOpen && (<>
+        <div onClick={() => setMoreOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 5 }} />
+        <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 6, background: "#fff", border: "1px solid var(--line)", borderRadius: 12, boxShadow: "0 8px 24px rgba(11,42,74,0.14)", padding: 4, minWidth: 200 }}>
+          {isMobile && menuItem(Pencil, "แก้ไขข้อมูลเครื่องมือ", onEdit)}
+          {isMobile && (item.status === "maintenance"
+            ? menuItem(CheckCircle2, "เปิดใช้งานอีกครั้ง", () => onSetAvailability(false, ""))
+            : menuItem(XCircle, "ปิดใช้งานชั่วคราว", () => setShowDisable(true)))}
+          {isMobile && menuItem(Plus, "บันทึกกิจกรรม", () => setShowAct(true))}
+          {menuItem(Trash2, "ลบเครื่องมือ", () => setConfirmDelete(true), true)}
+        </div>
+      </>)}
+    </div>
   );
 
   return (
-    <Modal onClose={onClose} title={item.code} xwide>
-      <div style={S.equipDetailGrid} className="ltEquipDetailGrid">
-        {/* LEFT: photo + info + status + actions — stays put, no scrolling */}
-        <div style={S.equipDetailLeft}>
-          {item.imageUrl && (
-            <div style={{ position: "relative" }}>
-              <img src={toDisplayImageUrl(item.imageUrl)} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-                style={{ width: "100%", maxHeight: 200, objectFit: "contain", background: "#EEF2F6", borderRadius: 10, display: "block" }} />
-              <a
-                href={item.imageUrl} target="_blank" rel="noopener noreferrer"
-                style={{
-                  position: "absolute", top: 8, right: 8, display: "flex", alignItems: "center", gap: 5,
-                  background: "rgba(18,37,59,0.75)", color: "#fff", fontSize: 11.5, fontWeight: 600,
-                  padding: "5px 9px", borderRadius: 8, textDecoration: "none",
-                }}
-              >
-                <ExternalLink size={12} /> เปิดไฟล์รูปภาพ
+    <Modal onClose={onClose} title={item.code} xwide maxW={1180}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "360px 1fr", gap: isMobile ? 14 : 0, alignItems: "start", margin: isMobile ? 0 : "-16px -20px -20px" }}>
+        {/* LEFT: photo, identity, status, actions */}
+        <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 12 : 16, minWidth: 0, padding: isMobile ? 0 : "20px 22px 22px", borderRight: isMobile ? "none" : "1px solid var(--line)" }}>
+          <div style={{ position: "relative", background: "#EEF3F8", borderRadius: 14, overflow: "hidden", height: isMobile ? 190 : 250, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {item.imageUrl
+              ? <img src={toDisplayImageUrl(item.imageUrl)} alt="" onError={(ev) => { ev.currentTarget.style.display = "none"; }} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
+              : <ImageOff size={36} color="#9AAABB" />}
+            <span style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", background: "rgba(14,111,186,0.92)", color: "#fff", fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 999, whiteSpace: "nowrap" }}>{item.code}</span>
+            {item.imageUrl && (
+              <a href={item.imageUrl} target="_blank" rel="noopener noreferrer" title="เปิดรูปภาพ" aria-label="เปิดรูปภาพ"
+                style={{ position: "absolute", top: 10, right: 10, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", borderRadius: 10, color: "var(--ink)", boxShadow: "0 1px 4px rgba(11,42,74,0.15)" }}>
+                <ZoomIn size={16} />
               </a>
-            </div>
-          )}
+            )}
+          </div>
 
           <div>
-            <div style={S.detailName}>{item.name}</div>
-            {(item.brand || item.model) && (
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                {[item.brand, item.model].filter(Boolean).join(" · ")}
-              </div>
-            )}
-            {item.serialNo && (
-              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
-                S/N: {item.serialNo}
-              </div>
-            )}
-            <div style={S.eqMeta}><MapPin size={12} /> {item.location || "-"} · {item.type || "-"}</div>
+            <div style={{ fontSize: isMobile ? 18 : 24, fontWeight: 700, lineHeight: 1.3 }}>{item.name}</div>
+            {(item.brand || item.model) && <div style={{ fontSize: isMobile ? 12.5 : 14.5, color: "#4B5C72", marginTop: 4, textTransform: "uppercase" }}>{[item.brand, item.model].filter(Boolean).join("  •  ")}</div>}
           </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Tag color={item.status === "active" ? "var(--green)" : item.status === "maintenance" ? "var(--amber)" : "var(--muted)"}>
-              {item.status === "active" ? "ใช้งานอยู่" : item.status === "maintenance" ? "ซ่อมบำรุง" : "ปิดใช้งาน"}
-            </Tag>
-            <Tag color={STATUS_COLOR[st]}>{item.nextDue ? `${STATUS_LABEL[st]} · ${fmtDate(item.nextDue)}` : "ไม่มีกำหนด"}</Tag>
-            <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
-          </div>
-
-          {item.status === "maintenance" && item.unavailableReason && (
-            <div style={{ ...S.notesBox, border: "1px solid var(--amber)", background: "#FDF3E3", fontSize: 12.5, color: "var(--ink)" }}>
-              <strong>ปิดใช้งานชั่วคราว:</strong> {item.unavailableReason}
+          {isMobile && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, background: statusInfo.bg, border: `1px solid ${statusInfo.line}`, borderRadius: 12, padding: "9px 12px" }}>
+              <statusInfo.Icon size={22} color={statusInfo.fg} />
+              <div><div style={{ fontWeight: 700, color: statusInfo.fg, fontSize: 13.5 }}>{statusInfo.title}</div>{statusInfo.sub && <div style={{ fontSize: 11.5, color: "#4B5C72" }}>{statusInfo.sub}</div>}</div>
             </div>
           )}
-          {item.notes && <div style={S.notesBox}>{item.notes}</div>}
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {item.status === "active" && (
-              <button style={S.smallBtn} onClick={onBook}><CalendarCheck size={13} /> จอง/ยืม</button>
-            )}
-            {item.status === "maintenance" ? (
-              <button style={{ ...S.smallBtn, color: "var(--green)", borderColor: "var(--green)" }} onClick={() => onSetAvailability(false, "")}>
-                <CheckCircle2 size={13} /> เปิดใช้งานอีกครั้ง
-              </button>
-            ) : (
-              <button style={{ ...S.smallBtn, color: "var(--amber)", borderColor: "var(--amber)" }} onClick={() => setShowDisable(true)}>
-                <AlertTriangle size={13} /> ปิดใช้งานชั่วคราว
-              </button>
-            )}
-            <button style={S.smallBtn} onClick={() => setShowShareView(true)}><QrCode size={13} /> QR ดูข้อมูล</button>
-            <button style={S.iconBtn} onClick={onEdit}><Pencil size={14} /></button>
-            <button style={{ ...S.iconBtn, color: "var(--red)" }} onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
+          <div style={{ display: "grid", gap: isMobile ? 8 : 12 }}>
+            {infoRow(QrCode, "S/N", item.serialNo)}
+            {infoRow(Box, "ประเภท", item.type)}
+            {infoRow(MapPin, "ตำแหน่ง", item.location)}
+            {infoRow(User, "ผู้รับผิดชอบ", item.custodian)}
+            {item.nextDue
+              ? infoRow(CalendarClock, "สอบเทียบถัดไป", `${fmtDate(item.nextDue)} · ${STATUS_LABEL[st]}`, STATUS_COLOR[st])
+              : infoRow(CalendarClock, "สอบเทียบถัดไป", "ไม่มีกำหนด")}
           </div>
 
-        </div>
-
-        {/* RIGHT: history — filter tabs stay fixed, only the list below scrolls */}
-        <div style={S.equipDetailRight}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-            <div style={S.panelTitle}>ประวัติกิจกรรม</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              {showDailyCheckBtn && (
-                <button
-                  style={S.ghostBtn}
-                  onClick={() => setDailyCheckEntry(isMeter ? blankMeterCheckEntry(item.id) : {
-                    id: uid(), equipmentId: item.id, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
-                    condition: "", level: "", clean: "", zero: "",
-                    weights: { w10: "", w50: "", w200: "" },
-                    checkedBy: "", remarks: "",
-                    approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
-                  })}
-                >
-                  <CheckCircle2 size={13} style={{ marginRight: 4, verticalAlign: -2 }} /> Daily check
-                </button>
-              )}
-              <button style={S.smallBtn} onClick={() => setShowAct(true)}><Plus size={13} /> บันทึกกิจกรรม</button>
+          {!isMobile && (
+            <div style={{ display: "flex", alignItems: "center", gap: 14, background: statusInfo.bg, border: `1px solid ${statusInfo.line}`, borderRadius: 14, padding: "14px 18px" }}>
+              <div style={{ width: 38, height: 38, borderRadius: "50%", background: statusInfo.fg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                {item.status === "active" ? <Check size={22} color="#fff" strokeWidth={3} /> : <statusInfo.Icon size={20} color="#fff" />}
+              </div>
+              <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, color: statusInfo.fg, fontSize: 16 }}>{statusInfo.title}</div>{statusInfo.sub && <div style={{ fontSize: 13, color: "#4B5C72", marginTop: 2 }}>{statusInfo.sub}</div>}</div>
             </div>
-          </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-            {filterTab("all", "ทั้งหมด")}
-            {filterTab("calibration", "สอบเทียบ")}
-            {filterTab("repair", "ซ่อม")}
-            {filterTab("bookings", "จอง/ยืม")}
-            {filterTab("other", "อื่นๆ")}
-            {(isScale || isMeter) && filterTab("dailyCheck", "ตรวจเช็คประจำวัน")}
-          </div>
+          )}
 
-          {activityFilter === "bookings" ? (
-            <BookingHistoryList bookings={bookings} />
-          ) : activityFilter === "dailyCheck" ? (
-            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
-              {sortedDailyChecks.length === 0 && <EmptyState text="ยังไม่มีรายการตรวจเช็คประจำวันสำหรับเครื่องมือนี้" small />}
-              {sortedDailyChecks.map(c => (
-                <div key={c.id} style={{ ...S.activityRow, alignItems: "center" }}>
-                  <div style={S.activityDate}>{fmtDate(c.date)}<div>{c.time}</div></div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={S.activityType}>ตรวจเช็คประจำวัน · {c.checkedBy || "-"}</div>
-                    <div style={{ marginTop: 4 }}><CheckPointsMini c={c} /></div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
-                    <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>
-                    {c.approved
-                      ? <Tag color="var(--green)">อนุมัติแล้ว</Tag>
-                      : <Tag color="var(--amber)">รออนุมัติ</Tag>}
-                  </div>
-                </div>
-              ))}
+          {item.notes && <div style={{ ...S.notesBox, borderRadius: 12 }}>{item.notes}</div>}
+
+          {isMobile ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              {showDailyCheckBtn && <button type="button" style={btnPrimary} onClick={() => openDaily(newDailyEntry(), false)}><Plus size={16} /> Daily check</button>}
+              <div style={{ display: "grid", gridTemplateColumns: item.status === "active" ? "1fr 1fr 48px" : "1fr 48px", gap: 8 }}>
+                {item.status === "active" && <button type="button" style={btnSoft} onClick={onBook}><CalendarCheck size={16} /> จอง / ยืม</button>}
+                <button type="button" style={btnSoft} onClick={() => setShowShareView(true)}><QrCode size={16} /> QR ดูข้อมูล</button>
+                {moreMenu}
+              </div>
             </div>
           ) : (
-            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
-              {shownActivities.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
-              {shownActivities.map(a => (
-                <div key={a.id} style={{ ...S.activityRow, alignItems: "center" }}>
-                  <div style={S.activityDate}>{fmtDate(a.date)}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={S.activityType}>{typeLabel[a.type] || a.type}</div>
-                    <div style={S.activityDetail}>
-                      {a.detail}{a.by ? ` · โดย ${a.by}` : ""}
-                      {a.poNo ? (
-                        a.poUrl ? (
-                          <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>PO: {a.poNo}</a></>
-                        ) : ` · PO: ${a.poNo}`
-                      ) : (
-                        a.poUrl ? <> · <a href={a.poUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--teal)", textDecoration: "underline" }}>ไฟล์ PO</a></> : ""
-                      )}
-                    </div>
-                    {a.certUrl && (
-                      <a href={a.certUrl} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--teal)", marginTop: 4 }}>
-                        <FileDown size={11} /> ดูใบ Certificate
-                      </a>
-                    )}
-                  </div>
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    <button style={S.iconBtnSm} onClick={() => setEditingAct(a)}><Pencil size={12} /></button>
-                    <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirmDeleteAct(a)}><Trash2 size={12} /></button>
-                  </div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>การจัดการ</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {item.status === "active"
+                  ? <button type="button" style={btnPrimary} onClick={onBook}><CalendarCheck size={17} /> จอง / ยืม</button>
+                  : <button type="button" style={btnSoft} onClick={() => setShowShareView(true)}><QrCode size={17} /> QR ดูข้อมูล</button>}
+                {toggleAvailBtn}
+                {item.status === "active" && <button type="button" style={btnSoft} onClick={() => setShowShareView(true)}><QrCode size={17} /> QR ดูข้อมูล</button>}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 56px", gap: 10, ...(item.status === "active" ? {} : { gridColumn: "1 / -1" }) }}>
+                  <button type="button" style={btnLine} onClick={onEdit}><Pencil size={16} /> แก้ไข</button>
+                  {moreMenu}
                 </div>
-              ))}
+              </div>
             </div>
           )}
+        </div>
+
+        {/* RIGHT: one activity timeline */}
+        <div style={{ minWidth: 0, padding: isMobile ? 0 : "20px 22px 22px", display: "flex", flexDirection: "column" }}>
+          {!isMobile && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+              <div style={{ fontSize: 20, fontWeight: 700, flex: 1 }}>ประวัติกิจกรรม</div>
+              {showDailyCheckBtn && <button type="button" style={{ ...btnPrimary, padding: "0 20px" }} onClick={() => openDaily(newDailyEntry(), false)}><CalendarCheck size={17} /> Daily check</button>}
+              <button type="button" style={{ ...btnLine, padding: "0 18px" }} onClick={() => setShowAct(true)}><Plus size={17} /> บันทึกกิจกรรม</button>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: isMobile ? 6 : 8, flexWrap: "wrap", marginBottom: isMobile ? 10 : 14 }}>{CHIPS.map(chip)}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 8 : 10, ...(isMobile ? {} : { maxHeight: 560, overflowY: "auto", paddingRight: 4 }) }}>
+            {shown.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
+            {shown.map(t => {
+              const Icon = t.icon;
+              const tone = t.note ? NOTE_TONE[t.note.tone] : null;
+              const NoteIcon = t.note?.icon;
+              return (
+                <div key={t.key} onClick={t.onOpen || undefined} style={{ display: "flex", gap: isMobile ? 10 : 14, alignItems: "flex-start", background: "#fff", border: "1px solid #E6EEF6", borderRadius: 14, padding: isMobile ? "11px 10px" : "14px 14px", cursor: t.onOpen ? "pointer" : "default" }}>
+                  <div style={{ width: isMobile ? 34 : 46, height: isMobile ? 34 : 46, borderRadius: 12, background: "#EEF4FC", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Icon size={isMobile ? 17 : 22} color="var(--teal)" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: isMobile ? 13.5 : 15.5 }}>{t.title}</div>
+                        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(150px, auto) 1fr", gap: isMobile ? "2px 0" : "0 26px", marginTop: 3, fontSize: isMobile ? 11.5 : 14 }}>
+                          <div style={{ color: "#4B5C72", whiteSpace: isMobile ? "normal" : "nowrap" }}>{t.when}{t.when2 && (isMobile ? <span> · {t.when2}</span> : <div>{t.when2}</div>)}</div>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ color: "var(--ink)", overflowWrap: "anywhere" }}>{t.who}{isMobile && t.whoSub && <span style={{ color: "#5B6B80" }}> · {t.whoSub}</span>}</div>
+                            {!isMobile && t.whoSub && <div style={{ color: "#5B6B80", fontSize: 13, overflowWrap: "anywhere" }}>{t.whoSub}</div>}
+                          </div>
+                        </div>
+                      </div>
+                      {t.status && <span style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, background: t.status.bg, color: t.status.fg, border: `1px solid ${t.status.line}`, borderRadius: 999, padding: isMobile ? "2px 9px" : "4px 14px", fontSize: isMobile ? 11 : 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>{t.status.text}</span>}
+                      {t.onOpen && !isMobile && <ChevronRight size={18} color="#9AAABB" style={{ flexShrink: 0, marginTop: 4 }} />}
+                    </div>
+                    {t.note && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: isMobile ? 8 : 10, background: tone.bg, color: tone.fg, borderRadius: 10, padding: isMobile ? "6px 10px" : "9px 14px", fontSize: isMobile ? 11.5 : 13.5 }}>
+                        {NoteIcon && <NoteIcon size={isMobile ? 13 : 15} style={{ flexShrink: 0 }} />}<span style={{ minWidth: 0, color: t.note.tone === "info" ? "var(--ink)" : tone.fg }}>{t.note.text}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -3066,7 +3136,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
           entry={dailyCheckEntry}
           equip={item}
           certificates={certificates}
-          isExisting={false}
+          isExisting={dailyCheckExisting}
           canApprove={canApprove}
           currentUsername={currentUsername}
           currentDisplayName={currentDisplayName}
@@ -3078,7 +3148,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
         <DailyCheckForm
           entry={dailyCheckEntry}
           scale={item}
-          isExisting={false}
+          isExisting={dailyCheckExisting}
           canApprove={canApprove}
           currentUsername={currentUsername}
           currentDisplayName={currentDisplayName}
@@ -3090,6 +3160,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
       {editingAct && (
         <ActivityForm
           initial={editingAct}
+          onDelete={() => { const a = editingAct; setEditingAct(null); setConfirmDeleteAct(a); }}
           onCancel={() => setEditingAct(null)}
           onSave={(act) => { onEditActivity(act); setEditingAct(null); }}
         />
@@ -3098,7 +3169,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
   );
 }
 
-function ActivityForm({ initial, onCancel, onSave }) {
+function ActivityForm({ initial, onCancel, onSave, onDelete = null }) {
   const defaults = { date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", poUrl: "", certUrl: "", external: false, externalLocation: "" };
   const [f, setF] = useState({ ...defaults, ...initial });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -3138,7 +3209,8 @@ function ActivityForm({ initial, onCancel, onSave }) {
           <input style={S.input} value={f.certUrl} onChange={set("certUrl")} placeholder="วางลิงก์ใบรับรองผลสอบเทียบ เช่น SharePoint, Google Drive" />
         </Field>
       </div>
-      <ModalFooter onCancel={onCancel} onSave={() => onSave({ ...f, id: initial?.id })} disabled={!f.detail} />
+      <ModalFooter onCancel={onCancel} onSave={() => onSave({ ...f, id: initial?.id })} disabled={!f.detail}
+        extra={onDelete && <button type="button" style={{ ...S.ghostBtn, color: "var(--red)", borderColor: "#F2C4C4", display: "flex", alignItems: "center", gap: 5 }} onClick={onDelete}><Trash2 size={13} /> ลบกิจกรรมนี้</button>} />
     </Modal>
   );
 }
@@ -7590,7 +7662,7 @@ function checkLogRows(dailyChecks, icChecks, instrument) {
     }),
   ];
 }
-function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll }) {
+function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll, mobile = false }) {
   const [sort, setSort] = useState({ key: "date", dir: -1 });
   const keyOf = {
     date: r => r.date + " " + r.time, kind: r => r.kind, value: r => numOrNull(r.value) ?? -Infinity,
@@ -7620,6 +7692,52 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: bg, color: fg, border: `1px solid ${line}`, borderRadius: 999, padding: "4px 14px", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", ...extra }}>{text}</span>
   );
   const actBtn = { width: 36, height: 36, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff", border: "1px solid var(--line)", borderRadius: 10, cursor: "pointer", color: "var(--ink)" };
+  const askDelete = (r) => { if (window.confirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) onDelete(r); };
+  const empty = (
+    <>{emptyText}{onShowAll && <> · <button type="button" onClick={onShowAll} style={{ background: "none", border: "none", padding: 0, color: "var(--teal)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}>ดูทั้งหมด</button></>}</>
+  );
+  // Phones: one card per check, newest first — no sideways scrolling.
+  if (mobile) {
+    return (
+      <div style={{ display: "grid", gap: 10 }}>
+        {sorted.map(r => {
+          const st = RESULT_STYLE[r.result];
+          return (
+            <div key={r.key} onClick={() => onEdit(r)} style={{ background: "#fff", border: "1px solid var(--line)", borderLeft: `4px solid ${st.fg}`, borderRadius: 14, padding: "12px 12px 12px 14px", cursor: "pointer" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{fmtDate(r.date)}{r.time && <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12.5, marginLeft: 6 }}>{r.time}</span>}</div>
+                  <div style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    {r.kind === "daily" ? pill("#EAF2FD", "#1D5FB8", "#BFD5F3", "Daily", { padding: "2px 10px", fontSize: 11.5 }) : pill("#F3EEFB", "#6A43B5", "#D9CCF0", "Intermediate", { padding: "2px 10px", fontSize: 11.5 })}
+                    {pill("#fff", st.fg, st.line, st.th, { padding: "2px 10px", fontSize: 11.5 })}
+                  </div>
+                </div>
+                {r.value != null && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: st.bg, color: st.fg, borderRadius: 10, padding: "6px 10px", fontWeight: 700, fontSize: 14, whiteSpace: "nowrap", flexShrink: 0 }}>
+                    {r.result === "FAIL" ? <XCircle size={15} /> : r.result === "WARNING" ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
+                    {r.value}{r.unit ? ` ${r.unit}` : ""}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 8, marginTop: 10 }}>
+                <div style={{ flex: 1, minWidth: 0, fontSize: 12.5 }}>
+                  <div>{r.by || "-"}{r.approval && <span style={{ color: r.approved ? "#1E8A57" : "#A86A00" }}> · {r.approval}</span>}</div>
+                  {r.note && <div style={{ color: "var(--muted)", marginTop: 2, wordBreak: "break-word" }}>{r.note}</div>}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                  <button type="button" style={{ ...actBtn, width: 34, height: 34 }} title="แก้ไข" aria-label="แก้ไข" onClick={() => onEdit(r)}><Pencil size={14} /></button>
+                  <button type="button" style={{ ...actBtn, width: 34, height: 34 }} title="ลบ" aria-label="ลบ" onClick={() => askDelete(r)}><Trash2 size={14} /></button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {sorted.length === 0 && (
+          <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, padding: "22px 16px", textAlign: "center", color: "var(--muted)", fontSize: 13 }}>{empty}</div>
+        )}
+      </div>
+    );
+  }
   return (
     <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 16, overflow: "hidden" }}>
       <div style={{ overflowX: "auto" }}>
@@ -7652,7 +7770,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
                   <td style={td} onClick={e => e.stopPropagation()}>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button type="button" style={actBtn} title="แก้ไข" onClick={() => onEdit(r)}><Pencil size={15} /></button>
-                      <button type="button" style={actBtn} title="ลบ" onClick={() => { if (window.confirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) onDelete(r); }}><Trash2 size={15} /></button>
+                      <button type="button" style={actBtn} title="ลบ" onClick={() => askDelete(r)}><Trash2 size={15} /></button>
                     </div>
                   </td>
                 </tr>
@@ -7660,7 +7778,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
             })}
             {sorted.length === 0 && (
               <tr><td colSpan={7} style={{ ...td, textAlign: "center", color: "var(--muted)", padding: "28px 18px" }}>
-                {emptyText}{onShowAll && <> · <button type="button" onClick={onShowAll} style={{ background: "none", border: "none", padding: 0, color: "var(--teal)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}>ดูทั้งหมด</button></>}
+                {empty}
               </td></tr>
             )}
           </tbody>
@@ -7682,6 +7800,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
   const [showShare, setShowShare] = useState(false);
   const [logKind, setLogKind] = useState("all");
   const [range, setRange] = useState("month"); // month | 3m | round | all
+  const isMobile = useIsMobile();
   const deepLinkHandled = useRef(false);
 
   useEffect(() => {
@@ -7757,7 +7876,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
           <ChevronLeft size={14} /> กลับไปบันทึกการสอบเทียบ
         </button>
       )}
-      <TabHeader title="ตรวจเช็คเครื่องมือ" sub="Daily check และ Intermediate check ระหว่างรอบสอบเทียบ รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที" />
+      <TabHeader title="ตรวจเช็คเครื่องมือ" sub={isMobile ? "" : "Daily check และ Intermediate check ระหว่างรอบสอบเทียบ รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที"} />
 
       {checkable.length === 0 ? (
         <EmptyState text="ยังไม่มีเครื่องมือ — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่" />
@@ -7797,9 +7916,13 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
             const lastStyle = RESULT_STYLE[last?.result || "-"];
             // ---- styles ----
             const card = { background: "#fff", border: "1px solid var(--line)", borderRadius: 16, boxShadow: "0 1px 2px rgba(11,42,74,0.04)" };
-            const tile = (bg) => ({ width: 52, height: 52, borderRadius: 14, background: bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 });
-            const statCard = (bg, line) => ({ ...card, background: bg, borderColor: line, padding: "18px 20px", display: "flex", gap: 16, alignItems: "flex-start", minWidth: 0 });
-            const statLabel = { fontSize: 13.5, fontWeight: 600, color: "#3B4E66" };
+            const M = isMobile;
+            // Phones: compact cards — small icon beside the text, one line each.
+            const tile = (bg) => ({ width: M ? 26 : 52, height: M ? 26 : 52, borderRadius: M ? 8 : 14, background: bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 });
+            const statCard = (bg, line) => ({ ...card, background: bg, borderColor: line, borderRadius: M ? 12 : 16, padding: M ? "9px 10px" : "18px 20px", display: "flex", flexDirection: "row", gap: M ? 8 : 16, alignItems: "flex-start", minWidth: 0 });
+            const statLabel = { fontSize: M ? 11.5 : 13.5, fontWeight: 600, color: "#3B4E66", lineHeight: M ? "26px" : "normal", whiteSpace: "nowrap" };
+            const statValue = M ? 15.5 : 26;
+            const iconSz = M ? 15 : 26;
             const metaItem = (Icon, label, value) => (
               <div style={{ display: "flex", gap: 8, alignItems: "flex-start", minWidth: 0 }}>
                 <Icon size={18} color="#5B7A96" style={{ flexShrink: 0, marginTop: 2 }} />
@@ -7808,30 +7931,33 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
             );
             return (<>
               {/* toolbar */}
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-                <select style={{ ...S.select, flex: "1 1 280px", maxWidth: 460, height: 46, borderRadius: 12, fontSize: 14 }} value={equipId} onChange={e => setEquipId(e.target.value)}>
+              <div style={{ display: "flex", gap: M ? 8 : 10, alignItems: "center", flexWrap: "wrap", marginBottom: M ? 12 : 16 }}>
+                <select style={{ ...S.select, flex: M ? "1 1 0" : "1 1 280px", minWidth: 0, maxWidth: M ? "none" : 460, height: M ? 40 : 46, borderRadius: 12, fontSize: M ? 13.5 : 14, order: 0 }} value={equipId} onChange={e => setEquipId(e.target.value)}>
                   {checkable.map(e => (
                     <option key={e.id} value={e.id}>{e.code}{e.name ? ` — ${e.name}` : ""}{e.location ? ` (${e.location})` : ""}</option>
                   ))}
                 </select>
                 {hasDailyForm(equip) && (
-                  <button style={{ ...S.primaryBtn, height: 46, borderRadius: 12, padding: "0 20px", fontSize: 14 }}
+                  <button style={{ ...S.primaryBtn, height: M ? 40 : 46, borderRadius: 12, padding: M ? "0 10px" : "0 20px", fontSize: M ? 13.5 : 14, justifyContent: "center", ...(M ? { flex: "1 1 0", order: 2 } : {}) }}
                     onClick={() => setEditing(isScale ? blankScaleCheckEntry(equipId) : blankMeterCheckEntry(equipId))}>
-                    <Plus size={17} /> Daily check วันนี้
+                    <Plus size={M ? 15 : 17} /> Daily check วันนี้
                   </button>
                 )}
                 {canIc && equip && (
-                  <button style={{ ...(hasDailyForm(equip) ? S.ghostBtn : S.primaryBtn), height: 46, borderRadius: 12, padding: "0 18px", fontSize: 14 }}
+                  <button style={{ ...(hasDailyForm(equip) ? S.ghostBtn : S.primaryBtn), height: M ? 40 : 46, borderRadius: 12, padding: M ? "0 10px" : "0 18px", fontSize: M ? 13.5 : 14, justifyContent: "center", ...(M ? { flex: "1 1 0", order: 3 } : {}) }}
                     onClick={() => setEditingIc(newIntermediateCheckFor(equip, intermediateChecks, certificates, currentDisplayName))}>
-                    <Plus size={17} /> Intermediate check
+                    <Plus size={M ? 15 : 17} /> Intermediate check
                   </button>
                 )}
-                <div style={{ flex: 1 }} />
+                {!M && <div style={{ flex: 1 }} />}
                 {equip && (
-                  <button style={{ ...S.ghostBtn, height: 46, borderRadius: 12, padding: "0 16px", fontSize: 14 }} onClick={() => setShowShare(true)}>
-                    <QrCode size={18} style={{ marginRight: 6 }} /> QR / ลิงก์เครื่องนี้
+                  // Phones: icon-only, on the same line as the instrument picker.
+                  <button style={{ ...S.ghostBtn, height: M ? 40 : 46, borderRadius: 12, padding: M ? 0 : "0 16px", width: M ? 40 : "auto", justifyContent: "center", fontSize: 14, flexShrink: 0, order: M ? 1 : 0 }}
+                    onClick={() => setShowShare(true)} title="QR / ลิงก์เครื่องนี้" aria-label="QR / ลิงก์เครื่องนี้">
+                    <QrCode size={18} style={{ marginRight: M ? 0 : 6 }} />{!M && " QR / ลิงก์เครื่องนี้"}
                   </button>
                 )}
+                {M && <div style={{ flexBasis: "100%", height: 0, order: 1 }} />}
               </div>
               {equip && !hasDailyForm(equip) && (
                 <div style={{ fontSize: 12, color: "var(--muted)", margin: "-6px 0 12px" }}>เครื่องประเภท "{equip.type || "-"}" ยังไม่มีฟอร์ม Daily check — บันทึกเป็น Intermediate check ได้</div>
@@ -7846,30 +7972,40 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
 
               {equip && (<>
                 {/* instrument header */}
-                <div style={{ ...card, padding: 20, marginBottom: 18, display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", gap: 20, alignItems: "center", flex: "1 1 420px", minWidth: 0 }}>
-                    <Thumb src={toDisplayImageUrl(equip.imageUrl)} size={104} radius={14} />
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3, wordBreak: "break-word" }}>{equip.code}{equip.name ? ` — ${equip.name}` : ""}</div>
-                      <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>{[equip.type, equip.model || equip.brand, equip.location].filter(Boolean).join(" - ")}</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginTop: 14 }}>
-                        {metaItem(User, "ผู้รับผิดชอบ", equip.custodian)}
-                        {metaItem(MapPin, "สถานที่", equip.location)}
-                        {metaItem(FileCheck2, "วิธีตรวจสอบ", equip.relatedTestMethod || equip.referenceDocument)}
+                <div style={{ ...card, padding: M ? 14 : 20, marginBottom: M ? 12 : 18, display: "flex", gap: M ? 14 : 20, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ flex: M ? "1 1 100%" : "1 1 420px", minWidth: 0 }}>
+                    <div style={{ display: "flex", gap: M ? 12 : 20, alignItems: "center" }}>
+                      <Thumb src={toDisplayImageUrl(equip.imageUrl)} size={M ? 64 : 104} radius={M ? 12 : 14} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: M ? 17 : 22, fontWeight: 700, lineHeight: 1.3, wordBreak: "break-word" }}>{equip.code}{equip.name ? ` — ${equip.name}` : ""}</div>
+                        <div style={{ fontSize: M ? 12.5 : 14, color: "var(--muted)", marginTop: 3 }}>{[equip.type, equip.model || equip.brand, equip.location].filter(Boolean).join(" - ")}</div>
+                        {!M && (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginTop: 14 }}>
+                            {metaItem(User, "ผู้รับผิดชอบ", equip.custodian)}
+                            {metaItem(MapPin, "สถานที่", equip.location)}
+                            {metaItem(FileCheck2, "วิธีตรวจสอบ", equip.relatedTestMethod || equip.referenceDocument)}
+                          </div>
+                        )}
                       </div>
                     </div>
+                    {M && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", marginTop: 12, paddingTop: 10, borderTop: "1px solid #EEF3F8", fontSize: 12.5, color: "#3B4E66" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><User size={14} color="#5B7A96" />{equip.custodian || "ยังไม่ระบุผู้รับผิดชอบ"}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><FileCheck2 size={14} color="#5B7A96" />{equip.relatedTestMethod || equip.referenceDocument || "ยังไม่ระบุวิธีตรวจ"}</span>
+                      </div>
+                    )}
                   </div>
                   {lims && (
-                    <div style={{ flex: "1 1 380px", background: "#FFF8EC", border: "1px solid #F6DDB0", borderRadius: 14, padding: "14px 18px", minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>
-                        <AlertTriangle size={20} color="#D9941E" style={{ flexShrink: 0 }} />
+                    <div style={{ flex: M ? "1 1 100%" : "1 1 380px", background: "#FFF8EC", border: "1px solid #F6DDB0", borderRadius: M ? 12 : 14, padding: M ? "10px 10px" : "14px 18px", minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: M ? 12.5 : 13.5, fontWeight: 700, marginBottom: M ? 8 : 12 }}>
+                        <AlertTriangle size={M ? 16 : 20} color="#D9941E" style={{ flexShrink: 0 }} />
                         เกณฑ์ Warning / Action Limit (ที่ค่ามาตรฐาน {refBasis}{equip.calUnit ? ` ${equip.calUnit}` : ""})
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
                         {[["LWL", lims.lwl, "#D9941E"], ["UWL", lims.uwl, "#D9941E"], ["LAL", lims.lal, "#C6493B"], ["UAL", lims.ual, "#C6493B"]].map(([k, v, col], i) => (
                           <div key={k} style={{ textAlign: "center", borderLeft: i ? "1px solid #F1D9AE" : "none", padding: "0 6px" }}>
-                            <div style={{ fontSize: 12.5, color: "#5B6B80" }}>{k}</div>
-                            <div style={{ fontSize: 19, fontWeight: 700, color: col, marginTop: 4, fontVariantNumeric: "tabular-nums" }}>{v.toFixed(4)}</div>
+                            <div style={{ fontSize: M ? 11.5 : 12.5, color: "#5B6B80" }}>{k}</div>
+                            <div style={{ fontSize: M ? 14 : 19, fontWeight: 700, color: col, marginTop: M ? 2 : 4, fontVariantNumeric: "tabular-nums" }}>{v.toFixed(M ? 3 : 4)}</div>
                           </div>
                         ))}
                       </div>
@@ -7878,66 +8014,68 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
                 </div>
 
                 {/* stat cards */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 14, marginBottom: 22 }}>
+                <div style={{ display: "grid", gridTemplateColumns: M ? "repeat(2, minmax(0, 1fr))" : "repeat(auto-fit, minmax(230px, 1fr))", gap: M ? 8 : 14, marginBottom: M ? 12 : 22 }}>
                   <div style={statCard("#F6FAFE", "#D9E8F6")}>
-                    <div style={tile("#E3EFFB")}><CalendarCheck size={26} color="var(--teal)" /></div>
-                    <div style={{ minWidth: 0 }}>
+                    <div style={tile("#E3EFFB")}><CalendarCheck size={iconSz} color="var(--teal)" /></div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={statLabel}>ตรวจล่าสุด</div>
-                      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4 }}>{last ? fmtDate(last.date) : "-"}</div>
-                      <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{last ? (last.time || (last.kind === "ic" ? "Intermediate check" : "")) : "ยังไม่มีการตรวจ"}</div>
+                      <div style={{ fontSize: statValue, fontWeight: 700, marginTop: M ? 0 : 4, whiteSpace: "nowrap" }}>{last ? fmtDate(last.date) : "-"}</div>
+                      <div style={{ fontSize: M ? 11 : 13, color: "var(--muted)", marginTop: M ? 1 : 2, ...(M ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}) }}>{last ? (last.time || (last.kind === "ic" ? "Intermediate check" : "")) : "ยังไม่มีการตรวจ"}</div>
                     </div>
                   </div>
                   <div style={statCard("#F3FBF6", "#D3EEDF")}>
-                    <div style={tile("#DFF3E8")}><TrendingUp size={26} color="#1E8A57" /></div>
-                    <div style={{ minWidth: 0 }}>
+                    <div style={tile("#DFF3E8")}><TrendingUp size={iconSz} color="#1E8A57" /></div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={statLabel}>ผลล่าสุด</div>
-                      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4, color: head?.pass === false ? "#C6493B" : "#1E8A57" }}>
-                        {head?.value ?? "-"}{head?.value != null && <span style={{ fontSize: 16, marginLeft: 6 }}>{head.unit}</span>}
+                      <div style={{ fontSize: statValue, fontWeight: 700, marginTop: M ? 0 : 4, color: head?.pass === false ? "#C6493B" : "#1E8A57" }}>
+                        {head?.value ?? "-"}{head?.value != null && <span style={{ fontSize: M ? 13 : 16, marginLeft: 5 }}>{head.unit}</span>}
                       </div>
-                      <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{head?.ref || (lastDaily ? "" : "ยังไม่มี Daily check")}</div>
+                      <div style={{ fontSize: M ? 11 : 13, color: "var(--muted)", marginTop: M ? 1 : 2, ...(M ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}) }}>{head?.ref || (lastDaily ? "" : "ยังไม่มี Daily check")}</div>
                     </div>
                   </div>
                   <div style={statCard(lastStyle.bg === "#F3F6F9" ? "#F7F9FB" : lastStyle.bg, lastStyle.line)}>
-                    <div style={tile("#fff")}>{last?.result === "FAIL" ? <XCircle size={28} color={lastStyle.fg} /> : last?.result === "WARNING" ? <AlertTriangle size={28} color={lastStyle.fg} /> : <CheckCircle2 size={28} color={lastStyle.fg} />}</div>
-                    <div style={{ minWidth: 0 }}>
+                    <div style={tile("#fff")}>{last?.result === "FAIL" ? <XCircle size={iconSz} color={lastStyle.fg} /> : last?.result === "WARNING" ? <AlertTriangle size={iconSz} color={lastStyle.fg} /> : <CheckCircle2 size={iconSz} color={lastStyle.fg} />}</div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={statLabel}>สถานะล่าสุด</div>
-                      <div style={{ marginTop: 8 }}>
-                        <span style={{ display: "inline-block", background: lastStyle.fg, color: "#fff", borderRadius: 999, padding: "5px 18px", fontSize: 15, fontWeight: 700 }}>{last ? lastStyle.th : "-"}</span>
+                      <div style={{ marginTop: M ? 1 : 8 }}>
+                        {last
+                          ? <span style={{ display: "inline-block", background: lastStyle.fg, color: "#fff", borderRadius: 999, padding: M ? "1px 10px" : "5px 18px", fontSize: M ? 12 : 15, fontWeight: 700 }}>{lastStyle.th}</span>
+                          : <span style={{ fontSize: statValue, fontWeight: 700, color: "var(--muted)" }}>-</span>}
                       </div>
-                      <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>{last ? [lastStyle.note, last.kind === "daily" ? (last.approved ? "อนุมัติแล้ว" : "รออนุมัติ") : ""].filter(Boolean).join(" · ") : ""}</div>
+                      <div style={{ fontSize: M ? 11 : 13, color: "var(--muted)", marginTop: M ? 3 : 6, ...(M ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}) }}>{last ? [lastStyle.note, last.kind === "daily" ? (last.approved ? "อนุมัติแล้ว" : "รออนุมัติ") : ""].filter(Boolean).join(" · ") : ""}</div>
                     </div>
                   </div>
                   <div style={statCard(plannedToday && doneToday < plannedToday ? "#FFF9EE" : "#F3FBF6", plannedToday && doneToday < plannedToday ? "#F6DDB0" : "#D3EEDF")}>
-                    <div style={tile(plannedToday && doneToday < plannedToday ? "#FCEBCB" : "#DFF3E8")}><ClipboardList size={26} color={plannedToday && doneToday < plannedToday ? "#D9941E" : "#1E8A57"} /></div>
-                    <div style={{ minWidth: 0 }}>
+                    <div style={tile(plannedToday && doneToday < plannedToday ? "#FCEBCB" : "#DFF3E8")}><ClipboardList size={iconSz} color={plannedToday && doneToday < plannedToday ? "#D9941E" : "#1E8A57"} /></div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={statLabel}>ดำเนินการวันนี้</div>
-                      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4 }}>{plannedToday ? `${doneToday}/${plannedToday}` : doneToday}</div>
-                      <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{plannedToday ? (doneToday >= plannedToday ? "ครบตามแผนแล้ว" : "ยังไม่ได้ตรวจวันนี้") : "ครั้งที่บันทึกวันนี้"}</div>
+                      <div style={{ fontSize: statValue, fontWeight: 700, marginTop: M ? 0 : 4 }}>{plannedToday ? `${doneToday}/${plannedToday}` : doneToday}</div>
+                      <div style={{ fontSize: M ? 11 : 13, color: "var(--muted)", marginTop: M ? 1 : 2, ...(M ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}) }}>{plannedToday ? (doneToday >= plannedToday ? "ครบตามแผนแล้ว" : "ยังไม่ได้ตรวจวันนี้") : "ครั้งที่บันทึกวันนี้"}</div>
                     </div>
                   </div>
                 </div>
 
                 {/* filters */}
-                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
-                  <div style={{ display: "inline-flex", background: "#EEF3F9", border: "1px solid var(--line)", borderRadius: 14, padding: 4, gap: 2, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: M ? 8 : 12, alignItems: "center", flexWrap: "wrap", marginBottom: M ? 10 : 14 }}>
+                  <div style={{ display: "flex", background: "#EEF3F9", border: "1px solid var(--line)", borderRadius: 14, padding: 4, gap: 2, flexWrap: "nowrap", overflowX: "auto", maxWidth: "100%", ...(M ? { flex: "1 1 100%" } : {}) }}>
                     {[["all", "ทั้งหมด"], ["daily", "Daily check"], ["ic", "Intermediate check"]].map(([k, label]) => {
                       const on = logKind === k;
                       return (
                         <button key={k} type="button" onClick={() => setLogKind(k)} style={{
-                          display: "inline-flex", alignItems: "center", gap: 8, border: "none", cursor: "pointer", borderRadius: 11, padding: "9px 16px", fontSize: 14, fontFamily: "inherit",
+                          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: M ? 5 : 8, border: "none", cursor: "pointer", borderRadius: 11, padding: M ? "8px 10px" : "9px 16px", fontSize: M ? 12.5 : 14, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, ...(M ? { flex: "1 0 auto" } : {}),
                           background: on ? "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)" : "transparent", color: on ? "#fff" : "#3B4E66", fontWeight: on ? 700 : 500,
                         }}>
-                          {label}
-                          <span style={{ minWidth: 24, height: 24, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12.5, fontWeight: 600,
+                          {M && k === "ic" ? "Intermediate" : M && k === "daily" ? "Daily" : label}
+                          <span style={{ minWidth: M ? 20 : 24, height: M ? 20 : 24, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12.5, fontWeight: 600,
                             background: on ? "#fff" : "#fff", color: on ? "var(--teal-dark)" : "#3B4E66", border: on ? "none" : "1px solid var(--line)", padding: "0 6px" }}>{count(k)}</span>
                         </button>
                       );
                     })}
                   </div>
-                  <div style={{ flex: 1 }} />
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: "0 14px", height: 46, cursor: "pointer" }}>
+                  {!M && <div style={{ flex: 1 }} />}
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: "0 14px", height: M ? 42 : 46, cursor: "pointer", ...(M ? { flex: "1 1 100%", minWidth: 0 } : {}) }}>
                     <CalendarClock size={18} color="#3B4E66" />
-                    <span style={{ fontSize: 13.5, whiteSpace: "nowrap" }}>{rg.from ? `${fmtDate(rg.from)}  –  ${fmtDate(rg.to)}` : "ทุกช่วงเวลา"}</span>
+                    <span style={{ fontSize: M ? 12.5 : 13.5, whiteSpace: "nowrap", flex: M ? 1 : "none", overflow: "hidden", textOverflow: "ellipsis" }}>{rg.from ? `${fmtDate(rg.from)}  –  ${fmtDate(rg.to)}` : "ทุกช่วงเวลา"}</span>
                     <select value={range} onChange={e => setRange(e.target.value)} aria-label="ช่วงวันที่"
                       style={{ border: "none", background: "transparent", fontFamily: "inherit", fontSize: 13, color: "var(--muted)", cursor: "pointer", outline: "none" }}>
                       {Object.entries(ranges).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -7947,7 +8085,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
 
                 <CheckLogTable
                   key={equip.id}
-                  rows={shown} unitLabel={unitLabel}
+                  rows={shown} unitLabel={unitLabel} mobile={M}
                   onEdit={r => (r.kind === "daily" ? setEditing(r.rec) : canIc ? setEditingIc(r.rec) : null)}
                   onDelete={r => (r.kind === "daily" ? remove(r.rec.id) : canIc ? removeIc(r.rec.id) : null)}
                   emptyText={allRows.length ? `ไม่มีรายการในช่วง ${rg.label}` : "ยังไม่มีบันทึกการตรวจเช็คของเครื่องนี้"}
@@ -12295,10 +12433,10 @@ function Field({ label, children, full, plain }) {
     <span style={S.fieldLabel}>{label}</span>{children}
   </Tag>;
 }
-function Modal({ title, children, onClose, wide, xwide }) {
+function Modal({ title, children, onClose, wide, xwide, maxW }) {
   return (
     <div style={S.modalOverlay} onClick={onClose}>
-      <div style={{ ...S.modalBox, maxWidth: xwide ? 960 : wide ? 620 : 480 }} onClick={e => e.stopPropagation()}>
+      <div style={{ ...S.modalBox, maxWidth: maxW || (xwide ? 960 : wide ? 620 : 480) }} onClick={e => e.stopPropagation()}>
         <div style={S.modalHead}>
           <span style={{ ...S.modalTitle, flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
           <button style={{ ...S.iconBtn, flexShrink: 0 }} onClick={onClose}><X size={16} /></button>
@@ -13337,6 +13475,29 @@ button { cursor: pointer; }
     scrollbar-width: none;
   }
   .ltBottomNav::-webkit-scrollbar { display: none; }
+
+  /* ---- Compact phone scale (LINE-app-like spacing) ----
+     The panel bleeds to the screen edges even when an outer page pads it,
+     so content sits ~14px from the edge instead of ~30px. The sidebar only
+     holds the LabTrack brand on phones (nav lives in the bottom bar) and
+     the outer app already shows the brand, so it is hidden. */
+  .ltApp {
+    margin-left: calc(50% - 50vw) !important; margin-right: calc(50% - 50vw) !important;
+    width: 100vw !important; max-width: 100vw !important;
+    border-left: none !important; border-right: none !important; box-shadow: none !important;
+  }
+  .ltSidebar { display: none !important; }
+  .ltMain { padding: 12px 14px calc(92px + env(safe-area-inset-bottom)) !important; }
+  .ltMain h2 { font-size: 18px !important; line-height: 1.35 !important; }
+  /* Bottom bar: a floating pill, like LINE's */
+  .ltBottomNav {
+    left: 10px !important; right: 10px !important; bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+    border: 1px solid var(--line) !important; border-radius: 28px !important;
+    padding: 4px 6px !important; box-shadow: 0 6px 24px rgba(11,42,74,0.14) !important;
+    background: rgba(255,255,255,0.96) !important;
+    -webkit-backdrop-filter: saturate(1.4) blur(12px); backdrop-filter: saturate(1.4) blur(12px);
+  }
+  .ltBottomNavBtn { padding: 6px 8px 5px !important; min-width: 64px !important; border-radius: 22px; }
 }
 
 .ltBottomNav { display: none; }
