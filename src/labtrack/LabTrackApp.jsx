@@ -5209,9 +5209,253 @@ function blankUncertaintyRow(instrumentId, budgetId = "") {
 // Budget-level fields: the same for every component of one Budget ID. They
 // used to be stored per row with "the top row wins", so editing them on any
 // other row silently did nothing — now a save writes them to the whole budget.
-const BUDGET_LEVEL_KEYS = ["instrumentId", "testMethod", "parameter", "combinedK", "measuredValue", "reviewDate", "approvedBy"];
-function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [], notify }) {
+const BUDGET_LEVEL_KEYS = ["instrumentId", "testMethod", "parameter", "combinedK", "measuredValue", "reviewDate", "approvedBy", "preparedBy", "wiProcedure"];
+/* ---------- RDI-WI-08: การประเมินค่าความไม่แน่นอนของการวัด ----------
+   The lab's own procedure: Type A = s/√n from repeated measurements,
+   Type B = uncertainty from the calibration certificates of the instruments
+   the test method uses, uc = √Σu², U = 2·uc (95 %). Reviewed once a year or
+   whenever a calibration result changes (WI step 4). A budget built here is
+   ordinary Sheet 05 rows (wiSource "A"/"B"), so the table and the Excel
+   export keep working unchanged. */
+const WI08 = { code: "RDI-WI-08", k: 2 };
+const WI08_PARAMS = [
+  { key: "Brix", label: "บริกซ์ (Brix) ในน้ำอ้อย", unit: "%Brix", method: "RDI-WI-02" },
+  { key: "Pol", label: "โพล (Pol) ในน้ำอ้อย", unit: "%Pol", method: "RDI-WI-02" },
+  { key: "Fiber", label: "ไฟเบอร์ (Fiber) ในชานอ้อยย่อย", unit: "%Fiber", method: "RDI-WI-03" },
+];
+function parseReadings(text) {
+  return String(text || "").split(/[\s,;]+/).map(x => x.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n));
+}
+function typeAStats(readings, nDiv) {
+  const n = readings.length;
+  if (n < 2) return { n, mean: n ? readings[0] : null, s: null, uA: null };
+  const mean = readings.reduce((a, b) => a + b, 0) / n;
+  const s = Math.sqrt(readings.reduce((a, r) => a + (r - mean) ** 2, 0) / (n - 1));
+  const d = numOrNull(nDiv) || n;
+  return { n, mean, s, uA: s / Math.sqrt(d), nDiv: d };
+}
+const unitKey = (u) => String(u || "").toLowerCase().replace(/[°%\s]/g, "");
+// Points of one instrument usable as Type B: as-left values only (the
+// before-adjustment rows describe the past, not the instrument in use),
+// newest certificate first.
+function typeBPointsOf(certificates, instrumentId) {
+  return certificates.filter(c => c.instrumentId === instrumentId && derivedUOf(c) != null && !isBeforeAdj(c))
+    .slice().sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || "") || compareCalPoints(a, b));
+}
+function defaultTypeBPoint(points, level) {
+  if (!points.length) return null;
+  const newest = points[0].calibrationDate;
+  const latest = points.filter(p => p.calibrationDate === newest);
+  const lv = numOrNull(level);
+  if (lv == null) return latest.slice().sort((a, b) => derivedUOf(b) - derivedUOf(a))[0];
+  return latest.slice().sort((a, b) => Math.abs((numOrNull(a.calibrationPoint) ?? numOrNull(a.referenceValue) ?? 0) - lv) - Math.abs((numOrNull(b.calibrationPoint) ?? numOrNull(b.referenceValue) ?? 0) - lv))[0];
+}
+// WI step 4: is this budget due for review?
+function wiReviewNotes(rows, certificates) {
+  const notes = [];
+  rows.filter(r => r.wiSource === "B" && r.refInstrumentId).forEach(r => {
+    const newest = latestCertDate(certificates.filter(c => c.instrumentId === r.refInstrumentId));
+    if (newest && newest > (r.certDate || "")) notes.push(`มีใบรับรองใหม่ของ ${r.refInstrumentCode || "เครื่องมือ"} (สอบเทียบ ${fmtDate(newest)})`);
+  });
+  const rd = rows[0]?.reviewDate;
+  if (rd && daysUntil(addDaysISO(rd, 365)) < 0) notes.push(`ทบทวนครั้งล่าสุด ${fmtDate(rd)} เกิน 1 ปีแล้ว`);
+  return notes;
+}
+function WiBudgetWizard({ instrument, allEquipment, allCertificates, existing = null, currentDisplayName = "", onCancel, onSave }) {
+  const init = (() => {
+    if (existing) {
+      const a = existing.find(r => r.wiSource === "A");
+      const first = existing[0] || {};
+      const pk = WI08_PARAMS.find(p => p.key === first.parameter)?.key || (first.parameter ? "other" : "Brix");
+      return {
+        paramKey: pk, parameter: first.parameter || "", unit: first.unit || "", testMethod: first.testMethod || "",
+        readingsText: (a?.readings || []).join("\n"), nDiv: a?.nDiv ?? "",
+        // A newer certificate is the usual reason to re-evaluate (WI step 4):
+        // drop the old point so the newest certificate is preselected.
+        typeB: existing.filter(r => r.wiSource === "B").map(r => {
+          const newest = latestCertDate(allCertificates.filter(c => c.instrumentId === r.refInstrumentId));
+          return { instrumentId: r.refInstrumentId, certPointId: newest && newest > (r.certDate || "") ? "" : r.certPointId, c: r.sensitivityCoefficient ?? 1 };
+        }),
+        preparedBy: first.preparedBy || currentDisplayName, reviewDate: todayISO(), approvedBy: first.approvedBy || "",
+      };
+    }
+    const guess = WI08_PARAMS.find(p => unitKey(p.unit) === unitKey(instrument?.calUnit)) || WI08_PARAMS[0];
+    return {
+      paramKey: guess.key, parameter: guess.key, unit: guess.unit, testMethod: guess.method, readingsText: "", nDiv: "",
+      typeB: instrument ? [{ instrumentId: instrument.id, certPointId: "", c: 1 }] : [],
+      preparedBy: currentDisplayName, reviewDate: todayISO(), approvedBy: "",
+    };
+  })();
+  const [f, setF] = useState(init);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const mono = { fontFamily: "var(--font-mono)" };
+  const readings = parseReadings(f.readingsText);
+  const A = typeAStats(readings, f.nDiv);
+  const byId = Object.fromEntries(allEquipment.map(e => [e.id, e]));
+  const resolvedB = f.typeB.map(t => {
+    const pts = typeBPointsOf(allCertificates, t.instrumentId);
+    const p = pts.find(x => x.id === t.certPointId) || defaultTypeBPoint(pts, A.mean);
+    const U = p ? derivedUOf(p) : null, k = p ? (Number(p.coverageFactor) || 2) : null;
+    const c = numOrNull(t.c) ?? 1;
+    return { ...t, inst: byId[t.instrumentId], pts, p, U, k, uB: U != null ? U / k : null, cNum: c,
+      unitMismatch: p && f.unit && p.unit && unitKey(p.unit) !== unitKey(f.unit) };
+  });
+  const comps = [
+    ...(A.uA != null ? [A.uA] : []),
+    ...resolvedB.filter(b => b.uB != null).map(b => Math.abs(b.cNum) * b.uB),
+  ];
+  const uc = comps.length ? Math.sqrt(comps.reduce((a, x) => a + x * x, 0)) : null;
+  const U = uc != null ? uc * WI08.k : null;
+  const updB = (i, patch) => setF({ ...f, typeB: f.typeB.map((t, j) => j === i ? { ...t, ...patch } : t) });
+  const usedIds = new Set(f.typeB.map(t => t.instrumentId));
+  const instOptions = allEquipment.filter(e => typeBPointsOf(allCertificates, e.id).length > 0).sort((a, b) => alphaCompare(a.code, b.code));
+  const pickParam = (key) => {
+    const p = WI08_PARAMS.find(x => x.key === key);
+    setF(p ? { ...f, paramKey: key, parameter: p.key, unit: p.unit, testMethod: p.method } : { ...f, paramKey: "other", parameter: "", testMethod: "" });
+  };
+  const box = { gridColumn: "1 / -1", background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, lineHeight: 1.7 };
+  const fx = (x, d = 5) => (x == null ? "-" : x.toFixed(d));
+
+  function build() {
+    const budgetId = existing?.[0]?.budgetId || `UB-${(f.parameter || "X").replace(/\s+/g, "").toUpperCase()}-${Number(todayISO().slice(0, 4)) + 543}-${uid().slice(0, 3).toUpperCase()}`;
+    const shared = {
+      budgetId, instrumentId: instrument?.id || existing?.[0]?.instrumentId || "", testMethod: f.testMethod, parameter: f.parameter,
+      combinedK: WI08.k, measuredValue: A.mean != null ? round4(A.mean) : "", reviewDate: f.reviewDate, approvedBy: f.approvedBy,
+      preparedBy: f.preparedBy, wiProcedure: WI08.code,
+    };
+    const rows = [];
+    if (A.s != null) rows.push({
+      ...blankUncertaintyRow(shared.instrumentId, budgetId), ...shared, wiSource: "A",
+      componentName: "Type A — ความซ้ำของการวัด (Repeatability)", symbol: "uA", value: round4(A.s), unit: f.unit,
+      distribution: "Normal (k=1)", divisor: round4(Math.sqrt(A.nDiv)), sensitivityCoefficient: 1, degreesOfFreedom: A.n - 1,
+      readings, nDiv: f.nDiv === "" ? "" : A.nDiv,
+      dataSource: `วัดซ้ำ ${A.n} ครั้ง ค่าเฉลี่ย ${round4(A.mean)} SD ${round4(A.s)} (หารด้วย √${A.nDiv})`,
+    });
+    resolvedB.filter(b => b.p).forEach((b, i) => rows.push({
+      ...blankUncertaintyRow(shared.instrumentId, budgetId), ...shared, wiSource: "B",
+      componentName: `Type B — ใบรับรองสอบเทียบ ${b.inst?.code || ""}`.trim(), symbol: `uB${i + 1}`,
+      value: round4(b.U), unit: b.p.unit || f.unit, distribution: b.k === 1 ? "Normal (k=1)" : b.k === 3 ? "Normal (k=3)" : "Normal (k=2)",
+      divisor: b.k, sensitivityCoefficient: b.cNum,
+      refInstrumentId: b.instrumentId, refInstrumentCode: b.inst?.code || "", certPointId: b.p.id, certDate: b.p.calibrationDate || "",
+      dataSource: `ใบรับรอง ${b.p.certificateNo || "-"} (${calPointLabel(b.p)}) U = ${round4(b.U)}, k = ${b.k}`,
+    }));
+    return rows;
+  }
+
+  const steps = [
+    {
+      title: "งานทดสอบ",
+      hint: `ประเมินตาม ${WI08.code} — เลือกพารามิเตอร์ที่รายงานผล`,
+      blocked: !f.parameter ? "เลือกหรือกรอกพารามิเตอร์" : null,
+      content: (<>
+        <Field label="พารามิเตอร์" full>
+          <select style={S.input} value={f.paramKey} onChange={e => pickParam(e.target.value)}>
+            {WI08_PARAMS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+            <option value="other">อื่น ๆ (กรอกเอง)</option>
+          </select>
+        </Field>
+        {f.paramKey === "other" && <Field label="ชื่อพารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} placeholder="เช่น Moisture" /></Field>}
+        <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} placeholder="เช่น %Brix" /></Field>
+        <Field label="วิธีทดสอบ"><input style={S.input} value={f.testMethod} onChange={set("testMethod")} placeholder="เช่น RDI-WI-02" /></Field>
+      </>),
+    },
+    {
+      title: "Type A — วัดซ้ำ",
+      hint: "วัดตัวอย่างเดิมซ้ำตามวิธีทดสอบ แล้ววางค่าทั้งหมด (ขึ้นบรรทัดใหม่ เว้นวรรค หรือคั่นด้วยจุลภาคก็ได้)",
+      blocked: readings.length < 2 ? "ใส่ค่าวัดซ้ำอย่างน้อย 2 ค่า (แนะนำ 10 ค่า)" : null,
+      content: (<>
+        <Field label="ค่าที่วัดได้แต่ละครั้ง" full>
+          <textarea style={{ ...S.input, minHeight: 110, ...mono }} value={f.readingsText} onChange={set("readingsText")} placeholder={"เช่น\n20.01\n20.03\n19.99\n20.02"} />
+        </Field>
+        <Field label="n ที่ใช้หาร (√n)">
+          <input type="number" step="1" style={S.input} value={f.nDiv} onChange={set("nDiv")} placeholder={readings.length ? `เว้นว่าง = ${readings.length} (จำนวนค่าที่ใส่)` : "เว้นว่าง = จำนวนค่าที่ใส่"} />
+          <span style={WIZ_HINT}>ตาม WI ข้อ 2.1 n คือจำนวนซ้ำในการทดสอบ</span>
+        </Field>
+        <div style={box}>
+          {A.s != null ? (<>
+            <div>n = <b style={mono}>{A.n}</b> · ค่าเฉลี่ย = <b style={mono}>{fx(A.mean, 4)}</b> · s = <b style={mono}>{fx(A.s)}</b></div>
+            <div>u<sub>A</sub> = s / √{A.nDiv} = <b style={mono}>{fx(A.uA)}</b> {f.unit}</div>
+          </>) : <span style={{ color: "var(--muted)" }}>ใส่ค่าอย่างน้อย 2 ค่าเพื่อคำนวณ</span>}
+        </div>
+      </>),
+    },
+    {
+      title: "Type B — ใบรับรองสอบเทียบ",
+      hint: "เครื่องมือทุกเครื่องที่ใช้ในวิธีทดสอบนี้ ระบบเลือกจุดสอบเทียบที่ใกล้ค่าที่วัดที่สุดจากใบรับรองล่าสุดให้ เปลี่ยนได้",
+      blocked: !resolvedB.some(b => b.p) ? "เลือกเครื่องมืออย่างน้อย 1 เครื่องที่มีใบรับรอง" : null,
+      content: (<>
+        {resolvedB.map((b, i) => (
+          <div key={i} style={{ ...box, display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <select style={{ ...S.input, flex: 1 }} value={b.instrumentId} onChange={e => updB(i, { instrumentId: e.target.value, certPointId: "" })}>
+                {instOptions.filter(e => e.id === b.instrumentId || !usedIds.has(e.id)).map(e => <option key={e.id} value={e.id}>{e.code} — {e.name}</option>)}
+              </select>
+              <button type="button" style={S.iconBtnSm} title="เอาเครื่องมือนี้ออก" onClick={() => setF({ ...f, typeB: f.typeB.filter((_, j) => j !== i) })}><Trash2 size={13} /></button>
+            </div>
+            {b.pts.length > 0 ? (
+              <select style={S.input} value={b.p?.id || ""} onChange={e => updB(i, { certPointId: e.target.value })}>
+                {b.pts.map(p => <option key={p.id} value={p.id}>{p.certificateNo || "-"} · {fmtDate(p.calibrationDate)} · {calPointLabel(p)} · U = {round4(derivedUOf(p))} (k={p.coverageFactor || 2})</option>)}
+              </select>
+            ) : <span style={{ color: "var(--amber)" }}>เครื่องนี้ยังไม่มีใบรับรองที่มีค่า U</span>}
+            {b.p && <div>u<sub>B</sub> = U / k = {round4(b.U)} / {b.k} = <b style={mono}>{fx(b.uB)}</b> {b.p.unit || ""}</div>}
+            {b.unitMismatch && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", color: "#A86A00" }}>
+                <span>หน่วยต่างจากผลทดสอบ ({b.p.unit} กับ {f.unit}) — ใส่ค่าแปลงหน่วย c:</span>
+                <input type="number" step="any" style={{ ...S.input, width: 110 }} value={f.typeB[i].c} onChange={e => updB(i, { c: e.target.value })} placeholder="เช่น 0.12" />
+                <span style={{ ...WIZ_HINT, flexBasis: "100%" }}>ผลที่เป็น % ของน้ำหนัก: c = ผลทดสอบ ÷ น้ำหนักที่ชั่ง เช่น ผล Fiber 12% จากตัวอย่าง 100 g → c = 12 ÷ 100 = 0.12</span>
+              </div>
+            )}
+          </div>
+        ))}
+        {instOptions.some(e => !usedIds.has(e.id)) && (
+          <button type="button" style={{ ...S.smallBtn, gridColumn: "1 / -1", justifySelf: "start" }}
+            onClick={() => setF({ ...f, typeB: [...f.typeB, { instrumentId: instOptions.find(e => !usedIds.has(e.id)).id, certPointId: "", c: 1 }] })}>
+            <Plus size={12} /> เพิ่มเครื่องมือที่ใช้ในวิธีนี้
+          </button>
+        )}
+      </>),
+    },
+    {
+      title: "สรุปผล",
+      hint: `uc = √Σu², U = ${WI08.k} × uc ที่ระดับความเชื่อมั่น 95% (WI ข้อ 2.3–2.4)`,
+      blocked: !f.preparedBy.trim() ? "ระบุชื่อผู้จัดทำ" : null,
+      content: (<>
+        <div style={box}>
+          {A.uA != null && <div>u<sub>A</sub> ความซ้ำ = <b style={mono}>{fx(A.uA)}</b></div>}
+          {resolvedB.filter(b => b.uB != null).map((b, i) => <div key={i}>u<sub>B</sub> {b.inst?.code} = <b style={mono}>{fx(Math.abs(b.cNum) * b.uB)}</b>{b.cNum !== 1 ? ` (c = ${b.cNum})` : ""}</div>)}
+          <div style={{ borderTop: "1px solid #EEF2F6", marginTop: 6, paddingTop: 6 }}>
+            u<sub>c</sub> = <b style={mono}>{fx(uc)}</b> · U (k={WI08.k}) = <b style={{ ...mono, fontSize: 14 }}>{fx(U, 4)}</b> {f.unit}
+            {U != null && A.mean ? <span style={{ color: "var(--muted)" }}> · {((U / Math.abs(A.mean)) * 100).toFixed(2)}% ของค่าที่วัด</span> : null}
+          </div>
+          {U != null && A.mean != null && <div style={{ color: "var(--muted)" }}>รายงานผลเป็น {fx(A.mean, 2)} ± {fx(U, 2)} {f.unit}</div>}
+        </div>
+        <Field label="ผู้จัดทำ (TM/QM)"><input style={S.input} value={f.preparedBy} onChange={set("preparedBy")} placeholder="ชื่อ-นามสกุล" /></Field>
+        <Field label="วันที่ประเมิน"><input type="date" style={S.input} value={f.reviewDate} onChange={set("reviewDate")} /></Field>
+        <Field label="ผู้อนุมัติ (Lab Manager)">
+          <input style={S.input} value={f.approvedBy} onChange={set("approvedBy")} placeholder="เว้นว่างได้ ถ้ายังไม่อนุมัติ" />
+          <span style={WIZ_HINT}>ผลอนุมัติบันทึกในแบบฟอร์ม RDI-LF-069</span>
+        </Field>
+      </>),
+    },
+  ];
+  const saveDisabled = A.s == null || !resolvedB.some(b => b.p) || !f.preparedBy.trim();
+  return <WizardModal title={`ประเมินความไม่แน่นอนตาม ${WI08.code}`} steps={steps} onCancel={onCancel} onSave={() => onSave(build())} saveDisabled={saveDisabled} />;
+}
+
+function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [], allEquipment = null, allCertificates = null, currentDisplayName = "", notify }) {
   const [editing, setEditing] = useState(null);
+  const [wiDlg, setWiDlg] = useState(null); // { existing: rows | null }
+  const allEq = allEquipment || equipment, allCerts = allCertificates || certificates;
+  function saveWi(rows) {
+    const id = rows[0]?.budgetId;
+    setBudgets([...budgets.filter(b => b.budgetId !== id), ...rows]);
+    notify(`บันทึก Uncertainty Budget ${id} แล้ว`);
+    setWiDlg(null);
+  }
+  function removeBudget(id) {
+    if (!window.confirm(`ลบ Budget ${id} ทั้งชุดหรือไม่?`)) return;
+    setBudgets(budgets.filter(b => b.budgetId !== id)); notify("ลบ Budget แล้ว");
+  }
   const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
   const groups = useMemo(() => {
     const g = {};
@@ -5238,45 +5482,67 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>Uncertainty Budget</h2><p style={S.h2sub}>แต่ละกลุ่ม (Budget ID) รวม uc และ U ให้อัตโนมัติ</p></div>
-        <button style={S.primaryBtn} onClick={() => setEditing(newBudget())}><Plus size={15} /> สร้าง Budget ใหม่</button>
+        <div><h2 style={S.h2}>Uncertainty Budget</h2><p style={S.h2sub}>ประเมินตาม {WI08.code}: Type A จากการวัดซ้ำ + Type B จากใบรับรองสอบเทียบ, U = 2 × uc</p></div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={S.primaryBtn} onClick={() => setWiDlg({ existing: null })}><Plus size={15} /> ประเมินความไม่แน่นอน</button>
+          <button style={S.ghostBtn} onClick={() => setEditing(newBudget())} title="สร้าง Budget แบบกรอกองค์ประกอบเองทีละแถว">กรอกเองทีละองค์ประกอบ</button>
+        </div>
       </div>
-      {Object.keys(groups).length === 0 && <div style={S.tableWrap}><div style={{ ...S.emptyState, padding: 24 }}>ยังไม่มี Uncertainty Budget</div></div>}
+      {wiDlg && <WiBudgetWizard instrument={equipment[0]} allEquipment={allEq} allCertificates={allCerts} existing={wiDlg.existing}
+        currentDisplayName={currentDisplayName} onCancel={() => setWiDlg(null)} onSave={saveWi} />}
+      {Object.keys(groups).length === 0 && <div style={S.tableWrap}><div style={{ ...S.emptyState, padding: 24 }}>ยังไม่มี Uncertainty Budget — กด "ประเมินความไม่แน่นอน" เพื่อเริ่ม</div></div>}
       {Object.entries(groups).map(([budgetId, rows]) => {
         const instrument = byId[rows[0]?.instrumentId];
         const { rows: calcRows, uc, k, U } = combineUncertaintyBudget(rows);
         const relPct = rows[0]?.measuredValue ? (U / Math.abs(Number(rows[0].measuredValue))) * 100 : null;
+        const isWi = rows.some(r => r.wiSource);
+        const reviewNotes = isWi ? wiReviewNotes(rows, allCerts) : [];
+        const sub = [rows[0]?.parameter, rows[0]?.testMethod].filter(Boolean).join(" · ");
+        const who = [rows[0]?.preparedBy && `จัดทำโดย ${rows[0].preparedBy}`, rows[0]?.reviewDate && fmtDate(rows[0].reviewDate), rows[0]?.approvedBy && `อนุมัติโดย ${rows[0].approvedBy}`].filter(Boolean).join(" · ");
         return (
           <div key={budgetId} style={{ ...S.tableWrap, marginBottom: 16 }}>
             <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-              <div><b style={{ fontFamily: "var(--font-mono)" }}>{budgetId}</b> — {instrument ? `${instrument.code} — ${instrument.name}` : "-"} <span style={{ color: "var(--muted)", fontSize: 12 }}>({rows[0]?.parameter}, {rows[0]?.testMethod})</span></div>
+              <div style={{ minWidth: 0 }}>
+                <div><b>{rows[0]?.parameter || budgetId}</b>{sub && rows[0]?.testMethod ? <span style={{ color: "var(--muted)", fontSize: 12 }}> · {rows[0].testMethod}</span> : null} <span style={{ color: "var(--muted)", fontSize: 11.5, fontFamily: "var(--font-mono)" }}>{budgetId}</span></div>
+                {who && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{who}</div>}
+              </div>
               <div style={{ fontSize: 12.5, display: "flex", gap: 14 }}>
                 <span>u<sub>c</sub>: <b style={{ fontFamily: "var(--font-mono)" }}>{uc.toFixed(5)}</b></span>
                 <span>k: <b style={{ fontFamily: "var(--font-mono)" }}>{k}</b></span>
                 <span>U: <b style={{ fontFamily: "var(--font-mono)" }}>{U.toFixed(5)}</b></span>
                 {relPct != null && <span>U สัมพัทธ์: <b style={{ fontFamily: "var(--font-mono)" }}>{relPct.toFixed(2)}%</b></span>}
-                <button style={S.smallBtn} onClick={() => setEditing(addToBudget(rows))}><Plus size={12} /> เพิ่มองค์ประกอบ</button>
+                {isWi
+                  ? <button style={S.smallBtn} onClick={() => setWiDlg({ existing: rows })}><Pencil size={12} /> ประเมินใหม่ / แก้ไข</button>
+                  : <button style={S.smallBtn} onClick={() => setEditing(addToBudget(rows))}><Plus size={12} /> เพิ่มองค์ประกอบ</button>}
+                <button style={S.iconBtnSm} title="ลบ Budget ทั้งชุด" onClick={() => removeBudget(budgetId)}><Trash2 size={13} /></button>
               </div>
             </div>
-            <table style={S.table}>
-              <thead><tr>{["องค์ประกอบ", "สัญลักษณ์", "ค่า", "การแจกแจง", "Divisor", "u(xi)", "c", "Contribution", "% Contribution", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            {reviewNotes.length > 0 && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: "#FFF6E0", borderBottom: "1px solid #F3DDA5", padding: "8px 14px", fontSize: 12.5 }}>
+                <AlertTriangle size={14} color="#A86A00" />
+                <span style={{ flex: 1, minWidth: 200 }}><b>ถึงรอบทบทวน ({WI08.code} ข้อ 4):</b> {reviewNotes.join(" · ")}</span>
+                <button style={S.smallBtn} onClick={() => setWiDlg({ existing: rows })}>ประเมินใหม่</button>
+              </div>
+            )}
+            <div style={{ overflowX: "auto" }}>
+            <table style={{ ...S.table, minWidth: 760 }}>
+              <thead><tr>{["องค์ประกอบ", "ที่มา", "ค่า", "Divisor", "u(xi)", "c", "% Contribution", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
               <tbody>
                 {calcRows.map(r => (
                   <tr key={r.id} style={S.tr}>
-                    <td style={S.td}>{r.componentName}</td>
-                    <td style={S.td}>{r.symbol}</td>
-                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.value} {r.unit}</td>
-                    <td style={S.td}>{r.distribution}</td>
+                    <td style={S.td}>{r.componentName}<div style={{ fontSize: 11, color: "var(--muted)" }}>{r.distribution}</div></td>
+                    <td style={{ ...S.td, fontSize: 12, color: "#4B5C72", maxWidth: 280 }}>{r.dataSource || "-"}</td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{r.value} {r.unit}</td>
                     <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.divisor}</td>
                     <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.u != null ? r.u.toFixed(5) : "-"}</td>
                     <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.sensitivityCoefficient}</td>
-                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.contribution != null ? r.contribution.toFixed(5) : "-"}</td>
                     <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{r.pctContribution != null ? `${r.pctContribution}%` : "-"}</td>
-                    <td style={S.td}><div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(r)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(r.id)}><Trash2 size={13} /></button></div></td>
+                    <td style={S.td}>{!r.wiSource && <div style={{ display: "flex", gap: 4 }}><button style={S.iconBtnSm} onClick={() => setEditing(r)}><Pencil size={13} /></button><button style={S.iconBtnSm} onClick={() => remove(r.id)}><Trash2 size={13} /></button></div>}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         );
       })}
@@ -7009,6 +7275,7 @@ function CalibrationRecordsHub({
       {current === "uncertainty" && (
         <UncertaintyBudgetTab
           equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
+          allEquipment={equipment} allCertificates={certificates} currentDisplayName={currentDisplayName}
           setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
           notify={notify}
         />
