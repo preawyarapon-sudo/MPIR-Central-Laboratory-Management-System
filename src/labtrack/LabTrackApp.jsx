@@ -1930,6 +1930,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
           )}
           {!restrictToBooking && tab === "equipment" && (
             <EquipmentTab equipment={equipment} setEquipment={persist.equipment} certificates={certificates}
+              onOpenCalibration={(id, view = "certificates") => { Object.assign(calibHubMemory, { instrumentId: id, view }); setTab("calibrationRecords"); }}
               activities={activities} setActivities={persist.activities}
               bookings={bookings} setBookings={persist.bookings} items={items} notify={notify}
               dailyChecks={dailyChecks} setDailyChecks={persist.dailyChecks}
@@ -2252,7 +2253,7 @@ function AlertPanel({ title, icon: Icon, items, empty, onSeeAll }) {
 }
 
 /* ================= EQUIPMENT ================= */
-function EquipmentTab({ equipment, setEquipment, certificates = [], activities, setActivities, bookings, setBookings, items = [], notify, dailyChecks = [], setDailyChecks, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+function EquipmentTab({ equipment, setEquipment, certificates = [], onOpenCalibration = null, activities, setActivities, bookings, setBookings, items = [], notify, dailyChecks = [], setDailyChecks, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -2510,6 +2511,7 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], activities, 
           onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
           onSetAvailability={(disabled, reason) => setAvailability(selectedItem.id, disabled, reason)}
           onSetLabOnly={(on) => setLabOnly(selectedItem.id, on)}
+          onOpenCalibration={onOpenCalibration ? (view) => { setSelected(null); onOpenCalibration(selectedItem.id, view); } : null}
           onAddActivity={(act) => {
             setActivities([{ ...act, id: uid(), equipmentId: selectedItem.id }, ...activities]);
             applyCalibrationDates(selectedItem.id, act);
@@ -2984,7 +2986,7 @@ function BookingHistoryList({ bookings = [] }) {
     </div>
   );
 }
-function EquipmentDetail({ item, certificates = [], activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onSetLabOnly = null, onAddActivity, onEditActivity, onDeleteActivity, onSaveDailyCheck, onApproveDailyCheck, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+function EquipmentDetail({ item, certificates = [], activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onSetLabOnly = null, onOpenCalibration = null, onAddActivity, onEditActivity, onDeleteActivity, onSaveDailyCheck, onApproveDailyCheck, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
@@ -3040,7 +3042,40 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
   });
   const openDaily = (entry, existing) => { setDailyCheckExisting(existing); setDailyCheckEntry(entry); };
   const DONE = { fg: "#1E8A57", bg: "#EAF7F0", line: "#BFE6D0" };
+  // Calibration history comes from the certificates entered in
+  // "บันทึกการสอบเทียบ" — a certificate added there shows up here at once.
+  // Old manual "สอบเทียบ" activities stay visible unless a certificate with
+  // the same calibration date already covers them.
+  const certGroups = (() => {
+    const g = {};
+    certificates.filter(c => c.instrumentId === item.id).forEach(c => {
+      const k = `${c.certificateNo || ""}|${c.calibrationDate || ""}`;
+      (g[k] = g[k] || []).push(c);
+    });
+    return Object.values(g);
+  })();
+  const certDates = new Set(certGroups.map(pts => pts[0].calibrationDate || ""));
+  const DECISION_PILL = {
+    PASS: { text: "ผ่าน", ...DONE },
+    FAIL: { text: "ไม่ผ่าน", fg: "#C6493B", bg: "#FDF1F1", line: "#F2C4C4" },
+    WARNING: { text: "เฝ้าระวัง", fg: "#A86A00", bg: "#FFF6E0", line: "#F3DDA5" },
+  };
   const timeline = [
+    ...certGroups.map(pts => {
+      const p0 = pts[0];
+      const rs = roundSummary(pts, item);
+      const signed = pts.every(c => c.approvedBy) ? "อนุมัติผลแล้ว" : pts.every(c => c.evaluatedBy) ? "ประเมินผลแล้ว · รออนุมัติ" : "รอลงชื่อประเมินผล";
+      const asFoundBad = rs.adjusted && isBadDecision(rs.asFoundDecision);
+      return {
+        key: "c" + (p0.certificateNo || p0.id) + p0.calibrationDate, cat: "calibration", icon: FlaskConical, title: "สอบเทียบ",
+        when: fmtDate(p0.calibrationDate), sortKey: p0.calibrationDate || "",
+        who: `ใบรับรอง ${p0.certificateNo || "-"} · ${pts.length} จุด`, whoSub: [p0.provider, signed].filter(Boolean).join(" · "),
+        status: DECISION_PILL[rs.decision] ? { ...DECISION_PILL[rs.decision], text: `${rs.adjusted ? "หลังปรับ " : ""}${DECISION_PILL[rs.decision].text}` } : (rs.decision && rs.decision !== "-" ? { text: rs.decision, fg: "#6B7A8C", bg: "#fff", line: "var(--line)" } : null),
+        note: asFoundBad ? { tone: "bad", icon: AlertTriangle, text: `ค่าก่อนปรับ ${rs.asFoundDecision} — ควรประเมินผลกระทบย้อนหลัง` }
+          : p0.pdfLink ? { tone: "info", icon: FileDown, text: <a href={p0.pdfLink} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ color: "var(--teal-dark)" }}>ดูไฟล์ใบรับรอง</a> } : null,
+        onOpen: onOpenCalibration ? () => onOpenCalibration("certificates") : null,
+      };
+    }),
     ...sortedDailyChecks.map(c => {
       const h = checkHeadline(c);
       return {
@@ -3071,7 +3106,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
         onOpen: null,
       };
     }),
-    ...activities.map(act => ({
+    ...activities.filter(act => !(act.type === "calibration" && certDates.has(act.date))).map(act => ({
       key: "a" + act.id, cat: act.type === "request" ? "repair" : (act.type in typeCounts ? act.type : "other"),
       icon: act.type === "calibration" ? FlaskConical : act.type === "repair" || act.type === "request" ? Wrench : ClipboardList,
       title: act.type === "repair" ? "ซ่อมบำรุง" : (typeLabel[act.type] || act.type), when: fmtDate(act.date), sortKey: act.date || "",
@@ -3243,6 +3278,12 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
             </div>
           )}
           <div style={{ display: "flex", gap: isMobile ? 6 : 8, flexWrap: "wrap", marginBottom: isMobile ? 10 : 14 }}>{CHIPS.map(chip)}</div>
+          {activityFilter === "calibration" && onOpenCalibration && (
+            <button type="button" onClick={() => onOpenCalibration("certificates")}
+              style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", marginBottom: 10, background: "#F5F9FE", border: "1px dashed #9CC0EA", borderRadius: 12, padding: "10px 14px", fontSize: 13, color: "var(--teal-dark)", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+              <Plus size={16} /> เพิ่มใบรับรองสอบเทียบ — บันทึกที่ "บันทึกการสอบเทียบ" แล้วจะแสดงในประวัตินี้ทันที
+            </button>
+          )}
           <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 8 : 10, ...(isMobile ? {} : { maxHeight: 560, overflowY: "auto", paddingRight: 4 }) }}>
             {shown.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
             {shown.map(t => {
@@ -3350,7 +3391,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
 }
 
 function ActivityForm({ initial, onCancel, onSave, onDelete = null }) {
-  const defaults = { date: todayISO(), type: "calibration", detail: "", by: "", poNo: "", poUrl: "", certUrl: "", external: false, externalLocation: "" };
+  const defaults = { date: todayISO(), type: "repair", detail: "", by: "", poNo: "", poUrl: "", certUrl: "", external: false, externalLocation: "" };
   const [f, setF] = useState({ ...defaults, ...initial });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
@@ -3359,7 +3400,9 @@ function ActivityForm({ initial, onCancel, onSave, onDelete = null }) {
         <Field label="วันที่"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="ประเภทกิจกรรม">
           <select style={S.input} value={f.type} onChange={set("type")}>
-            <option value="calibration">สอบเทียบ</option>
+            {/* Calibrations are recorded as certificates in "บันทึกการสอบเทียบ";
+                the option only remains for editing an old activity. */}
+            {initial?.type === "calibration" && <option value="calibration">สอบเทียบ (บันทึกเดิม)</option>}
             <option value="repair">ซ่อม</option>
             <option value="request">แจ้งซ่อม</option>
             <option value="other">อื่นๆ</option>
