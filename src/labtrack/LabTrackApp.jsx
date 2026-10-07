@@ -7244,11 +7244,10 @@ function CertificateApprovalCard({ instrument, points, isLatest, canApprove = tr
 function CertificateRoundPanel({ instrument, range, certificates, dailyChecks, intermediateChecks, setIntermediateChecks, budgets, setBudgets, allEquipment, allCertificates, currentDisplayName, notify, onOpenChecks }) {
   const [tab, setTab] = useState("checks");
   const [editingIc, setEditingIc] = useState(null);
-  const daily = dailyChecks.filter(c => inRoundRange(c.date, range));
   const ics = intermediateChecks.filter(c => inRoundRange(c.checkDate, range));
   const roundBudgets = budgets.filter(b => inRoundRange(budgetDateOf(budgets.filter(x => x.budgetId === b.budgetId)), range));
   const nBudgets = new Set(roundBudgets.map(b => b.budgetId)).size;
-  const fails = daily.filter(c => c.result === false).length + ics.filter(c => calcIntermediateCheck(c, instrument).result === "FAIL").length;
+  const fails = ics.filter(c => calcIntermediateCheck(c, instrument).result === "FAIL").length;
   const period = `${range.from ? fmtDate(range.from) : "ก่อนหน้า"} – ${range.to ? fmtDate(addDaysISO(range.to, -1)) : "ปัจจุบัน"}`;
   return (
     <div style={{ marginTop: 20, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
@@ -7257,17 +7256,16 @@ function CertificateRoundPanel({ instrument, range, certificates, dailyChecks, i
         <span style={{ fontSize: 12, color: "var(--muted)" }}>{period}{range.isLatest ? " · รายการใหม่จะอยู่ใต้ใบนี้จนกว่าจะมีใบสอบเทียบใหม่" : ""}</span>
       </div>
       <SubSwitch value={tab} onChange={setTab} options={[
-        { key: "checks", label: "ตรวจสอบระหว่างรอบ", badge: fails ? `ไม่ผ่าน ${fails}` : String(daily.length + ics.length), tone: fails ? "var(--red)" : undefined },
+        { key: "checks", label: "Intermediate check", badge: fails ? `ไม่ผ่าน ${fails}` : String(ics.length), tone: fails ? "var(--red)" : undefined },
         { key: "uncertainty", label: "Uncertainty Budget", badge: String(nBudgets) },
       ]} />
       {tab === "checks" && (<>
         {range.isLatest && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             <button style={S.primaryBtn} onClick={() => setEditingIc(newIntermediateCheckFor(instrument, intermediateChecks, certificates, currentDisplayName))}><Plus size={14} /> Intermediate check</button>
-            {onOpenChecks && <button style={S.ghostBtn} onClick={onOpenChecks}><ClipboardCheck size={14} /> บันทึก Daily check</button>}
           </div>
         )}
-        <CheckHistoryTable instrument={instrument} dailyChecks={daily} checks={ics} certificates={certificates} readOnly />
+        <CheckHistoryTable instrument={instrument} checks={ics} certificates={certificates} readOnly hideKindSwitch />
       </>)}
       {tab === "uncertainty" && (<>
         {!range.isLatest && <div style={{ ...S.notesBox, fontSize: 12.5, marginBottom: 10 }}>Budget ที่ประเมินในช่วงของใบนี้ — การประเมินใหม่ให้ทำที่ใบสอบเทียบล่าสุด</div>}
@@ -7611,6 +7609,9 @@ function CalibrationRecordsHub({
     { key: "checks", sheets: "SHEET 04", title: "ตรวจสอบระหว่างรอบ",
       sub: `Daily ${scopedDailyChecks.length} · Intermediate ${icSorted.length}`,
       flag: (icFail90 + dcFail90) ? { text: `ไม่ผ่าน ${icFail90 + dcFail90} ครั้ง (90 วัน)`, tone: "var(--red)" } : null },
+    { key: "daily", sheets: "", title: "Daily check",
+      sub: `${scopedDailyChecks.length} ครั้ง`,
+      flag: dcFail90 ? { text: `ไม่ผ่าน ${dcFail90} ครั้ง (90 วัน)`, tone: "var(--red)" } : null },
     { key: "uncertainty", sheets: "SHEET 05", title: "Uncertainty Budget",
       sub: budgetsN ? `${budgetsN} Budget · ${scopedBudgets.length} องค์ประกอบ` : "ยังไม่มี Budget" },
   ];
@@ -7620,6 +7621,7 @@ function CalibrationRecordsHub({
   const TAB_GROUPS = [
     { key: "instrument", label: "ข้อมูลเครื่อง", icon: Wrench, leaves: ["instrument"] },
     { key: "certificates", label: "บันทึกใบสอบเทียบ", icon: FileCheck2, leaves: ["certificates"] },
+    { key: "daily", label: "Daily check", icon: ClipboardCheck, leaves: ["daily"] },
     { key: "trend", label: "แนวโน้มเครื่อง", icon: TrendingUp, leaves: ["trend"] },
   ];
   const featureOf = (k) => (k === "trend" ? FEATURES.find(f => f.key === "results") : FEATURES.find(f => f.key === k));
@@ -7730,6 +7732,17 @@ function CalibrationRecordsHub({
           currentDisplayName={currentDisplayName} notify={notify}
         />
       </>)}
+      {current === "daily" && instrument && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontSize: 12.5, color: "var(--muted)", flex: 1 }}>Daily check ทั้งหมดของเครื่องนี้ แบ่งตามรอบใบรับรอง{dcFail90 ? ` · ไม่ผ่าน ${dcFail90} ครั้งใน 90 วัน` : ""}</span>
+            {onOpenChecks && <button style={S.primaryBtn} onClick={() => onOpenChecks(selectedInstrumentId)}><ClipboardCheck size={14} /> บันทึก Daily check</button>}
+          </div>
+          {scopedDailyChecks.length
+            ? <CheckHistoryTable instrument={instrument} dailyChecks={scopedDailyChecks} certificates={scopedCertificates} readOnly hideKindSwitch />
+            : <EmptyState text="ยังไม่มีบันทึก Daily check ของเครื่องนี้" small />}
+        </div>
+      )}
       {current === "certificates" && (
         <CertificateDataTab
           equipment={scopedEquipment} certificates={scopedCertificates} setCertificates={scopedCertSetter}
@@ -7870,7 +7883,7 @@ function saveIntermediateCheckInto(checks, row, instrument) {
 }
 // One history for both kinds of check (Sheet 04), newest first, grouped by
 // the calibration round each check fell in. readOnly hides edit/delete.
-function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certificates = [], readOnly = false, onEditDaily, onEditIc, onDeleteDaily, onDeleteIc }) {
+function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certificates = [], readOnly = false, hideKindSwitch = false, onEditDaily, onEditIc, onDeleteDaily, onDeleteIc }) {
   const [kind, setKind] = useState("all");
   const mono = { fontFamily: "var(--font-mono)" };
   const rows = [
@@ -7897,11 +7910,11 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
   const nDaily = dailyChecks.length, nIc = checks.length;
   return (
     <div>
-      <SubSwitch value={kind} onChange={setKind} options={[
+      {!hideKindSwitch && <SubSwitch value={kind} onChange={setKind} options={[
         { key: "all", label: "ทั้งหมด", badge: String(nDaily + nIc) },
         { key: "daily", label: "Daily check", badge: String(nDaily) },
         { key: "ic", label: "Intermediate check", badge: String(nIc) },
-      ]} />
+      ]} />}
       <div style={{ ...S.tableWrap, overflowX: "auto" }}>
         <table style={{ ...S.table, minWidth: 720 }}>
           <thead><tr>{COLS.map((h, i) => <th key={i} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
@@ -7918,7 +7931,7 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
                         {g.round
                           ? <span>รอบใบรับรอง <b style={mono}>{g.round.certificateNo || "-"}</b> · สอบเทียบ {fmtDate(g.round.date)} {until}</span>
                           : <b>ก่อนมีใบรับรองในระบบ</b>}
-                        <span style={{ color: "var(--muted)" }}>Daily {g.rows.filter(r => r.kind === "daily").length} · Intermediate {g.rows.filter(r => r.kind === "ic").length}</span>
+                        <span style={{ color: "var(--muted)" }}>{[["daily", "Daily"], ["ic", "Intermediate"]].map(([k, l]) => [l, g.rows.filter(r => r.kind === k).length]).filter(([, n]) => n > 0).map(([l, n]) => `${l} ${n}`).join(" · ")}</span>
                         {nWarn > 0 && <span style={{ ...S.tag, borderColor: "var(--amber)", color: "var(--amber)" }}>WARNING {nWarn}</span>}
                         {nFail > 0 && <span style={{ ...S.tag, borderColor: "var(--red)", color: "var(--red)" }}>ไม่ผ่าน {nFail}</span>}
                       </div>
