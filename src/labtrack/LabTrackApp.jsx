@@ -154,7 +154,6 @@ function AnalysisTrackView({ jobs: allJobs }) {
   const [query, setQuery] = useState(DEFAULT_JOB_PREFIX);
   const [searched, setSearched] = useState(false);
   const isMobile = useIsMobile();
-  const [showAllParams, setShowAllParams] = useState(false);
   // Year filter for the overview (Buddhist year of the date the job came in).
   // The job search below always looks across every year.
   const yearOf = (j) => (j.createdAt ? new Date(j.createdAt).getFullYear() + 543 : null);
@@ -204,9 +203,12 @@ function AnalysisTrackView({ jobs: allJobs }) {
         tally[key] = (tally[key] || 0) + 1;
       }
     }
-    return Object.entries(tally).sort((a, b) => b[1] - a[1]);
+    // Top 5 only: the tracker also logs the lab's own chores as "parameters",
+    // and those only ever have a handful of entries, so they stay out of a
+    // top-5 list on their own. Customers never see the full list.
+    return Object.entries(tally).sort((a, b) => b[1] - a[1]).slice(0, 5);
   }, [jobs]);
-  const shownParams = showAllParams ? topParams : topParams.slice(0, 5);
+  const shownParams = topParams;
   const maxParamCount = topParams.length ? topParams[0][1] : 1;
 
   return (
@@ -301,12 +303,7 @@ function AnalysisTrackView({ jobs: allJobs }) {
             <div style={{ ...S.panel, ...(isMobile ? { borderRadius: 14 } : {}) }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <div style={S.panelTitle}>พารามิเตอร์ที่มีงานมากที่สุด</div>
-                {topParams.length > 5 && (
-                  <button type="button" onClick={() => setShowAllParams(!showAllParams)}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 3, background: "#EEF4FC", color: "var(--teal-dark)", border: "none", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
-                    {showAllParams ? "แสดง 5 อันดับ" : `ดูทั้งหมด (${topParams.length})`} <ChevronRight size={13} style={{ transform: showAllParams ? "rotate(-90deg)" : "none" }} />
-                  </button>
-                )}
+
               </div>
               {!isMobile && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>นับรวมทุกงานในระบบ ไม่ระบุเลขทะเบียนรายตัว</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
@@ -1351,6 +1348,14 @@ function isBookingInUse(b) {
   if (b.type === "checkout") return true;
   return bookingStartStamp(b) <= nowStamp();
 }
+// "ใช้ในแลป": the instrument is in normal use but kept for the lab's own
+// work — not offered for booking/borrowing. Separate from "ปิดใช้งานชั่วคราว"
+// (broken / away), which also stops daily use.
+const LAB_ONLY_LABEL = "ใช้งานในแลป · ไม่เปิดให้จอง/ยืม";
+const LAB_ONLY_COLOR = "#6A43B5";
+const isBookableEquipment = (e) => e.status === "active" && !e.labOnly && e.type !== "เครื่องปรับอากาศ";
+// Old records used "ปิดใช้งานชั่วคราว" with this reason to mean the same thing.
+const isLegacyLabOnly = (e) => e.status === "maintenance" && /แลปใช้งาน|ใช้งานในแลป|ใช้ในแลป/.test(e.unavailableReason || "");
 // A more honest label than the raw status: "approved" alone doesn't say
 // whether the item has actually been returned/finished yet. Used anywhere
 // we show a live claim on equipment (conflict warnings, current-use lists).
@@ -2315,6 +2320,16 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], activities, 
     ));
     notify(disabled ? "ปิดใช้งานชั่วคราวแล้ว" : "เปิดใช้งานอีกครั้งแล้ว");
   }
+  function setLabOnly(id, on) {
+    setEquipment(equipment.map(e => e.id === id ? { ...e, labOnly: on, ...(on && isLegacyLabOnly(e) ? { status: "active", unavailableReason: "" } : {}) } : e));
+    notify(on ? "ตั้งเป็นใช้งานในแลป · ไม่เปิดให้จอง/ยืมแล้ว" : "เปิดให้จอง/ยืมแล้ว");
+  }
+  const legacyLabOnly = equipment.filter(isLegacyLabOnly);
+  function convertLegacyLabOnly() {
+    const ids = new Set(legacyLabOnly.map(e => e.id));
+    setEquipment(equipment.map(e => ids.has(e.id) ? { ...e, status: "active", unavailableReason: "", labOnly: true } : e));
+    notify(`เปลี่ยน ${ids.size} เครื่องเป็น "ใช้งานในแลป" แล้ว`);
+  }
 
   function importItems(items) {
     const newItems = items.map(it => ({
@@ -2386,12 +2401,23 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], activities, 
       </Toolbar>
       {showImport && <EquipmentImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
 
+      {legacyLabOnly.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#F3EEFB", border: "1px solid #D9CCF0", borderRadius: 12, padding: "10px 14px", marginBottom: 14, fontSize: 13 }}>
+          <FlaskConical size={16} color={LAB_ONLY_COLOR} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 220 }}>
+            มี <b>{legacyLabOnly.length}</b> เครื่องที่ปิดใช้งานด้วยเหตุผล "แลปใช้งานอยู่" — เปลี่ยนเป็น <b>ใช้งานในแลป · ไม่เปิดให้จอง/ยืม</b> ได้ เครื่องจะแสดงเป็นใช้งานปกติ แต่ยังจองไม่ได้เหมือนเดิม
+          </span>
+          <button style={{ ...S.smallBtn, background: LAB_ONLY_COLOR, color: "#fff" }} onClick={convertLegacyLabOnly}>เปลี่ยนทั้งหมด</button>
+        </div>
+      )}
       <div style={S.cardGrid}>
         {filtered.map(e => {
           const days = daysUntil(e.nextDue);
           const st = statusOf(days);
-          const bk = equipmentBookingSummary(e.id, bookings);
           const isDisabled = e.status === "maintenance" || e.status === "inactive";
+          const bk = e.labOnly && e.status === "active" ? { text: LAB_ONLY_LABEL, color: LAB_ONLY_COLOR }
+            : isDisabled ? { text: "ไม่เปิดให้จอง/ยืม", color: "var(--muted)" } : equipmentBookingSummary(e.id, bookings);
+          const labOnly = !!e.labOnly && e.status === "active";
           return (
             <div key={e.id} style={{ ...S.eqCard, display: "flex", flexDirection: "column", gap: 0, padding: 0, overflow: "hidden", height: "100%", ...(isDisabled ? { border: "1px solid var(--red)" } : {}) }} onClick={() => setSelected(e.id)}>
               <div style={{ position: "relative", flexShrink: 0 }}>
@@ -2402,6 +2428,15 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], activities, 
                   <div style={{ width: "100%", height: 140, background: "linear-gradient(135deg, #E9F1FB, #F5F8FC)", display: "flex", alignItems: "center", justifyContent: "center", ...(isDisabled ? { filter: "grayscale(1)", opacity: 0.55 } : {}) }}>
                     <Wrench size={34} color="#B9C7D6" />
                   </div>
+                )}
+                {labOnly && (
+                  <span style={{
+                    position: "absolute", top: 8, left: 8, display: "inline-flex", alignItems: "center", gap: 4,
+                    background: LAB_ONLY_COLOR, color: "#fff", fontWeight: 600, fontSize: 11,
+                    borderRadius: 20, padding: "3px 9px", boxShadow: "0 1px 4px rgba(0,0,0,0.18)",
+                  }}>
+                    <FlaskConical size={12} /> ใช้ในแลป
+                  </span>
                 )}
                 {isDisabled && (
                   <div style={{
@@ -2450,7 +2485,7 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], activities, 
                   </div>
                 )}
                 <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: "auto", paddingTop: 6, fontSize: 11.5, fontWeight: 600, color: bk.color }}>
-                  <CalendarCheck size={12} /> {bk.text}
+                  {labOnly ? <FlaskConical size={12} /> : <CalendarCheck size={12} />} {bk.text}
                 </div>
               </div>
             </div>
@@ -2474,6 +2509,7 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], activities, 
           onDelete={() => remove(selectedItem.id)}
           onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
           onSetAvailability={(disabled, reason) => setAvailability(selectedItem.id, disabled, reason)}
+          onSetLabOnly={(on) => setLabOnly(selectedItem.id, on)}
           onAddActivity={(act) => {
             setActivities([{ ...act, id: uid(), equipmentId: selectedItem.id }, ...activities]);
             applyCalibrationDates(selectedItem.id, act);
@@ -2664,6 +2700,14 @@ function EquipmentForm({ item, equipment = [], groupOptions = [], onCancel, onSa
             <option value="inactive">ปิดใช้งาน</option>
           </select>
         </Field>
+        {f.status === "active" && (
+          <Field label="การจอง/ยืม" full>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={!!f.labOnly} onChange={e => setF({ ...f, labOnly: e.target.checked })} style={{ width: 16, height: 16 }} />
+              ใช้ในแลปเท่านั้น — ไม่เปิดให้จอง/ยืม
+            </label>
+          </Field>
+        )}
         {(f.status === "maintenance" || f.status === "inactive") && (
           <Field label="เหตุผลที่ปิดใช้งาน" full>
             <input
@@ -2940,7 +2984,7 @@ function BookingHistoryList({ bookings = [] }) {
     </div>
   );
 }
-function EquipmentDetail({ item, certificates = [], activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onAddActivity, onEditActivity, onDeleteActivity, onSaveDailyCheck, onApproveDailyCheck, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
+function EquipmentDetail({ item, certificates = [], activities, dailyChecks = [], bookings, onClose, onEdit, onDelete, onBook, onSetAvailability, onSetLabOnly = null, onAddActivity, onEditActivity, onDeleteActivity, onSaveDailyCheck, onApproveDailyCheck, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const [showAct, setShowAct] = useState(false);
   const [editingAct, setEditingAct] = useState(null);
   const [activityFilter, setActivityFilter] = useState("all");
@@ -3059,7 +3103,11 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
   const NOTE_TONE = { ok: { bg: "#EEF8F2", fg: "#1E8A57" }, info: { bg: "#EEF4FC", fg: "#1D5FB8" }, bad: { bg: "#FDF1F1", fg: "#C6493B" } };
 
   // ---- left column pieces ----
-  const statusInfo = item.status === "active"
+  const labOnly = !!item.labOnly && item.status === "active";
+  const canBook = item.status === "active" && !item.labOnly;
+  const statusInfo = labOnly
+    ? { title: "ใช้งานอยู่ · ใช้ในแลป", sub: "ไม่เปิดให้จอง/ยืม", fg: LAB_ONLY_COLOR, bg: "#F6F1FD", line: "#DDD0F2", Icon: FlaskConical }
+    : item.status === "active"
     ? { title: "ใช้งานอยู่", sub: !bk.text || bk.text === "-" || bk.text === "ว่าง" ? "พร้อมใช้งานปกติ" : bk.text, fg: "#1E8A57", bg: "#EEF8F2", line: "#CDEBDA", Icon: CheckCircle2 }
     : item.status === "maintenance"
       ? { title: "ปิดใช้งานชั่วคราว", sub: item.unavailableReason || "ซ่อมบำรุง", fg: "#A86A00", bg: "#FFF6E0", line: "#F3DDA5", Icon: AlertTriangle }
@@ -3096,6 +3144,9 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
             ? menuItem(CheckCircle2, "เปิดใช้งานอีกครั้ง", () => onSetAvailability(false, ""))
             : menuItem(XCircle, "ปิดใช้งานชั่วคราว", () => setShowDisable(true)))}
           {isMobile && menuItem(Plus, "บันทึกกิจกรรม", () => setShowAct(true))}
+          {onSetLabOnly && item.status === "active" && (item.labOnly
+            ? menuItem(CalendarCheck, "เปิดให้จอง/ยืม", () => onSetLabOnly(false))
+            : menuItem(FlaskConical, "ใช้ในแลป · ไม่เปิดให้จอง/ยืม", () => onSetLabOnly(true)))}
           {menuItem(Trash2, "ลบเครื่องมือ", () => setConfirmDelete(true), true)}
         </div>
       </>)}
@@ -3145,7 +3196,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
           {!isMobile && (
             <div style={{ display: "flex", alignItems: "center", gap: 14, background: statusInfo.bg, border: `1px solid ${statusInfo.line}`, borderRadius: 14, padding: "14px 18px" }}>
               <div style={{ width: 38, height: 38, borderRadius: "50%", background: statusInfo.fg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                {item.status === "active" ? <Check size={22} color="#fff" strokeWidth={3} /> : <statusInfo.Icon size={20} color="#fff" />}
+                {item.status === "active" && !labOnly ? <Check size={22} color="#fff" strokeWidth={3} /> : <statusInfo.Icon size={20} color="#fff" />}
               </div>
               <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, color: statusInfo.fg, fontSize: 16 }}>{statusInfo.title}</div>{statusInfo.sub && <div style={{ fontSize: 13, color: "#4B5C72", marginTop: 2 }}>{statusInfo.sub}</div>}</div>
             </div>
@@ -3156,8 +3207,8 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
           {isMobile ? (
             <div style={{ display: "grid", gap: 8 }}>
               {showDailyCheckBtn && <button type="button" style={btnPrimary} onClick={() => openDaily(newDailyEntry(), false)}><Plus size={16} /> Daily check</button>}
-              <div style={{ display: "grid", gridTemplateColumns: item.status === "active" ? "1fr 1fr 48px" : "1fr 48px", gap: 8 }}>
-                {item.status === "active" && <button type="button" style={btnSoft} onClick={onBook}><CalendarCheck size={16} /> จอง / ยืม</button>}
+              <div style={{ display: "grid", gridTemplateColumns: canBook ? "1fr 1fr 48px" : "1fr 48px", gap: 8 }}>
+                {canBook && <button type="button" style={btnSoft} onClick={onBook}><CalendarCheck size={16} /> จอง / ยืม</button>}
                 <button type="button" style={btnSoft} onClick={() => setShowShareView(true)}><QrCode size={16} /> QR ดูข้อมูล</button>
                 {moreMenu}
               </div>
@@ -3166,9 +3217,11 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>การจัดการ</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                {item.status === "active"
+                {canBook
                   ? <button type="button" style={btnPrimary} onClick={onBook}><CalendarCheck size={17} /> จอง / ยืม</button>
-                  : <button type="button" style={btnSoft} onClick={() => setShowShareView(true)}><QrCode size={17} /> QR ดูข้อมูล</button>}
+                  : labOnly && onSetLabOnly
+                    ? <button type="button" style={bigBtn({ background: "#F6F1FD", color: LAB_ONLY_COLOR, border: "1px solid #DDD0F2" })} onClick={() => onSetLabOnly(false)}><CalendarCheck size={17} /> เปิดให้จอง/ยืม</button>
+                    : <button type="button" style={btnSoft} onClick={() => setShowShareView(true)}><QrCode size={17} /> QR ดูข้อมูล</button>}
                 {toggleAvailBtn}
                 {item.status === "active" && <button type="button" style={btnSoft} onClick={() => setShowShareView(true)}><QrCode size={17} /> QR ดูข้อมูล</button>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 56px", gap: 10, ...(item.status === "active" ? {} : { gridColumn: "1 / -1" }) }}>
@@ -8588,6 +8641,7 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
             <Tag color={equip.status === "active" ? "var(--green)" : equip.status === "maintenance" ? "var(--amber)" : "var(--muted)"}>
               {equip.status === "active" ? "ใช้งานอยู่" : equip.status === "maintenance" ? "ซ่อมบำรุง" : "ปิดใช้งาน"}
             </Tag>
+            {equip.status === "active" && equip.labOnly && <Tag color={LAB_ONLY_COLOR}>{LAB_ONLY_LABEL}</Tag>}
             <Tag color={STATUS_COLOR[st]}>{equip.nextDue ? `${STATUS_LABEL[st]} · ${fmtDate(equip.nextDue)}` : "ไม่มีกำหนด"}</Tag>
             <Tag color={bk.color}><CalendarCheck size={11} style={{ marginRight: 3, verticalAlign: -1 }} />{bk.text}</Tag>
           </div>
@@ -9021,7 +9075,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   // always company-wide (not ownOnly), since "what's busy right now" and
   // "what's available to borrow" are shared facts, not personal history.
   const liveBookingsCount = bookings.filter(b => b.status === "approved").length;
-  const catalogCount = equipment.filter(e => e.status === "active" && e.type !== "เครื่องปรับอากาศ").length
+  const catalogCount = equipment.filter(isBookableEquipment).length
     + items.filter(i => i.status === "active").length;
 
   const shown = view === "pending" ? pending
@@ -9554,7 +9608,7 @@ function BookingForm({ equipment, items = [], bookings, setBookings, initialEqui
   // as clicks not visibly registering right away — exactly the "clicking
   // one item also selects another" symptom this was mistaken for.
   const activeEquipment = useMemo(() =>
-    equipment.filter(e => e.status === "active" && e.type !== "เครื่องปรับอากาศ")
+    equipment.filter(isBookableEquipment)
       .slice().sort((a, b) => alphaCompare(a.code, b.code)),
     [equipment]
   );
@@ -13166,7 +13220,9 @@ function ApprovalDialog({ booking, action, defaultName = "", onCancel, onConfirm
 // Equipment and Items so staff can mark something unbookable right when
 // they notice it's broken/in use/unavailable.
 function DisableAssetDialog({ asset, onCancel, onConfirm }) {
-  const presets = ["ชำรุด", "แลปใช้งานอยู่ ไม่ว่าง", "ส่งซ่อม/สอบเทียบ", "อื่นๆ"];
+  // "แลปใช้งานอยู่" is no longer a reason to disable — it is the separate
+  // "ใช้ในแลป · ไม่เปิดให้จอง/ยืม" setting (instrument stays in normal use).
+  const presets = ["ชำรุด", "ส่งซ่อม/สอบเทียบ", "อื่นๆ"];
   const initialPreset = presets.includes(asset.unavailableReason) ? asset.unavailableReason : (asset.unavailableReason ? "อื่นๆ" : presets[0]);
   const [reason, setReason] = useState(initialPreset);
   const [customReason, setCustomReason] = useState(initialPreset === "อื่นๆ" ? (asset.unavailableReason || "") : "");
@@ -13449,7 +13505,7 @@ function CatalogTab({ equipment, items, bookings, setBookings, notify, restrictT
 
   const catalog = useMemo(() => {
     const eq = equipment
-      .filter(e => e.status === "active" && e.type !== "เครื่องปรับอากาศ")
+      .filter(isBookableEquipment)
       .map(e => ({ ...e, assetType: "equipment", summary: equipmentBookingSummary(e.id, bookings) }));
     const it = items
       .filter(i => i.status === "active")
