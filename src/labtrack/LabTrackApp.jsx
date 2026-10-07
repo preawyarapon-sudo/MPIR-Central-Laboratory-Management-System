@@ -591,6 +591,7 @@ const CERT_HEADER_KEYS = [
   "calibrationDate", "issueDate", "calibrationMethod", "referenceStandardUsed", "traceability",
   "temperatureC", "humidityRH", "providerStatementOfConformity", "providerDecisionRule",
   "limitationsNotes", "pdfLink", "reviewedBy", "reviewDate", "recordStatus",
+  "certTolerance", "certToleranceType", "certDecisionRule", "certGuardBandFactor", "certCriteriaBasis",
 ];
 function pickCertHeader(c) { return Object.fromEntries(CERT_HEADER_KEYS.map(k => [k, c?.[k] ?? ""])); }
 // Stable on-screen / export order of points inside a certificate.
@@ -747,10 +748,33 @@ function snapshotCriteria(instrument, date) {
   if (!c || numOrNull(c.tolerance) == null) return null; // nothing to lock yet
   return { ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, c[k] ?? ""])), capturedAt: todayISO(), ...(date ? { asOf: date } : {}) };
 }
+// Acceptance criteria entered ON the certificate (header: certTolerance…,
+// applies to every point; a point may override with pointTolerance). When
+// present they are what the certificate is judged by — Sheet 01 Tolerance
+// is then only the default for new certificates and for daily/intermediate
+// checks. Certificates without their own criteria keep the old behaviour.
+const CERT_CRIT_KEYS = ["certTolerance", "certToleranceType", "certDecisionRule", "certGuardBandFactor", "certCriteriaBasis"];
+function ownCriteriaOf(rec) {
+  if (!rec) return null;
+  const pt = numOrNull(rec.pointTolerance), ct = numOrNull(rec.certTolerance);
+  if (pt == null && ct == null) return null;
+  const o = {
+    tolerance: pt ?? ct,
+    toleranceType: (pt != null ? rec.pointToleranceType : "") || rec.certToleranceType || "absolute",
+    _criteriaSource: pt != null ? "point" : "certificate",
+  };
+  if (rec.certDecisionRule) o.decisionRule = rec.certDecisionRule;
+  if (rec.certDecisionRule === "guardband") o.guardBandFactor = rec.certGuardBandFactor ?? "";
+  if (rec.certCriteriaBasis) o.basisOfCriteria = rec.certCriteriaBasis;
+  return o;
+}
 function criteriaFor(instrument, rec) {
+  const own = ownCriteriaOf(rec);
+  if (own) return { ...(instrument || {}), ...own };
   return rec?.criteriaAt ? { ...(instrument || {}), ...rec.criteriaAt } : criteriaAsOf(instrument, recDateOf(rec));
 }
 function criteriaChanged(instrument, rec, keys = ["tolerance", "toleranceType", "decisionRule", "guardBandFactor"]) {
+  if (ownCriteriaOf(rec)) return false; // judged by its own criteria — nothing to drift from
   if (!rec?.criteriaAt || !instrument) return false;
   const expected = criteriaAsOf(instrument, recDateOf(rec));
   return keys.some(k => String(rec.criteriaAt[k] ?? "") !== String(expected[k] ?? ""));
@@ -2561,7 +2585,7 @@ function EquipmentForm({ item, equipment = [], groupOptions = [], onCancel, onSa
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.notes} onChange={set("notes")} /></Field>
 
         <div style={{ gridColumn: "1 / -1", marginTop: 6, paddingTop: 10, borderTop: "1px dashed var(--line)", fontSize: 12, color: "var(--muted)" }}>
-          ข้อมูลทะเบียนสอบเทียบ (Tolerance/MPE, Decision Rule, Risk score, ความถี่ตรวจสอบ ฯลฯ) ย้ายไปกรอกที่เมนู <b>บันทึกการสอบเทียบ › ข้อมูลเครื่องมือ (Sheet 01)</b>
+          ข้อมูลทะเบียนสอบเทียบ (Tolerance/MPE, Decision Rule, Risk score, ความถี่ตรวจสอบ ฯลฯ) ย้ายไปกรอกที่เมนู <b>บันทึกการสอบเทียบ › ข้อมูลเครื่องมือ</b>
         </div>
       </div>
       <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.code || !f.name} />
@@ -2680,7 +2704,7 @@ function CriteriaGridEditor({ equipment, setEquipment, notify, onClose }) {
   const CRIT_COLS = ["รหัส", "ชื่อเครื่องมือ", "พารามิเตอร์", "หน่วย", "Tolerance/MPE", "ชนิดเกณฑ์", "Decision Rule", "S", "O", "D", "RPN"];
 
   return (
-    <Modal onClose={onClose} title="กรอกเกณฑ์การสอบเทียบแบบตาราง (Sheet 01)" xwide>
+    <Modal onClose={onClose} title="กรอกเกณฑ์การสอบเทียบแบบตาราง" xwide>
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <select value={scope} onChange={e => setScope(e.target.value)} style={S.select}>
           <option value="missing">แสดงเฉพาะที่เกณฑ์ยังไม่ครบ</option>
@@ -3817,7 +3841,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   // the time. If a point is added, removed or its values change afterwards,
   // that sign-off no longer covers what is on record — it used to stay in
   // place silently. Now it is withdrawn and has to be signed again.
-  const MEAS_KEYS = ["parameter", "rangeId", "calibrationPoint", "unit", "referenceValue", "indication", "reportedError", "reportedCorrection", "reportedU", "uReportedAs", "coverageFactor"];
+  const MEAS_KEYS = ["parameter", "rangeId", "calibrationPoint", "unit", "referenceValue", "indication", "reportedError", "reportedCorrection", "reportedU", "uReportedAs", "coverageFactor", "adjustmentStatus", "pointTolerance", "pointToleranceType"];
   const inGroup = (c, instrumentId, no, date) => c.instrumentId === instrumentId && (c.certificateNo || "") === (no || "") && (c.calibrationDate || "") === (date || "");
   function clearSignoffs(list, instrumentId, no, date) {
     let cleared = false;
@@ -3850,8 +3874,17 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   function saveHeader(groupKey, row) {
     const [no, date] = groupKey.split("|||");
     const header = pickCertHeader(row);
-    commit(certificates.map(c => (c.instrumentId === selectedInstrumentId && (c.certificateNo || "") === no && (c.calibrationDate || "") === date)
-      ? normalizeCertRow({ ...c, ...header }) : c), "บันทึกข้อมูลใบรับรองแล้ว (ทุกจุดในใบนี้)");
+    const before = certificates.find(c => inGroup(c, selectedInstrumentId, no, date));
+    const critChanged = !!before && CERT_CRIT_KEYS.some(k => String(before[k] ?? "") !== String(header[k] ?? ""));
+    let list = certificates.map(c => (c.instrumentId === selectedInstrumentId && (c.certificateNo || "") === no && (c.calibrationDate || "") === date)
+      ? normalizeCertRow({ ...c, ...header }) : c);
+    let msg = "บันทึกข้อมูลใบรับรองแล้ว (ทุกจุดในใบนี้)";
+    if (critChanged) {
+      const r = clearSignoffs(list, selectedInstrumentId, header.certificateNo, header.calibrationDate);
+      list = r.list;
+      if (r.cleared) msg += " · เกณฑ์เปลี่ยนหลังลงชื่อประเมินแล้ว — ต้องลงชื่อประเมิน/อนุมัติใหม่";
+    }
+    commit(list, msg);
     setEditing(null);
     setSelectedGroupKey(`${header.certificateNo || ""}|||${header.calibrationDate || ""}`);
   }
@@ -4011,7 +4044,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     return (
       <div>
         <div style={S.detailHead}>
-          <div><h2 style={S.h2}>ใบรับรองสอบเทียบ (Certificate Data)</h2><p style={S.h2sub}>Sheet 02 — เลือกเครื่องมือเพื่อดูหรือกรอกใบรับรองของเครื่องมือนั้น</p></div>
+          <div><h2 style={S.h2}>ใบรับรองสอบเทียบ (Certificate Data)</h2><p style={S.h2sub}>เลือกเครื่องมือเพื่อดูหรือกรอกใบรับรองของเครื่องมือนั้น</p></div>
         </div>
         <div style={S.toolbar}>
           <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ (รหัส / ชื่อ / ประเภท)" value={q} onChange={e => setQ(e.target.value)} /></div>
@@ -4176,6 +4209,23 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
         {info("มาตรฐานอ้างอิง", head.referenceStandardUsed)}
         {info("ความสอบกลับได้", head.traceability)}
         {info("สภาวะแวดล้อม", env)}
+        {(() => {
+          const own = ownCriteriaOf(head);
+          const c = own ? criteriaFor(instrument, head) : criteriaAsOf(instrument, head.calibrationDate);
+          const rule = LK_RULE.find(r => r.key === c?.decisionRule)?.label || c?.decisionRule || "";
+          const txt = c && numOrNull(c.tolerance) != null
+            ? `± ${c.tolerance}${instrument?.calUnit ? ` ${instrument.calUnit}` : ""} (${c.toleranceType || "absolute"})${rule ? ` · ${rule}` : ""}`
+            : "";
+          return (
+            <div>
+              <span style={{ color: "var(--muted)" }}>เกณฑ์การยอมรับ</span>
+              <div style={{ marginTop: 1, wordBreak: "break-word" }}>{txt || "ยังไม่ได้กำหนด"}</div>
+              <div style={{ fontSize: 11, color: own ? "var(--muted)" : "var(--amber)" }}>
+                {own ? (head.certCriteriaBasis || "กำหนดในใบรับรองนี้") : "ใช้ค่าจากข้อมูลเครื่องมือ — กด \"แก้ไขข้อมูลใบรับรอง\" เพื่อกำหนดในใบนี้"}
+              </div>
+            </div>
+          );
+        })()}
         {info("ผู้ทบทวน", [head.reviewedBy, head.reviewDate ? fmtDate(head.reviewDate) : ""].filter(Boolean).join(" · "))}
         <div>
           <span style={{ color: "var(--muted)" }}>สถานะ / ผลตัดสินทั้งใบ</span>
@@ -4211,7 +4261,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
       )}
       <div style={{ ...S.tableWrap, overflowX: "auto" }}>
         <table style={{ ...S.table, minWidth: 820 }}>
-          <thead><tr>{["พารามิเตอร์ / จุด", "ก่อน/หลังปรับ", "ค่าอ้างอิง", "Error ที่ใช้คำนวณ", "U", "ผลตัดสิน", "สถานะ", "ที่มา", ""].map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+          <thead><tr>{["พารามิเตอร์ / จุด", "ก่อน/หลังปรับ", "ค่าอ้างอิง", "Error ที่ใช้คำนวณ", "U", "Tolerance", "ผลตัดสิน", "สถานะ", "ที่มา", ""].map(h => <th key={h} style={{ ...S.th, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
           <tbody>
             {pointsForGroup.map(c => {
               const ev = evaluateAcceptance(c, instrument);
@@ -4224,6 +4274,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                   <td style={{ ...S.td, ...mono }}>{c.referenceValue !== "" && c.referenceValue != null ? c.referenceValue : "-"}</td>
                   <td style={{ ...S.td, ...mono }} title={errorSourceLabel(c)}>{err != null ? round4(err) : "-"}</td>
                   <td style={{ ...S.td, ...mono }}>{U != null ? `${round4(U)} (k=${c.coverageFactor || 2})` : "-"}</td>
+                  <td style={{ ...S.td, ...mono }} title={ownCriteriaOf(c)?._criteriaSource === "point" ? "เกณฑ์เฉพาะจุดนี้" : ""}>{ev.tol != null ? `± ${round4(ev.tol)}${ownCriteriaOf(c)?._criteriaSource === "point" ? " *" : ""}` : "-"}</td>
                   <td style={S.td}><span title={ev.rationale} style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[ev.decision], color: CALIB_DECISION_COLOR[ev.decision] }}>{ev.decision}</span></td>
                   <td style={S.td}><span title={c.missingItems ? `ขาด: ${c.missingItems}` : ""} style={{ ...S.tag, borderColor: recordStatusColor(st), color: recordStatusColor(st) }}>{st}</span></td>
                   <td style={{ ...S.td, fontSize: 11.5 }}>{c.source === "pdf-ai" ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--teal-dark)" }}><Sparkles size={12} /> นำเข้า</span> : "กรอกเอง"}</td>
@@ -4245,7 +4296,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                 </tr>
               );
             })}
-            {pointsForGroup.length === 0 && <tr><td style={S.td} colSpan={9}><EmptyState text="ไม่มีจุดสอบเทียบในใบรับรองนี้" /></td></tr>}
+            {pointsForGroup.length === 0 && <tr><td style={S.td} colSpan={10}><EmptyState text="ไม่มีจุดสอบเทียบในใบรับรองนี้" /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -4270,7 +4321,16 @@ function AdjTag({ c }) {
 // mode "point"  — add/edit one point: header is inherited, only point cards
 // mode "header" — edit the certificate header once for every point
 function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
-  const [f, setF] = useState(row);
+  // New certificate: start from the instrument's Sheet 01 criteria in force
+  // on the calibration date, so they are visible and editable here.
+  const [f, setF] = useState(() => {
+    if (mode !== "full" || numOrNull(row.certTolerance) != null) return row;
+    const inst = equipment.find(e => e.id === row.instrumentId);
+    const c = criteriaAsOf(inst, row.calibrationDate);
+    if (!c || numOrNull(c.tolerance) == null) return row;
+    return { ...row, certTolerance: c.tolerance, certToleranceType: c.toleranceType || "absolute", certDecisionRule: c.decisionRule || "simple",
+      certGuardBandFactor: c.guardBandFactor ?? "", certCriteriaBasis: [c.basisOfCriteria, c.referenceDocument].filter(Boolean).join(" · ") };
+  });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   // Nominal point and reference value are the same number on most
   // certificates — mirror it until a different reference is typed.
@@ -4280,6 +4340,8 @@ function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
     setF({ ...f, calibrationPoint: v, ...(mirror ? { referenceValue: v } : {}) });
   };
   const instrument = equipment.find(e => e.id === f.instrumentId);
+  const sheet01 = criteriaAsOf(instrument, f.calibrationDate);
+  const sheet01Text = sheet01 && numOrNull(sheet01.tolerance) != null ? `± ${sheet01.tolerance} (${sheet01.toleranceType || "absolute"})` : "";
   const preview = normalizeCertRow(f);
   const err = derivedErrorOf(preview), U = derivedUOf(preview);
   const ev = evaluateAcceptance(preview, instrument);
@@ -4327,6 +4389,38 @@ function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
         </Field>
         <Field label="อุณหภูมิขณะสอบเทียบ (°C)"><input type="number" step="any" style={S.input} value={f.temperatureC} onChange={set("temperatureC")} placeholder="เช่น 23.5" /></Field>
         <Field label="ความชื้นสัมพัทธ์ (%RH)"><input type="number" step="any" style={S.input} value={f.humidityRH} onChange={set("humidityRH")} placeholder="เช่น 55" /></Field>
+      </>),
+    },
+    {
+      title: "เกณฑ์การยอมรับ (Tolerance)",
+      hint: "เกณฑ์ที่ใช้ตัดสิน PASS/FAIL ทุกจุดในใบรับรองนี้ — แก้แล้วผลตัดสินคำนวณใหม่ทันที",
+      content: (<>
+        <Field label={`Tolerance / MPE${instrument?.calUnit ? ` (${instrument.calUnit})` : ""}`}>
+          <input type="number" step="any" style={S.input} value={f.certTolerance ?? ""} onChange={set("certTolerance")} placeholder={sheet01Text ? `เว้นว่าง = ใช้ค่าจากข้อมูลเครื่องมือ ${sheet01Text}` : "เช่น 0.09"} />
+          {sheet01Text && String(f.certTolerance ?? "") !== String(sheet01.tolerance) && (
+            <button type="button" style={{ ...S.smallBtn, marginTop: 4, alignSelf: "flex-start" }}
+              onClick={() => setF({ ...f, certTolerance: sheet01.tolerance, certToleranceType: sheet01.toleranceType || "absolute", certDecisionRule: sheet01.decisionRule || "simple", certGuardBandFactor: sheet01.guardBandFactor ?? "" })}>
+              ใช้ค่าจากข้อมูลเครื่องมือ ({sheet01Text})
+            </button>
+          )}
+        </Field>
+        <Field label="ชนิดของเกณฑ์">
+          <select style={S.input} value={f.certToleranceType || "absolute"} onChange={set("certToleranceType")}>
+            {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </Field>
+        <Field label="Decision Rule">
+          <select style={S.input} value={f.certDecisionRule || sheet01?.decisionRule || "simple"} onChange={set("certDecisionRule")}>
+            {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+          </select>
+        </Field>
+        {(f.certDecisionRule || sheet01?.decisionRule) === "guardband" && (
+          <Field label="Guard band factor (g)"><input type="number" step="any" style={S.input} value={f.certGuardBandFactor ?? ""} onChange={set("certGuardBandFactor")} placeholder="เช่น 1" /></Field>
+        )}
+        <Field label="ที่มาของเกณฑ์" full>
+          <input style={S.input} value={f.certCriteriaBasis || ""} onChange={set("certCriteriaBasis")} placeholder="เช่น Manufacturer specification ±0.1 %Brix (คู่มือเครื่องหน้า 12)" />
+          {hint("หลักฐานอ้างอิงสำหรับ audit — สเปกผู้ผลิต, MPE ตามมาตรฐาน หรือข้อกำหนดวิธีทดสอบ")}
+        </Field>
       </>),
     },
     {
@@ -4393,17 +4487,30 @@ function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
           <select style={S.input} value={f.uReportedAs} onChange={set("uReportedAs")}>{LK_UTYPE.map(u => <option key={u} value={u}>{u}</option>)}</select>
         </Field>
         <Field label="ค่า U ที่รายงาน"><input type="number" step="any" style={S.input} value={f.reportedU} onChange={set("reportedU")} placeholder="เช่น 0.3" /></Field>
+        <Field label="Tolerance เฉพาะจุดนี้">
+          <input type="number" step="any" style={S.input} value={f.pointTolerance ?? ""} onChange={set("pointTolerance")}
+            placeholder={numOrNull(f.certTolerance) != null ? `เว้นว่าง = ใช้ของใบรับรอง ± ${f.certTolerance}` : sheet01Text ? `เว้นว่าง = ใช้ข้อมูลเครื่องมือ ${sheet01Text}` : "เช่น 0.09"} />
+          {hint("กรอกเฉพาะเมื่อจุดนี้มีเกณฑ์ต่างจากจุดอื่นในใบ")}
+        </Field>
+        {numOrNull(f.pointTolerance) != null && (
+          <Field label="ชนิดเกณฑ์ของจุดนี้">
+            <select style={S.input} value={f.pointToleranceType || f.certToleranceType || "absolute"} onChange={set("pointToleranceType")}>
+              {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="Coverage factor k"><input type="number" step="any" style={S.input} value={f.coverageFactor} onChange={set("coverageFactor")} placeholder="เช่น 2" /></Field>
         <Field label="Coverage probability (%)"><input type="number" step="any" style={S.input} value={f.coverageProbabilityPct} onChange={set("coverageProbabilityPct")} placeholder="เช่น 95" /></Field>
         <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 6, background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span>ผลตัดสิน (Sheet 03):</span>
+            <span>ผลตัดสิน:</span>
             <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[ev.decision], color: CALIB_DECISION_COLOR[ev.decision] }}>{ev.decision}</span>
             <span style={{ color: "var(--muted)" }}>{ev.rationale}</span>
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
             <span>U (absolute): <b style={mono}>{U != null ? round4(U) : "-"}</b></span>
-            <span>Tolerance ที่ใช้: <b style={mono}>{ev.tol != null ? round4(ev.tol) : "ยังไม่ตั้งใน Sheet 01"}</b></span>
+            <span>Tolerance ที่ใช้: <b style={mono}>{ev.tol != null ? round4(ev.tol) : "ยังไม่ได้กำหนด"}</b>
+              <span style={{ color: "var(--muted)" }}> {ev.tol != null ? ({ point: "(เฉพาะจุดนี้)", certificate: "(จากใบรับรอง)" }[ownCriteriaOf(preview)?._criteriaSource] || "(จากข้อมูลเครื่องมือ)") : ""}</span></span>
             <span>Utilization: <b style={mono}>{ev.utilizationPct != null ? `${ev.utilizationPct}%` : "-"}</b></span>
           </div>
           <div style={{ color: missing.length ? "var(--amber)" : "var(--green)" }}>
@@ -4707,7 +4814,9 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
       ? { approvedBy: name, approvalDate: clear ? "" : todayISO() }
       : clear
         ? { evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", criteriaAt: null }
-        : { evaluatedBy: name, evaluationDate: todayISO(), criteriaAt: snapshotCriteria(g.instrument, g.points[0]?.c.calibrationDate) };
+        : { evaluatedBy: name, evaluationDate: todayISO(), criteriaAt: ownCriteriaOf(g.points[0]?.c)
+            ? { ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, criteriaFor(g.instrument, g.points[0].c)[k] ?? ""])), capturedAt: todayISO(), asOf: g.points[0].c.calibrationDate || "" }
+            : snapshotCriteria(g.instrument, g.points[0]?.c.calibrationDate) };
     setCertificates(certificates.map(c => ids.has(c.id) ? { ...c, ...patch } : c));
     notify(clear ? "ยกเลิกการลงชื่อแล้ว" : field === "approved" ? `อนุมัติผลใบรับรอง ${g.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${g.certificateNo || "-"} แล้ว`);
   }
@@ -4749,7 +4858,7 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                         )}
                         {g.points[0]?.c.criteriaAt && (
                           <span title={`ล็อกเมื่อ ${fmtDate(g.points[0].c.criteriaAt.capturedAt)}`} style={{ fontSize: 11.5, color: criteriaChanged(g.instrument, g.points[0].c) ? "var(--amber)" : "var(--muted)" }}>
-                            🔒 {criteriaText(g.points[0].c.criteriaAt)}{criteriaChanged(g.instrument, g.points[0].c) ? " — ต่างจากเกณฑ์ ณ วันสอบเทียบใน Sheet 01 (ยกเลิกการลงชื่อแล้วลงใหม่เพื่อประเมินใหม่)" : ""}
+                            🔒 {criteriaText(g.points[0].c.criteriaAt)}{criteriaChanged(g.instrument, g.points[0].c) ? " — ต่างจากเกณฑ์ ณ วันสอบเทียบในข้อมูลเครื่องมือ (ยกเลิกการลงชื่อแล้วลงใหม่เพื่อประเมินใหม่)" : ""}
                           </span>
                         )}
                         <div style={{ flex: 1 }} />
@@ -4951,7 +5060,7 @@ function IntermediateCheckForm({ row, equipment, certificates = [], currentDispl
           )}
           {calc.result === "ข้อมูลไม่ครบ" && (
             <div style={{ fontSize: 12.5, color: "var(--amber)", background: "#FFF8EC", border: "1px solid #F3DDB5", borderRadius: 8, padding: "8px 10px" }}>
-              เครื่องมือนี้ยังไม่ได้ตั้ง Tolerance จึงยังไม่มี Warning/Action Limit — ตั้งได้ที่แท็บ “ข้อมูลเครื่องมือ (Sheet 01)” (ช่อง Tolerance/MPE) แล้วผลจะคำนวณให้เอง
+              เครื่องมือนี้ยังไม่ได้ตั้ง Tolerance จึงยังไม่มี Warning/Action Limit — ตั้งได้ที่แท็บ “ข้อมูลเครื่องมือ” (ช่อง Tolerance/MPE) แล้วผลจะคำนวณให้เอง
             </div>
           )}
           {(() => {
@@ -4961,7 +5070,7 @@ function IntermediateCheckForm({ row, equipment, certificates = [], currentDispl
               const due = criteriaAsOf(instrument, f.checkDate);
               return (
                 <div style={{ fontSize: 12.5, color: changed ? "var(--amber)" : "var(--muted)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span>🔒 ใช้เกณฑ์ ณ วันบันทึก ({fmtDate(f.criteriaAt.capturedAt)}): {criteriaText(f.criteriaAt)}{changed ? ` — เกณฑ์ที่ใช้ ณ วันตรวจตาม Sheet 01 คือ ± ${due?.tolerance}` : ""}</span>
+                  <span>🔒 ใช้เกณฑ์ ณ วันบันทึก ({fmtDate(f.criteriaAt.capturedAt)}): {criteriaText(f.criteriaAt)}{changed ? ` — เกณฑ์ที่ใช้ ณ วันตรวจตาม ข้อมูลเครื่องมือ คือ ± ${due?.tolerance}` : ""}</span>
                   {changed && live && <button type="button" style={S.smallBtn} onClick={() => setF({ ...f, criteriaAt: live })}>ประเมินใหม่ด้วยเกณฑ์ ณ วันตรวจ</button>}
                 </div>
               );
@@ -5205,7 +5314,7 @@ function EquipmentStatusTab({ equipment, certificates, intermediateChecks, daily
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>สรุปสถานะเครื่องมือ</h2><p style={S.h2sub}>Sheet 07 — สรุปจากผลสอบเทียบล่าสุด (Sheet 03), Check ไม่ผ่านใน 90 วัน (Sheet 04 + Daily check) และ RPN (Sheet 01) · สถานะการใช้งาน/ผู้อนุมัติ เป็นช่องเดียวกับใน "ข้อมูลเครื่องมือ (Sheet 01)" แก้ที่ไหนก็ได้</p></div>
+        <div><h2 style={S.h2}>สรุปสถานะเครื่องมือ</h2><p style={S.h2sub}>สรุปจากผลสอบเทียบล่าสุด, Check ไม่ผ่านใน 90 วัน (ตรวจสอบระหว่างรอบ + Daily check) และ RPN · สถานะการใช้งาน/ผู้อนุมัติ เป็นช่องเดียวกับใน "ข้อมูลเครื่องมือ" แก้ที่ไหนก็ได้</p></div>
       </div>
       <div style={S.toolbar}><div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเครื่องมือ" value={q} onChange={e => setQ(e.target.value)} /></div></div>
       <div style={S.tableWrap}>
@@ -5697,17 +5806,11 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
       measuredParameter: f.measuredParameter || "%Brix", calUnit: f.calUnit || "°Brix", brixMin: "", brixMax: "",
     });
   }
-  // ---- Changing acceptance criteria ----
-  // Two very different situations, handled explicitly (the old window.confirm
-  // made "Cancel" mean "typo fix", so pressing Cancel to abort still saved):
-  //  • correction — the value was entered wrong. Every record judged with the
-  //    wrong value is re-judged: its Sheet 03 sign-off (evaluation/approval)
-  //    is withdrawn so it must be signed again on the corrected criteria,
-  //    and Sheet 04 checks are re-locked to the corrected criteria.
-  //  • newPeriod — the criteria really changed from a date onward. The old
-  //    ones go to history; earlier records keep being judged by them.
-  // Either way a reason is required and the change is logged
-  // (criteriaChangeLog) with old/new values, who, when and what it affected.
+  // ---- Changing acceptance criteria (Sheet 01 defaults) ----
+  //  • correction — the value was entered wrong: records judged with it are
+  //    re-judged (Sheet 03 sign-off withdrawn, Sheet 04 checks re-locked).
+  //  • newPeriod — criteria really changed from a date; old ones kept as history.
+  // A reason is required and each change is logged in criteriaChangeLog.
   const critKeys = ["tolerance", "toleranceType", "decisionRule", "guardBandFactor"];
   const critSnap = (o) => Object.fromEntries(critKeys.map(k => [k, o?.[k] ?? ""]));
   const histJSON = (h) => JSON.stringify((Array.isArray(h) ? h : []).filter(x => x && x.validUntil).map(x => ({ validUntil: x.validUntil, ...critSnap(x) })));
@@ -5718,8 +5821,6 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
     if ((patch.authorizedBy || "") !== authorizedByOf(instrument)) patch.statusApprovalDate = patch.authorizedBy ? todayISO() : "";
     return patch;
   }
-  // Records locked with the OLD criteria that the NEW criteria would judge
-  // differently (records that were already out of step are left alone).
   function affectedBy(newInstrument) {
     const certs = certificates.filter(c => c.instrumentId === instrument.id && c.criteriaAt
       && !criteriaChanged(instrument, c) && criteriaChanged(newInstrument, c));
@@ -5743,7 +5844,7 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
   }
   function commitSave(patch, extraMsg = "") {
     setEquipment(equipment.map(e => e.id === f.id ? { ...e, ...patch } : e));
-    notify("บันทึกข้อมูลเครื่องมือ (Sheet 01) แล้ว" + extraMsg, extraMsg ? 6000 : 2200);
+    notify("บันทึกข้อมูลเครื่องมือแล้ว" + extraMsg, extraMsg ? 6000 : 2200);
     setEditing(false);
     setCritDlg(null);
   }
@@ -5818,7 +5919,7 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ (Sheet 01)</h2><p style={S.h2sub}>กรอกครั้งเดียวต่อเครื่องมือ — ใช้ตัดสินผลในทุกชีท</p></div>
+        <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ</h2><p style={S.h2sub}>กรอกครั้งเดียวต่อเครื่องมือ — ใช้ตัดสินผลในทุกชีท</p></div>
         <button style={S.primaryBtn} onClick={openEdit}><Pencil size={14} /> แก้ไข</button>
       </div>
       {/* Identity is edited on the Equipment page — one quiet line, not a block. */}
@@ -5920,17 +6021,17 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
       <details style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.7 }}>
         <summary style={{ cursor: "pointer", color: "var(--teal-dark)", fontWeight: 600 }}>ค่าเหล่านี้ถูกนำไปใช้ที่ไหนบ้าง</summary>
         <div style={{ ...S.notesBox, marginTop: 8 }}>
-          <div>• ผลสอบเทียบ (Sheet 03): ตัดสินด้วย Tolerance และ Decision Rule นี้</div>
-          <div>• ตรวจสอบระหว่างรอบ (Sheet 04): Warning = ค่าอ้างอิง ± ⅔ Tolerance, Action = ค่าอ้างอิง ± Tolerance{generalLimits ? "" : " (ยังไม่มี Tolerance จึงยังคำนวณไม่ได้)"}</div>
+          <div>• ผลสอบเทียบ: ตัดสินด้วย Tolerance และ Decision Rule นี้</div>
+          <div>• ตรวจสอบระหว่างรอบ: Warning = ค่าอ้างอิง ± ⅔ Tolerance, Action = ค่าอ้างอิง ± Tolerance{generalLimits ? "" : " (ยังไม่มี Tolerance จึงยังคำนวณไม่ได้)"}</div>
           {isRefractometer && (
             <div>• Daily check (Refractometer): เกณฑ์ %Brix = {REFRACTOMETER_STD_BRIX} ± Tolerance {brixLimits ? <b style={{ fontFamily: "var(--font-mono)" }}>→ {brixLimits.lal} – {brixLimits.ual} °Brix</b> : "(ยังไม่ได้ตั้ง Tolerance)"}</div>
           )}
-          <div>• แก้ค่าที่นี่ไม่กระทบผลย้อนหลัง: Sheet 04 ล็อกเกณฑ์ ณ วันบันทึก, ใบรับรองล็อกเมื่อลงชื่อผู้ประเมิน</div>
+          <div>• แก้ค่าที่นี่ไม่กระทบผลย้อนหลัง: ผลตรวจสอบระหว่างรอบล็อกเกณฑ์ ณ วันบันทึก, ใบรับรองล็อกเมื่อลงชื่อผู้ประเมิน</div>
         </div>
       </details>
 
       {editing && (
-        <Modal onClose={() => setEditing(false)} title="แก้ไขข้อมูลเครื่องมือ (Sheet 01)" xwide>
+        <Modal onClose={() => setEditing(false)} title="แก้ไขข้อมูลเครื่องมือ" xwide>
           <div style={S.formGrid} className="ltFormGrid">
             {suggestion && criteriaEmpty && banner("info", <>
               <Sparkles size={14} color="var(--teal-dark)" style={{ flexShrink: 0 }} />
@@ -5964,7 +6065,10 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
             <Field label="ความละเอียด (Resolution)"><input style={S.input} value={f.resolution || ""} onChange={set("resolution")} /></Field>
 
             {sectionHead(<ShieldCheck size={13} />, "เกณฑ์การยอมรับ (Acceptance Criteria)")}
-            <Field label="เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE)"><input type="number" step="any" style={S.input} value={f.tolerance ?? ""} onChange={set("tolerance")} /></Field>
+            <Field label="เกณฑ์ความคลาดเคลื่อนสูงสุด (Tolerance/MPE) — ค่าตั้งต้น">
+              <input type="number" step="any" style={S.input} value={f.tolerance ?? ""} onChange={set("tolerance")} />
+              <span style={WIZ_HINT}>ใช้กับการตรวจประจำวัน/ระหว่างรอบ และเป็นค่าเริ่มต้นของใบรับรองใหม่ ใบรับรองที่กำหนดเกณฑ์ของตัวเองแล้วจะใช้ค่าในใบรับรอง</span>
+            </Field>
             <Field label="ชนิดของเกณฑ์">
               <select style={S.input} value={f.toleranceType || "absolute"} onChange={set("toleranceType")}>
                 {LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}
@@ -6114,13 +6218,13 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
 const CALIBRATION_GUIDE_SHEETS = [
   {
     code: "01", name: "ข้อมูลเครื่องมือ (Instrument Master)",
-    purpose: "ทะเบียนกลางของเครื่องมือ พร้อมเกณฑ์ Tolerance/MPE, Decision Rule และคะแนนความเสี่ยง — ใช้เป็นฐานให้ทุก Sheet อื่นคำนวณ",
+    purpose: "ทะเบียนกลางของเครื่องมือ พร้อมเกณฑ์ Tolerance/MPE, Decision Rule และคะแนนความเสี่ยง — ใช้เป็นฐานให้ทุกส่วนอื่นคำนวณ",
     fields: [
-      { label: "รหัส / ชื่อ / ประเภท / ยี่ห้อ / รุ่น / Serial No. / ตำแหน่งที่ตั้ง / สอบเทียบล่าสุด / รอบสอบเทียบ (เดือน)", kind: "linked", note: "ดึงมาจากหน้า \"เครื่องมือ\" โดยอัตโนมัติ (เครื่องมือตัวเดียวกัน) — แก้ไขได้ที่หน้านั้น ไม่ต้องกรอกซ้ำใน Sheet 01" },
+      { label: "รหัส / ชื่อ / ประเภท / ยี่ห้อ / รุ่น / Serial No. / ตำแหน่งที่ตั้ง / สอบเทียบล่าสุด / รอบสอบเทียบ (เดือน)", kind: "linked", note: "ดึงมาจากหน้า \"เครื่องมือ\" โดยอัตโนมัติ (เครื่องมือตัวเดียวกัน) — แก้ไขได้ที่หน้านั้น ไม่ต้องกรอกซ้ำในข้อมูลเครื่องมือ" },
       { label: "ผู้รับผิดชอบ (Custodian) / เลขทรัพย์สิน (Asset No.) / กลุ่มเครื่องมือ / ขอบข่ายการใช้งาน / วิธีทดสอบที่เกี่ยวข้อง / พารามิเตอร์ที่วัด / หน่วย / ช่วงใช้งาน / ความละเอียด", kind: "input" },
       { label: "Tolerance / MPE, ชนิดของเกณฑ์ (absolute / % of reading / % of full scale), แหล่งอ้างอิงเกณฑ์, เอกสารอ้างอิง, Decision Rule ที่อนุมัติ, ความถี่สอบเทียบ, ความถี่ Daily/Intermediate Check", kind: "input", note: "ต้องอนุมัติโดย Technical Manager ก่อนใช้จริง" },
       { label: "Severity / Occurrence / Detectability (1–5)", kind: "input" },
-      { label: "วันที่สอบเทียบล่าสุด (auto)", kind: "auto", note: "ดึงจากใบรับรอง (Sheet 02) ที่มีวันที่ล่าสุดของเครื่องมือนี้ — ถ้ายังไม่มีใบรับรองในระบบ ใช้ \"วันที่สอบเทียบล่าสุด (กรอกเอง)\" แทน" },
+      { label: "วันที่สอบเทียบล่าสุด (auto)", kind: "auto", note: "ดึงจากใบรับรองที่มีวันที่ล่าสุดของเครื่องมือนี้ — ถ้ายังไม่มีใบรับรองในระบบ ใช้ \"วันที่สอบเทียบล่าสุด (กรอกเอง)\" แทน" },
       { label: "วันครบกำหนดถัดไป / วันคงเหลือ", kind: "auto", note: "วันครบกำหนด = วันที่สอบเทียบล่าสุด + ความถี่สอบเทียบ (เดือน); วันคงเหลือ = วันครบกำหนด − วันนี้" },
       { label: "RPN (Risk Priority Number)", kind: "auto", note: "RPN = Severity × Occurrence × Detectability. ระดับความเสี่ยง: ≥64 สูง (High) · ≥27 ปานกลาง (Medium) · ต่ำกว่านั้น ต่ำ (Low)" },
       { label: "ความถี่ที่แนะนำตามความเสี่ยง", kind: "auto", note: "แนะนำจากระดับความเสี่ยง (RPN) — เป็นข้อเสนอ ไม่บังคับใช้แทนความถี่ที่อนุมัติ" },
@@ -6139,17 +6243,17 @@ const CALIBRATION_GUIDE_SHEETS = [
       { label: "Relative Error (%)", kind: "auto", note: "= Error ÷ |ค่าที่ใช้เทียบ| × 100" },
       { label: "U (absolute)", kind: "auto", note: "ถ้ารายงานเป็น % of reading จะแปลงเป็นค่าจริง = |Indication หรือ Reference| × U% ; ถ้ารายงานเป็นค่าจริงอยู่แล้วใช้ตรงๆ" },
       { label: "u_cal = U/k", kind: "auto" },
-      { label: "ผลการตรวจสอบความครบถ้วน / รายการที่ขาด", kind: "auto", note: "ตรวจว่าช่องที่จำเป็นสำหรับคำนวณ Sheet 03 (Error, U, Tolerance ฯลฯ) ครบหรือไม่" },
+      { label: "ผลการตรวจสอบความครบถ้วน / รายการที่ขาด", kind: "auto", note: "ตรวจว่าช่องที่จำเป็นสำหรับคำนวณ ผลตัดสิน (Error, U, Tolerance ฯลฯ) ครบหรือไม่" },
       { label: "รอบการสอบเทียบ (พ.ศ.)", kind: "auto", note: "แปลงจากวันที่สอบเทียบ (ค.ศ. + 543)" },
       { label: "ผู้ทบทวน / วันที่ทบทวน / สถานะ Record (Draft → Verified → Approved)", kind: "input", note: "ค่าเริ่มต้นอัตโนมัติ: ข้อมูลครบ = Verified, ไม่ครบ = Draft (จุดที่ไม่ครบเป็น Draft เสมอ)" },
     ],
   },
   {
     code: "03", name: "ผลสอบเทียบ & แนวโน้ม (Acceptance Criteria)",
-    purpose: "เทียบผลจากใบรับรอง (Sheet 02) กับเกณฑ์ที่อนุมัติ (Sheet 01) แล้วตัดสิน PASS/FAIL ตาม Decision Rule — ทุกคอลัมน์คำนวณอัตโนมัติ ยกเว้นลายเซ็นผู้ประเมิน/ผู้อนุมัติ",
+    purpose: "เทียบผลจากใบรับรอง กับเกณฑ์ที่อนุมัติ แล้วตัดสิน PASS/FAIL ตาม Decision Rule — ทุกคอลัมน์คำนวณอัตโนมัติ ยกเว้นลายเซ็นผู้ประเมิน/ผู้อนุมัติ",
     fields: [
-      { label: "Error, |Error|, U (k=2), u_cal, Applied Tolerance, ชนิด/แหล่งอ้างอิงของเกณฑ์, Applied Decision Rule", kind: "auto", note: "ดึงมาจาก Sheet 01 + Sheet 02 โดยตรง" },
-      { label: "Guard band factor (g)", kind: "input", note: "กรอกที่เครื่องมือ (Sheet 01) — ค่าเริ่มต้น = 1 ถ้าไม่ได้ตั้ง" },
+      { label: "Error, |Error|, U (k=2), u_cal, Applied Tolerance, ชนิด/แหล่งอ้างอิงของเกณฑ์, Applied Decision Rule", kind: "auto", note: "ดึงมาจากข้อมูลเครื่องมือ + ใบรับรอง โดยตรง" },
+      { label: "Guard band factor (g)", kind: "input", note: "กรอกที่เครื่องมือ — ค่าเริ่มต้น = 1 ถ้าไม่ได้ตั้ง" },
       { label: "Guard band (w) / เกณฑ์ยอมรับที่ใช้จริง (Acceptance Limit)", kind: "auto", note: "w = g × U; ขึ้นกับ Decision Rule — Simple: Limit = Tolerance | Conservative: Limit = Tolerance − U | Guard band: Limit = Tolerance − g×U" },
       { label: "Tolerance Utilization (%)", kind: "auto", note: "= |Error| ÷ Tolerance × 100" },
       { label: "TUR (Test Uncertainty Ratio)", kind: "auto", note: "= Tolerance ÷ U (k=2) — ค่าข้อมูลประกอบ ไม่ใช้ตัดสินผ่าน/ไม่ผ่าน" },
@@ -6161,7 +6265,7 @@ const CALIBRATION_GUIDE_SHEETS = [
   },
   {
     code: "04", name: "Daily / Intermediate Check",
-    purpose: "ตรวจสอบระหว่างรอบสอบเทียบ — เกณฑ์เตือน/ดำเนินการคำนวณจาก Tolerance ของ Sheet 01",
+    purpose: "ตรวจสอบระหว่างรอบสอบเทียบ — เกณฑ์เตือน/ดำเนินการคำนวณจาก Tolerance ในข้อมูลเครื่องมือ",
     fields: [
       { label: "วันที่ตรวจสอบ, พารามิเตอร์, ประเภท/รายการตรวจสอบ, Check Standard และรหัส, ค่าอ้างอิง, U ของ Check Standard, หน่วย", kind: "input" },
       { label: "ค่าอ่านครั้งที่ 1–5", kind: "input" },
@@ -6171,7 +6275,7 @@ const CALIBRATION_GUIDE_SHEETS = [
       { label: "ค่าเฉลี่ยหลังแก้ค่า (Corrected Mean)", kind: "auto", note: "= Mean + Applied Correction" },
       { label: "Bias / Relative Bias (%)", kind: "auto", note: "Bias = Corrected Mean − ค่าอ้างอิง; Relative Bias % = Bias ÷ |ค่าอ้างอิง| × 100" },
       { label: "Tolerance ที่ใช้, LWL/UWL (Warning), LAL/UAL (Action)", kind: "auto", note: "Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance" },
-      { label: "ผลการประเมิน (Result)", kind: "auto", note: "Corrected Mean เกิน Action limit → FAIL | เกิน Warning limit → WARNING | อยู่ในช่วง → PASS — ใช้ Tolerance ที่ล็อกไว้ ณ วันบันทึก แก้ Sheet 01 ภายหลังไม่เปลี่ยนผลย้อนหลัง" },
+      { label: "ผลการประเมิน (Result)", kind: "auto", note: "Corrected Mean เกิน Action limit → FAIL | เกิน Warning limit → WARNING | อยู่ในช่วง → PASS — ใช้ Tolerance ที่ล็อกไว้ ณ วันบันทึก แก้ ข้อมูลเครื่องมือ ภายหลังไม่เปลี่ยนผลย้อนหลัง" },
       { label: "ผู้ตรวจสอบ/ผู้ทบทวน, การดำเนินการเมื่อไม่ผ่าน, เลขที่ CAR/NC, หมายเหตุ", kind: "input" },
     ],
   },
@@ -6202,20 +6306,20 @@ const CALIBRATION_GUIDE_SHEETS = [
       { label: "จำนวนปีที่คาดว่าจะหลุดเกณฑ์", kind: "auto", note: "= (Tolerance − |Error|) ÷ |Drift Rate| — ยิ่งน้อยยิ่งต้องจับตา" },
       { label: "สัญญาณแนวโน้ม (Trend Flag)", kind: "auto", note: "|Drift Rate| < 2% ของ Tolerance → คงที่ (Stable); มากกว่านั้นและเป็นบวก → เพิ่มขึ้น; เป็นลบ → ลดลง" },
       { label: "ข้อเสนอการปรับความถี่สอบเทียบ", kind: "auto", note: "ถ้าคาดว่าหลุดเกณฑ์ก่อนครบรอบ → เสนอให้ลดรอบ; นอกนั้น คงรอบเดิม (เป็นข้อเสนอ ต้องทบทวน)" },
-      { label: "ผู้ทบทวน", kind: "auto", note: "ใช้ผู้ประเมินของใบรับรองนั้น (Sheet 03)" },
+      { label: "ผู้ทบทวน", kind: "auto", note: "ใช้ผู้ประเมินของใบรับรองนั้น" },
     ],
   },
   {
     code: "07", name: "สรุปสถานะเครื่องมือ (Equipment Status)",
-    purpose: "สรุปภาพรวมต่อเครื่องมือ 1 แถว จากผลสอบเทียบรอบล่าสุด (Sheet 03) และผลตรวจสอบระหว่างรอบ 90 วันล่าสุด (Sheet 04)",
+    purpose: "สรุปภาพรวมต่อเครื่องมือ 1 แถว จากผลสอบเทียบรอบล่าสุด และผลตรวจสอบระหว่างรอบ 90 วันล่าสุด",
     fields: [
-      { label: "วันที่สอบเทียบล่าสุด / วันครบกำหนดถัดไป / วันคงเหลือ / RPN", kind: "auto", note: "ดึงจาก Sheet 01 ตรงๆ" },
+      { label: "วันที่สอบเทียบล่าสุด / วันครบกำหนดถัดไป / วันคงเหลือ / RPN", kind: "auto", note: "ดึงจากข้อมูลเครื่องมือ ตรงๆ" },
       { label: "สถานะรอบสอบเทียบ", kind: "auto", note: "ปกติ / ใกล้ถึงรอบ / เลยกำหนด ตามวันคงเหลือเทียบเกณฑ์เตือนของระบบ" },
       { label: "ผลการสอบเทียบโดยรวม (Overall Decision)", kind: "auto", note: "ผลที่แย่ที่สุดในบรรดาทุกจุดของใบรับรองรอบล่าสุด (ลำดับความรุนแรง: PASS < INCOMPLETE DATA/CONDITIONAL < WARNING < FAIL)" },
       { label: "Tolerance Utilization สูงสุด", kind: "auto", note: "ค่าสูงสุดของ % Utilization ในบรรดาจุดสอบเทียบรอบล่าสุด" },
       { label: "จำนวนจุดที่ FAIL/CONDITIONAL", kind: "auto" },
       { label: "จำนวน Check ไม่ผ่านใน 90 วัน", kind: "auto", note: "นับ Intermediate Check ที่ผลคำนวณเป็น FAIL รวมกับ Daily Check ที่บันทึกผลไม่ผ่าน ภายใน 90 วันล่าสุด" },
-      { label: "สถานะการใช้งาน, ผู้อนุมัติ", kind: "input", note: "ช่องเดียวกับ \"สถานะเครื่องมือปัจจุบัน / ผู้อนุมัติให้ใช้งาน\" ใน Sheet 01 — แก้ที่ไหนก็ได้ ไม่ต้องกรอกซ้ำ; วันที่อนุมัติบันทึกให้อัตโนมัติเมื่อใส่ชื่อ" },
+      { label: "สถานะการใช้งาน, ผู้อนุมัติ", kind: "input", note: "ช่องเดียวกับ \"สถานะเครื่องมือปัจจุบัน / ผู้อนุมัติให้ใช้งาน\" ใน แก้ที่ไหนก็ได้ ไม่ต้องกรอกซ้ำ; วันที่อนุมัติบันทึกให้อัตโนมัติเมื่อใส่ชื่อ" },
       { label: "ข้อความบนป้ายสถานะ", kind: "auto", note: "= สถานะการใช้งาน + วันครบกำหนดสอบเทียบ" },
     ],
   },
@@ -6223,14 +6327,14 @@ const CALIBRATION_GUIDE_SHEETS = [
     code: "08", name: "การดำเนินการ & ผลกระทบ (Action / Impact)",
     purpose: "บันทึกเมื่อผลสอบเทียบ/ตรวจสอบไม่ผ่านเกณฑ์ และประเมินผลกระทบย้อนหลังต่อผลทดสอบที่รายงานไปแล้ว (ISO/IEC 17025:2017 ข้อ 7.10, 8.7)",
     fields: [
-      { label: "ทุกคอลัมน์ในชีตนี้", kind: "input", note: "บันทึกเชิงคุณภาพ (CAR/NC) — รายการใหม่ระบบร่างปัญหา/ผลที่ประเมินได้/ช่วงเวลาที่อาจกระทบ จากผลสอบเทียบหรือ Check ที่ไม่ผ่านล่าสุดให้ แก้ไขได้" },
+      { label: "ทุกช่องในหน้านี้", kind: "input", note: "บันทึกเชิงคุณภาพ (CAR/NC) — รายการใหม่ระบบร่างปัญหา/ผลที่ประเมินได้/ช่วงเวลาที่อาจกระทบ จากผลสอบเทียบหรือ Check ที่ไม่ผ่านล่าสุดให้ แก้ไขได้" },
     ],
   },
   {
     code: "09", name: "บันทึกการอนุมัติ (Approval Record)",
     purpose: "บันทึกการทบทวน/อนุมัติเกณฑ์ Decision Rule การใช้ Correction ความถี่ตรวจสอบ และการอนุมัติให้ใช้งานเครื่องมือ",
     fields: [
-      { label: "ทุกคอลัมน์ในชีตนี้", kind: "input", note: "ลายเซ็น/บันทึกอนุมัติ — เลือกเรื่องแล้วระบบร่างสาระสำคัญจาก Sheet 01/03 และเติมเลขที่ใบรับรองล่าสุด/ผู้จัดทำให้" },
+      { label: "ทุกช่องในหน้านี้", kind: "input", note: "ลายเซ็น/บันทึกอนุมัติ — เลือกเรื่องแล้วระบบร่างสาระสำคัญจากข้อมูลเครื่องมือ/03 และเติมเลขที่ใบรับรองล่าสุด/ผู้จัดทำให้" },
     ],
   },
 ];
@@ -6262,7 +6366,7 @@ function CalibrationGuideModal({ onClose }) {
     <Modal title="คู่มือบันทึกการสอบเทียบ — ช่องกรอกเองและช่องคำนวณอัตโนมัติ" onClose={onClose} xwide>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#E9F1FB", border: "1px solid #CFE6F5", borderRadius: 10, padding: "10px 13px", marginBottom: 14, fontSize: 12, color: "var(--teal-dark)" }}>
         <Sparkles size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>แต่ละเครื่องมือมีชีตย่อย 9 ชุดตามลำดับด้านล่าง (01–09) เรียงตามลำดับการใช้งานจริง: ตั้งเกณฑ์ (01) → บันทึกใบรับรอง (02) → ระบบตัดสินผ่าน/ไม่ผ่านให้เอง (03) → ตรวจสอบระหว่างรอบ (04) → Uncertainty Budget (05) → ดูแนวโน้ม (06) → สรุปสถานะ (07) → บันทึกการแก้ไข/ผลกระทบถ้ามี (08) → อนุมัติ (09). แตะหัวข้อเพื่อขยาย/ย่อ</span>
+        <span>แต่ละเครื่องมือมีบันทึก 9 ส่วน เรียงตามลำดับการใช้งานจริง: ตั้งเกณฑ์ → บันทึกใบรับรอง → ระบบตัดสินผ่าน/ไม่ผ่านให้เอง → ตรวจสอบระหว่างรอบ → Uncertainty Budget → ดูแนวโน้ม → สรุปสถานะ → บันทึกการแก้ไข/ผลกระทบถ้ามี → อนุมัติ. แตะหัวข้อเพื่อขยาย/ย่อ</span>
       </div>
       {CALIBRATION_GUIDE_SHEETS.map(sheet => {
         const isOpen = openCode === sheet.code;
@@ -6275,7 +6379,6 @@ function CalibrationGuideModal({ onClose }) {
                 background: isOpen ? "#F5F8F7" : "#fff", border: "none", padding: "11px 14px", cursor: "pointer",
               }}
             >
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", flexShrink: 0 }}>Sheet {sheet.code}</span>
               <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{sheet.name}</span>
               {isOpen ? <ChevronUp size={16} color="var(--muted)" /> : <ChevronDown size={16} color="var(--muted)" />}
             </button>
@@ -6736,7 +6839,6 @@ function CalibrationRecordsHub({
               borderRadius: 20, padding: "7px 12px", fontSize: 12.5, fontWeight: active ? 600 : 500,
             }}>
               <Icon size={13} /> {g.label}
-              <span style={{ fontSize: 10.5, opacity: 0.7, fontFamily: "var(--font-mono)" }}>{g.sheets}</span>
               {flag && <span style={{ width: 8, height: 8, borderRadius: "50%", background: flag.tone, boxShadow: active ? "0 0 0 2px #fff" : "none" }} />}
             </button>
           );
@@ -6856,7 +6958,7 @@ function InstrumentStatusCard({ instrument, certificates, intermediateChecks, da
   return (
     <div style={{ background: "#F5F8F7", border: "1px solid var(--line)", borderRadius: 12, padding: "12px 14px", marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)", marginBottom: 10 }}>
-        <ShieldCheck size={14} /> สรุปสถานะเครื่องมือ (Sheet 07) — คำนวณอัตโนมัติ
+        <ShieldCheck size={14} /> สรุปสถานะเครื่องมือ — คำนวณอัตโนมัติ
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 8 }}>
         {cell("รอบสอบเทียบ", `${CYCLE_LABEL[r.cycleStatus]}${r.days != null ? ` (${r.days} วัน)` : ""}`, STATUS_COLOR[r.cycleStatus])}
@@ -7108,7 +7210,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
   const unlockedIc = icForEquip.filter(c => !c.criteriaAt);
   function lockLegacyIc() {
     if (!equip || !snapshotCriteria(equip)) return;
-    if (!window.confirm(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการเก่า ด้วยเกณฑ์ที่ใช้ ณ วันตรวจของแต่ละรายการ (ตามประวัติเกณฑ์ใน Sheet 01)?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
+    if (!window.confirm(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการเก่า ด้วยเกณฑ์ที่ใช้ ณ วันตรวจของแต่ละรายการ (ตามประวัติเกณฑ์ในข้อมูลเครื่องมือ)?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
     setIntermediateChecks(intermediateChecks.map(c => (c.instrumentId === equipId && !c.criteriaAt ? { ...c, criteriaAt: snapshotCriteria(equip, c.checkDate) } : c)));
     notify(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการแล้ว`);
   }
@@ -7129,7 +7231,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
           <ChevronLeft size={14} /> กลับไปบันทึกการสอบเทียบ
         </button>
       )}
-      <TabHeader title="ตรวจเช็คเครื่องมือ" sub="Daily check และ Intermediate check ระหว่างรอบสอบเทียบ (Sheet 04) รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที" />
+      <TabHeader title="ตรวจเช็คเครื่องมือ" sub="Daily check และ Intermediate check ระหว่างรอบสอบเทียบ รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที" />
 
       {checkable.length === 0 ? (
         <EmptyState text="ยังไม่มีเครื่องมือ — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่" />
@@ -7198,7 +7300,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
               <div style={{ ...S.panel, marginBottom: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
                   <AlertTriangle size={14} color="var(--amber)" />
-                  <span style={{ fontSize: 12.5, fontWeight: 700 }}>เกณฑ์ Warning / Action Limit (Sheet 04, อ้างอิงจุดกลางช่วงใช้งาน {refBasis}{equip.calUnit ? ` ${equip.calUnit}` : ""})</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700 }}>เกณฑ์ Warning / Action Limit (อ้างอิงจุดกลางช่วงใช้งาน {refBasis}{equip.calUnit ? ` ${equip.calUnit}` : ""})</span>
                 </div>
                 <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
                   <span>LWL: <b style={{ color: "var(--amber)" }}>{lims.lwl.toFixed(4)}</b></span>
