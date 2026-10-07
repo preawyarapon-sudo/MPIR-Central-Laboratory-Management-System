@@ -1262,14 +1262,38 @@ function suggestCriteriaByType(type, equipment, excludeId) {
   };
 }
 const BOOKING_STATUS_LABEL = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ", cancelled: "ยกเลิก" };
+// ---- Reservation lifecycle ----
+// A reservation becomes "in use" when its start date/time arrives, and stays
+// in use until someone presses "ใช้งานเสร็จสิ้นแล้ว" (returnedAt) — it is never
+// finished automatically when its end date passes; past the end it shows as
+// overdue instead. Reservations that ended before this rule took effect were
+// already treated as finished by the old logic and stay that way, so old
+// records don't all reappear as overdue.
+const RESERVATION_MANUAL_RETURN_FROM = "2026-10-07";
+const nowHHMM = () => new Date().toTimeString().slice(0, 5);
+const nowStamp = () => `${todayISO()} ${nowHHMM()}`;
+function bookingStartStamp(b) { return `${b.startDate || ""} ${b.startTime || "00:00"}`; }
+function reservationEndStamp(b) { return `${b.endDate || b.startDate || ""} ${b.endTime || "23:59"}`; }
+// Date the item is due back: checkout → dueBackDate, reservation → its end.
+function bookingDueDate(b) { return b.type === "reservation" ? (b.endDate || b.startDate || "") : (b.dueBackDate || ""); }
+function isLegacyFinishedReservation(b) {
+  return b.type === "reservation" && b.status === "approved" && !b.returnedAt
+    && (b.endDate || b.startDate || "") < RESERVATION_MANUAL_RETURN_FROM;
+}
+// Approved, not finished yet, and its start has arrived.
+function isBookingInUse(b) {
+  if (b.status !== "approved" || b.returnedAt || isLegacyFinishedReservation(b)) return false;
+  if (b.type === "checkout") return true;
+  return bookingStartStamp(b) <= nowStamp();
+}
 // A more honest label than the raw status: "approved" alone doesn't say
 // whether the item has actually been returned/finished yet. Used anywhere
 // we show a live claim on equipment (conflict warnings, current-use lists).
 function bookingLiveStatusLabel(b) {
   if (b.status === "pending") return "รออนุมัติ";
   if (b.status === "approved") {
-    if (b.type === "checkout") return "มีการใช้งานอยู่";
-    return b.startDate > todayISO() ? "จองไว้แล้ว" : "มีการใช้งานอยู่";
+    if (isBookingInUse(b)) return isBookingOverdue(b) ? "เกินกำหนดคืน" : "กำลังใช้งาน";
+    return "จองไว้แล้ว";
   }
   return BOOKING_STATUS_LABEL[b.status] || "";
 }
@@ -1280,10 +1304,20 @@ const BOOKING_STATUS_COLOR = { pending: "var(--amber)", approved: "var(--green)"
 // this reports it as finished/returned instead of leaving it looking like
 // it's still "just approved" and in progress.
 function bookingHistoryStatusLabel(b) {
-  if (b.status === "approved" && b.returnedAt) {
+  if (b.status === "approved" && (b.returnedAt || isLegacyFinishedReservation(b))) {
     return b.assetType === "item" ? "คืนแล้ว" : "เสร็จสิ้นแล้ว";
   }
+  if (b.status === "approved" && isBookingInUse(b)) return isBookingOverdue(b) ? "เกินกำหนดคืน" : "กำลังใช้งาน";
+  if (b.status === "approved" && b.type === "reservation") return "จองไว้แล้ว";
   return BOOKING_STATUS_LABEL[b.status] || "";
+}
+// Colour that goes with bookingHistoryStatusLabel.
+function bookingStatusColor(b) {
+  if (b.status === "approved" && !b.returnedAt && !isLegacyFinishedReservation(b)) {
+    if (isBookingOverdue(b)) return "var(--red)";
+    if (isBookingInUse(b)) return "var(--teal)";
+  }
+  return BOOKING_STATUS_COLOR[b.status] || "var(--muted)";
 }
 
 // Normalizes a booking into a comparable {start, end} date range. A checkout
@@ -1309,7 +1343,10 @@ function bookingRange(b) {
     const cappedEnd = b.endDate && b.endDate < b.returnedAt ? b.endDate : b.returnedAt;
     return { start: b.startDate || "", end: cappedEnd };
   }
-  return { start: b.startDate || "", end: b.endDate || b.startDate || "" };
+  const end = b.endDate || b.startDate || "";
+  // Still not finished after its end date: it occupies the equipment until
+  // someone presses "ใช้งานเสร็จสิ้นแล้ว".
+  return { start: b.startDate || "", end: isBookingOverdue(b) && end < todayISO() ? todayISO() : end };
 }
 function rangesOverlap(aStart, aEnd, bStart, bEnd) {
   return aStart <= bEnd && bStart <= aEnd;
@@ -1351,16 +1388,30 @@ function findBookingConflicts(bookings, equipmentId, range, excludeId, draft = {
 function isBookingCurrent(b) {
   if (b.status !== "approved") return false;
   if (b.returnedAt) return false; // finished/returned — always history from here on
-  if (b.type === "checkout") return true;
-  return (b.endDate || b.startDate || "") >= todayISO();
+  // Reservations stay current until finished by hand (no automatic return).
+  return !isLegacyFinishedReservation(b);
 }
 function isBookingOverdue(b) {
-  return b.type === "checkout" && b.status === "approved" && !b.returnedAt && b.dueBackDate && daysUntil(b.dueBackDate) < 0;
+  if (b.status !== "approved" || b.returnedAt) return false;
+  if (b.type === "reservation") return !isLegacyFinishedReservation(b) && reservationEndStamp(b) < nowStamp();
+  return b.type === "checkout" && !!b.dueBackDate && daysUntil(b.dueBackDate) < 0;
+}
+// "เลยกำหนดคืน 2 วัน" / "เลยเวลาคืน 17:00 น." for a row.
+function overdueText(b) {
+  const d = daysUntil(bookingDueDate(b));
+  if (d < 0) return `เลยกำหนดคืน ${Math.abs(d)} วัน`;
+  return b.endTime ? `เลยเวลาคืน ${b.endTime} น.` : "เลยกำหนดคืน";
 }
 // Not yet overdue, but due back within `withinDays` — used to populate the
 // "ใกล้ถึงกำหนดคืน" (approaching due date) section of the alerts panel.
 function isBookingNearDue(b, withinDays = 2) {
-  if (!(b.type === "checkout" && b.status === "approved" && !b.returnedAt && b.dueBackDate)) return false;
+  if (b.status !== "approved" || b.returnedAt || isBookingOverdue(b)) return false;
+  if (b.type === "reservation") {
+    if (!isBookingInUse(b)) return false;
+    const d = daysUntil(bookingDueDate(b));
+    return d >= 0 && d <= withinDays;
+  }
+  if (!(b.type === "checkout" && b.dueBackDate)) return false;
   const d = daysUntil(b.dueBackDate);
   return d >= 0 && d <= withinDays;
 }
@@ -1371,6 +1422,10 @@ function equipmentBookingSummary(equipmentId, bookings) {
   const activeCheckout = live.find((b) => b.type === "checkout");
   if (activeCheckout) {
     return { busy: true, text: `ถูกยืมโดย ${activeCheckout.requestedBy || "-"}`, color: "var(--red)" };
+  }
+  const inUseReservation = live.find((b) => b.type === "reservation" && isBookingInUse(b));
+  if (inUseReservation) {
+    return { busy: true, text: `${isBookingOverdue(inUseReservation) ? "เกินกำหนดคืน · " : ""}กำลังใช้งานโดย ${inUseReservation.requestedBy || "-"}`, color: "var(--red)" };
   }
   const reservations = live.filter((b) => b.type === "reservation").sort((a, b) => a.startDate.localeCompare(b.startDate));
   if (reservations.length > 0) {
@@ -2804,9 +2859,9 @@ function BookingHistoryList({ bookings = [] }) {
                 {range(b)}{b.purpose ? ` · ${b.purpose}` : ""}
               </div>
               {b.returnedAt && <div style={{ fontSize: 11.5, color: "var(--green)", marginTop: 2 }}>คืนเมื่อ {fmtDate(String(b.returnedAt).slice(0, 10))}</div>}
-              {!b.returnedAt && overdue && <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 2 }}>เลยกำหนดคืน {fmtDate(b.dueBackDate)}</div>}
+              {!b.returnedAt && overdue && <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 2 }}>{overdueText(b)}</div>}
             </div>
-            <Tag color={BOOKING_STATUS_COLOR[b.status] || "var(--muted)"}>{bookingHistoryStatusLabel(b)}</Tag>
+            <Tag color={bookingStatusColor(b)}>{bookingHistoryStatusLabel(b)}</Tag>
           </div>
         );
       })}
@@ -2893,10 +2948,10 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
         title: BOOKING_TYPE_LABEL[bkg.type] || "จอง/ยืม", when: fmtDate(bkg.startDate), when2: timeLine,
         sortKey: (bkg.startDate || bkg.requestedAt || "") + (bkg.startTime || ""),
         who: bkg.requestedBy || "-", whoSub: bkg.purpose || "",
-        status: stText ? (bkg.returnedAt ? { text: stText, ...DONE }
-          : { text: stText, fg: BOOKING_STATUS_COLOR[bkg.status] || "#6B7A8C", bg: "#fff", line: "var(--line)" }) : null,
+        status: stText ? (bkg.returnedAt || isLegacyFinishedReservation(bkg) ? { text: stText, ...DONE }
+          : { text: stText, fg: bookingStatusColor(bkg), bg: "#fff", line: "var(--line)" }) : null,
         note: bkg.returnedAt ? { tone: "ok", icon: Undo2, text: `คืนแล้ว ${fmtDate(String(bkg.returnedAt).slice(0, 10))}${String(bkg.returnedAt).length > 10 ? ` ${String(bkg.returnedAt).slice(11, 16)}` : ""}` }
-          : overdue ? { tone: "bad", icon: AlertTriangle, text: `เลยกำหนดคืน ${fmtDate(bkg.dueBackDate)}` } : null,
+          : overdue ? { tone: "bad", icon: AlertTriangle, text: `${overdueText(bkg)} (กำหนด ${fmtDate(bookingDueDate(bkg))}${bkg.endTime ? ` ${bkg.endTime} น.` : ""})` } : null,
         onOpen: null,
       };
     }),
@@ -8996,14 +9051,14 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
           </>
         )}
         {b.endTime && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>ถึง {b.endTime} น.</div>}
-        {isBookingOverdue(b) && <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 2 }}>เลยกำหนดคืน {Math.abs(daysUntil(b.dueBackDate))} วัน</div>}
+        {isBookingOverdue(b) && <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 2 }}>{overdueText(b)}</div>}
       </div>,
       <div>
         <div style={{ fontWeight: 600 }}>{b.requestedBy || "-"}</div>
         {b.purpose && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{b.purpose}</div>}
       </div>,
       <div>
-        <Tag color={BOOKING_STATUS_COLOR[b.status]}>{bookingHistoryStatusLabel(b)}</Tag>
+        <Tag color={bookingStatusColor(b)}>{bookingHistoryStatusLabel(b)}</Tag>
         {b.status !== "pending" && b.approvedBy && (
           <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>
             {b.status === "rejected" ? "ปฏิเสธโดย" : "อนุมัติโดย"} {b.approvedBy}
@@ -9136,7 +9191,8 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
               cols={bookingCols}
               groups={[
                 { label: "เกินกำหนดคืน", color: "var(--red)", rows: shown.filter(isBookingOverdue).map(bookingRow) },
-                { label: "กำลังใช้งาน / จองอยู่", color: "var(--teal-dark)", rows: shown.filter(b => !isBookingOverdue(b)).map(bookingRow) },
+                { label: "กำลังใช้งาน", color: "var(--teal-dark)", rows: shown.filter(b => !isBookingOverdue(b) && isBookingInUse(b)).map(bookingRow) },
+                { label: "จองล่วงหน้า (ยังไม่ถึงเวลา)", color: "var(--muted)", rows: shown.filter(b => !isBookingOverdue(b) && !isBookingInUse(b)).map(bookingRow) },
               ]}
               empty="ไม่มีรายการที่ต้องคืนหรือกำลังใช้งานอยู่"
             />
@@ -9213,7 +9269,7 @@ function BookingActions({ booking: b, canApprove, currentUsername, defaultActorN
   // been returned yet, or a reservation that has already started (its
   // startDate has arrived) and hasn't been marked finished early yet. A
   // reservation that hasn't started is left to the cancel-only branch below.
-  const reservationStarted = b.type === "reservation" && b.startDate && b.startDate <= todayISO();
+  const reservationStarted = b.type === "reservation" && isBookingInUse(b);
   if (b.status === "approved" && !b.returnedAt && (b.type === "checkout" || reservationStarted)) {
     const isItem = b.assetType === "item";
     // Marking equipment as finished can be done by lab/admin OR by the
@@ -13106,7 +13162,9 @@ function UsageCalendarTab({ bookings, equipment, items, restrictToBooking, curre
                       </div>
                     )}
                     {isReservation ? (
-                      b.endDate && b.endDate !== b.startDate && (
+                      isBookingOverdue(b) ? (
+                        <div style={{ fontSize: 11, marginTop: 3, color: "var(--red)", fontWeight: 700 }}>{overdueText(b)} — กด "ใช้งานเสร็จสิ้นแล้ว" เมื่อใช้งานเสร็จ</div>
+                      ) : b.endDate && b.endDate !== b.startDate && (
                         <div style={{ fontSize: 11, marginTop: 3, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
                           จองถึง {fmtDate(b.endDate)}
                         </div>
