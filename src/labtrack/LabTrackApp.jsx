@@ -2920,8 +2920,9 @@ function CriteriaGridEditor({ equipment, setEquipment, notify, onClose }) {
                     </select>
                   </td>
                   <td style={S.td}>
-                    <select style={{ ...S.input, minWidth: 160 }} value={d.decisionRule || "simple"}
+                    <select style={{ ...S.input, minWidth: 160 }} value={d.decisionRule || ""}
                       onChange={ev => setField(e.id, "decisionRule", ev.target.value)}>
+                      <option value="">— เลือก —</option>
                       {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
                     </select>
                   </td>
@@ -4713,7 +4714,8 @@ function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
           </select>
         </Field>
         <Field label="Decision Rule">
-          <select style={S.input} value={f.certDecisionRule || sheet01?.decisionRule || "simple"} onChange={set("certDecisionRule")}>
+          <select style={S.input} value={f.certDecisionRule || ""} onChange={set("certDecisionRule")}>
+            <option value="">{sheet01?.decisionRule ? `ใช้ตามข้อมูลเครื่องมือ (${LK_RULE.find(r => r.key === sheet01.decisionRule)?.label || sheet01.decisionRule})` : "— เลือก Decision Rule —"}</option>
             {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
           </select>
         </Field>
@@ -6796,7 +6798,8 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
             </Field>
             <Field label="เอกสารอ้างอิงของเกณฑ์"><input style={S.input} value={f.referenceDocument || ""} onChange={set("referenceDocument")} /></Field>
             <Field label="Decision Rule ที่อนุมัติ">
-              <select style={S.input} value={f.decisionRule || "simple"} onChange={set("decisionRule")}>
+              <select style={S.input} value={f.decisionRule || ""} onChange={set("decisionRule")}>
+                <option value="">— เลือก Decision Rule —</option>
                 {LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
               </select>
             </Field>
@@ -6824,7 +6827,7 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
                           <input type="date" style={cell} value={h.validUntil || ""} onChange={e => upd(i, "validUntil", e.target.value)} />
                           <input type="number" step="any" style={cell} value={h.tolerance ?? ""} onChange={e => upd(i, "tolerance", e.target.value)} />
                           <select style={cell} value={h.toleranceType || "absolute"} onChange={e => upd(i, "toleranceType", e.target.value)}>{LK_TOLTYPE.map(t => <option key={t} value={t}>{t}</option>)}</select>
-                          <select style={cell} value={h.decisionRule || "simple"} onChange={e => upd(i, "decisionRule", e.target.value)}>{LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}</select>
+                          <select style={cell} value={h.decisionRule || ""} onChange={e => upd(i, "decisionRule", e.target.value)}><option value="">— เลือก —</option>{LK_RULE.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}</select>
                           <input type="number" step="any" style={cell} value={h.guardBandFactor ?? ""} disabled={h.decisionRule !== "guardband"} onChange={e => upd(i, "guardBandFactor", e.target.value)} />
                           <button type="button" style={S.smallBtn} title="ลบ" onClick={() => setHist(hist.filter((_, j) => j !== i))}><Trash2 size={12} /></button>
                         </Fragment>
