@@ -4752,6 +4752,121 @@ function TrendCharts({ equipment, certificates, trendById, query = "" }) {
   );
 }
 
+/* ---------- Action cards ----------
+   Every "do something" moment of the calibration cycle (sign the evaluation,
+   approve, confirm the usage status) opens one of these cards; the pages
+   themselves only display. */
+// Patch applied to every point of a certificate when it is signed/unsigned.
+function signoffPatch(g, field, name, clear) {
+  if (field === "approved") return { approvedBy: clear ? "" : name, approvalDate: clear ? "" : todayISO() };
+  if (clear) return { evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", criteriaAt: null };
+  const p0 = g.points[0]?.c;
+  // Evaluating locks the criteria the decision was made with.
+  const criteriaAt = ownCriteriaOf(p0)
+    ? { ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, criteriaFor(g.instrument, p0)[k] ?? ""])), capturedAt: todayISO(), asOf: p0?.calibrationDate || "" }
+    : snapshotCriteria(g.instrument, p0?.calibrationDate);
+  return { evaluatedBy: name, evaluationDate: todayISO(), criteriaAt };
+}
+function CardSummary({ rows }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 14px", fontSize: 12.5, background: "#F5F8F7", border: "1px solid var(--line)", borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}>
+      {rows.filter(Boolean).map(([k, v]) => (
+        <Fragment key={k}><span style={{ color: "var(--muted)" }}>{k}</span><span style={{ fontWeight: 500, wordBreak: "break-word" }}>{v === "" || v == null ? "-" : v}</span></Fragment>
+      ))}
+    </div>
+  );
+}
+function CardFooter({ hint, onCancel, onConfirm, confirmLabel, disabled, danger }) {
+  return (
+    <div style={{ ...S.modalFoot, marginTop: 16 }}>
+      {hint && <span style={{ fontSize: 12, color: "var(--muted)" }}>{hint}</span>}
+      <div style={{ flex: 1 }} />
+      <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+      <button style={{ ...S.primaryBtn, ...(danger ? { background: "var(--red)" } : {}), opacity: disabled ? 0.5 : 1 }} disabled={disabled} onClick={onConfirm}>{confirmLabel}</button>
+    </div>
+  );
+}
+// Sign (or withdraw) the evaluation / approval of one certificate.
+// g = { instrument, certificateNo, points: [{ c }] }
+function SignOffCard({ g, field, clear = false, canApprove = true, currentDisplayName = "", onCancel, onConfirm }) {
+  const [name, setName] = useState(currentDisplayName || "");
+  const [checked, setChecked] = useState(false);
+  const p0 = g.points[0]?.c || {};
+  const sum = latestCalibrationSummary(g.instrument, g.points.map(p => p.c));
+  const crit = criteriaFor(g.instrument, p0);
+  const rule = LK_RULE.find(r => r.key === crit?.decisionRule)?.label || crit?.decisionRule || "";
+  const isApprove = field === "approved";
+  const already = isApprove ? p0.approvedBy : p0.evaluatedBy;
+  const blocked = clear ? ""
+    : isApprove && !canApprove ? "เฉพาะผู้มีสิทธิ์อนุมัติ (Technical Manager)"
+    : isApprove && !p0.evaluatedBy ? "ต้องลงชื่อผู้ประเมินก่อน"
+    : !name.trim() ? `ระบุชื่อผู้${isApprove ? "อนุมัติ" : "ประเมิน"}`
+    : !checked ? "ยืนยันว่าตรวจผลแล้ว" : "";
+  const title = clear ? `ยกเลิกการ${isApprove ? "อนุมัติ" : "ลงชื่อประเมิน"}` : isApprove ? "อนุมัติผลสอบเทียบ" : "ลงชื่อประเมินผลสอบเทียบ";
+  return (
+    <Modal title={`${title} — ${g.certificateNo || "-"}`} wide onClose={onCancel}>
+      <CardSummary rows={[
+        ["เครื่องมือ", `${g.instrument?.code || ""} — ${g.instrument?.name || ""}`],
+        ["ใบรับรอง", `${g.certificateNo || "-"} · สอบเทียบ ${fmtDate(p0.calibrationDate)}${p0.provider ? ` · ${p0.provider}` : ""}`],
+        ["จำนวนจุด", `${g.points.length} จุด`],
+        ["เกณฑ์ที่ใช้ตัดสิน", numOrNull(crit?.tolerance) != null ? `± ${crit.tolerance}${g.instrument?.calUnit ? ` ${g.instrument.calUnit}` : ""} (${crit.toleranceType || "absolute"})${rule ? ` · ${rule}` : ""}` : "ยังไม่ได้กำหนด"],
+        ["ผลตัดสิน", sum ? `${sum.adjusted ? "หลังปรับ " : ""}${sum.decision}${sum.asFoundDecision ? ` · ก่อนปรับ ${sum.asFoundDecision}` : ""}` : "-"],
+        isApprove && !clear && ["ผู้ประเมิน", p0.evaluatedBy ? `${p0.evaluatedBy}${p0.evaluationDate ? ` · ${fmtDate(p0.evaluationDate)}` : ""}` : "ยังไม่ได้ลงชื่อ"],
+        clear && [isApprove ? "อนุมัติโดย" : "ประเมินโดย", already],
+      ]} />
+      {clear ? (
+        <div style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+          {isApprove
+            ? "การอนุมัติของใบรับรองนี้จะถูกยกเลิก ต้องอนุมัติใหม่"
+            : "การลงชื่อประเมินและการอนุมัติของใบรับรองนี้จะถูกยกเลิก และปลดล็อกเกณฑ์ ต้องลงชื่อประเมินและอนุมัติใหม่"}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          <Field label={isApprove ? "ชื่อผู้อนุมัติ (Technical Manager)" : "ชื่อผู้ประเมิน"}>
+            <input style={S.input} value={name} onChange={e => setName(e.target.value)} placeholder="ชื่อ-นามสกุล" />
+          </Field>
+          <Field label="วันที่"><div style={{ ...S.input, background: "#F5F8F7", boxSizing: "border-box" }}>{fmtDate(todayISO())}</div></Field>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12.5, cursor: "pointer" }}>
+            <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} style={{ marginTop: 3 }} />
+            <span>{isApprove
+              ? "ทบทวนผลการประเมินและเกณฑ์ที่ใช้แล้ว อนุมัติผลตามที่แสดง"
+              : "ตรวจข้อมูลทุกจุดเทียบกับใบรับรองต้นฉบับ และเกณฑ์ที่ใช้ตัดสินแล้ว"}</span>
+          </label>
+        </div>
+      )}
+      <CardFooter hint={blocked} onCancel={onCancel} onConfirm={() => onConfirm(name.trim())} disabled={!!blocked} danger={clear}
+        confirmLabel={clear ? "ยกเลิกการลงชื่อ" : isApprove ? "อนุมัติ" : "ลงชื่อประเมิน"} />
+    </Modal>
+  );
+}
+// Confirm the instrument's usage status after a calibration round.
+function StatusConfirmCard({ instrument, summary, currentDisplayName = "", onCancel, onSave }) {
+  const [status, setStatus] = useState(usageStatusOf(instrument) || "");
+  const [by, setBy] = useState(authorizedByOf(instrument) || currentDisplayName || "");
+  const blocked = !status ? "เลือกสถานะการใช้งาน" : !by.trim() ? "ระบุชื่อผู้อนุมัติ" : "";
+  return (
+    <Modal title="ยืนยันสถานะการใช้งาน" wide onClose={onCancel}>
+      <CardSummary rows={[
+        ["เครื่องมือ", `${instrument.code || ""} — ${instrument.name || ""}`],
+        ["ผลสอบเทียบล่าสุด", summary ? `${summary.adjusted ? "หลังปรับ " : ""}${summary.decision}${summary.asFoundDecision ? ` · ก่อนปรับ ${summary.asFoundDecision}` : ""}` : "ยังไม่มีใบรับรอง"],
+        ["สถานะปัจจุบัน", usageStatusOf(instrument) ? `${usageStatusOf(instrument)}${authorizedByOf(instrument) ? ` · ${authorizedByOf(instrument)}` : ""}${instrument.statusApprovalDate ? ` · ${fmtDate(instrument.statusApprovalDate)}` : ""}` : "ยังไม่ประเมิน"],
+      ]} />
+      <div style={{ display: "grid", gap: 10 }}>
+        <Field label="สถานะการใช้งาน">
+          <select style={S.input} value={status} onChange={e => setStatus(e.target.value)}>
+            <option value="">- เลือก -</option>
+            {LK_STATUS_ALL.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </Field>
+        <Field label="ผู้อนุมัติ"><input style={S.input} value={by} onChange={e => setBy(e.target.value)} placeholder="ชื่อ-นามสกุล" /></Field>
+        <Field label="วันที่ยืนยัน"><div style={{ ...S.input, background: "#F5F8F7", boxSizing: "border-box" }}>{fmtDate(todayISO())}</div></Field>
+      </div>
+      <CardFooter hint={blocked} onCancel={onCancel} disabled={!!blocked} confirmLabel="ยืนยันสถานะ"
+        onConfirm={() => onSave({ currentStatus: status, authorizedBy: by.trim(), statusApprovalDate: todayISO() })} />
+    </Modal>
+  );
+}
+
 function CalibrationResultsTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", canApprove = true }) {
   const [q, setQ] = useState("");
   const byId = useMemo(() => Object.fromEntries(equipment.map(e => [e.id, e])), [equipment]);
@@ -4801,24 +4916,16 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
     );
   };
 
-  function sign(g, field, clear = false) {
-    let name = "";
-    if (!clear) {
-      name = currentDisplayName || (window.prompt(field === "approved" ? "ชื่อผู้อนุมัติ (Technical Manager)" : "ชื่อผู้ประเมิน") || "").trim();
-      if (!name) return;
-    }
+  // Signing happens in a card (SignOffCard), never in one click.
+  const [signDlg, setSignDlg] = useState(null); // { g, field, clear }
+  function sign(g, field, clear = false) { setSignDlg({ g, field, clear }); }
+  function confirmSign(name) {
+    const { g, field, clear } = signDlg;
     const ids = new Set(g.points.map(p => p.c.id));
-    // Evaluating locks the criteria the decision was made with; clearing the
-    // evaluation unlocks them (and withdraws the approval that relied on it).
-    const patch = field === "approved"
-      ? { approvedBy: name, approvalDate: clear ? "" : todayISO() }
-      : clear
-        ? { evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", criteriaAt: null }
-        : { evaluatedBy: name, evaluationDate: todayISO(), criteriaAt: ownCriteriaOf(g.points[0]?.c)
-            ? { ...Object.fromEntries(CRITERIA_KEYS.map(k => [k, criteriaFor(g.instrument, g.points[0].c)[k] ?? ""])), capturedAt: todayISO(), asOf: g.points[0].c.calibrationDate || "" }
-            : snapshotCriteria(g.instrument, g.points[0]?.c.calibrationDate) };
+    const patch = signoffPatch(g, field, name, clear);
     setCertificates(certificates.map(c => ids.has(c.id) ? { ...c, ...patch } : c));
     notify(clear ? "ยกเลิกการลงชื่อแล้ว" : field === "approved" ? `อนุมัติผลใบรับรอง ${g.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${g.certificateNo || "-"} แล้ว`);
+    setSignDlg(null);
   }
   const signState = (g, byKey, dateKey) => {
     const first = g.points[0]?.c[byKey] || "";
@@ -4828,6 +4935,10 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
 
   return (
     <div>
+      {signDlg && (
+        <SignOffCard g={signDlg.g} field={signDlg.field} clear={signDlg.clear} canApprove={canApprove}
+          currentDisplayName={currentDisplayName} onCancel={() => setSignDlg(null)} onConfirm={confirmSign} />
+      )}
       <div style={S.detailHead}>
         <div><h2 style={S.h2}>ผลสอบเทียบและแนวโน้ม (Acceptance &amp; Trend)</h2><p style={S.h2sub}>คำนวณอัตโนมัติ ไม่ต้องกรอก · ลงชื่อประเมิน/อนุมัติครั้งเดียวต่อใบรับรอง · ชี้ที่ผลตัดสินเพื่อดูเหตุผล</p></div>
       </div>
@@ -4872,7 +4983,7 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                         ) : (
                           // Approval is the Technical Manager's decision — only users with
                           // approval rights (same permission as Daily check approval) can sign it.
-                          <button style={{ ...S.smallBtn, opacity: evald && canApprove ? 1 : 0.5 }} disabled={!evald || !canApprove}
+                          <button style={{ ...S.smallBtn, opacity: evald && canApprove ? 1 : 0.5 }} disabled={!evald}
                             title={!canApprove ? "เฉพาะผู้มีสิทธิ์อนุมัติ (Technical Manager)" : evald ? "" : "ลงชื่อผู้ประเมินก่อน"}
                             onClick={() => sign(g, "approved")}><Stamp size={12} /> อนุมัติ (Technical Manager)</button>
                         )}
@@ -6416,6 +6527,8 @@ function CalibrationRecordsHub({
   const [selectedInstrumentId, setSelectedInstrumentId] = useState(() => (equipment.some(e => e.id === mem.instrumentId) ? mem.instrumentId : null));
   // Open page (sheet key); null = default for the chosen instrument.
   const [view, setView] = useState(() => mem.view);
+  // Step cards opened from the cycle bar ("ไปทำขั้นนี้") or the status panel.
+  const [stepCard, setStepCard] = useState(null); // { kind: "sign", field } | { kind: "status" }
   const [lastLeaf, setLastLeaf] = useState({}); // remembers the switch position per tab
   const [q, setQ] = useState(mem.q);
   const [typeFilter, setTypeFilter] = useState(mem.typeFilter);
@@ -6766,6 +6879,12 @@ function CalibrationRecordsHub({
       todo: !usageStatusOf(instrument || {}) || !authorizedByOf(instrument || {}) ? "ยังไม่ได้ระบุสถานะ/ผู้อนุมัติ" : "ยืนยันสถานะอีกครั้งหลังใบรับรองรอบล่าสุด" },
   ];
   const nextStep = CYCLE_STEPS.find(st => !st.done);
+  const latestGroup = instrument && latestPts.length ? { instrument, certificateNo: latestPts[0].certificateNo || "", points: latestPts.map(c => ({ c })) } : null;
+  function goStep(st) {
+    setView(st.view);
+    if ((st.key === "evaluate" || st.key === "approve") && latestGroup) setStepCard({ kind: "sign", field: st.key === "approve" ? "approved" : "evaluated" });
+    else if (st.key === "status" && instrument) setStepCard({ kind: "status" });
+  }
   const doneCount = CYCLE_STEPS.filter(st => st.done).length;
   const scopedCertSetter = makeScopedListSetter(certificates, setCertificates, selectedInstrumentId);
   const current = view || (gaps.length ? "instrument" : "certificates");
@@ -6829,7 +6948,7 @@ function CalibrationRecordsHub({
               <span style={{ fontWeight: 700, color: "var(--ink)" }}>ขั้นถัดไป: {nextStep.label}</span>
               <span style={{ color: "var(--muted)" }}> — {nextStep.todo}</span>
             </div>
-            <button style={{ ...S.primaryBtn, padding: "6px 12px", fontSize: 12.5 }} onClick={() => setView(nextStep.view)}>
+            <button style={{ ...S.primaryBtn, padding: "6px 12px", fontSize: 12.5 }} onClick={() => goStep(nextStep)}>
               ไปทำขั้นนี้ <ChevronRight size={14} />
             </button>
           </>) : (
@@ -6837,6 +6956,26 @@ function CalibrationRecordsHub({
           )}
         </div>
       </div>
+      {stepCard?.kind === "sign" && latestGroup && (
+        <SignOffCard g={latestGroup} field={stepCard.field} canApprove={canApprove} currentDisplayName={currentDisplayName}
+          onCancel={() => setStepCard(null)}
+          onConfirm={(name) => {
+            const ids = new Set(latestPts.map(c => c.id));
+            const patch = signoffPatch(latestGroup, stepCard.field, name, false);
+            scopedCertSetter(scopedCertificates.map(c => ids.has(c.id) ? { ...c, ...patch } : c));
+            notify(stepCard.field === "approved" ? `อนุมัติผลใบรับรอง ${latestGroup.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${latestGroup.certificateNo || "-"} แล้ว`);
+            setStepCard(null);
+          }} />
+      )}
+      {stepCard?.kind === "status" && instrument && (
+        <StatusConfirmCard instrument={instrument} summary={calSum} currentDisplayName={currentDisplayName}
+          onCancel={() => setStepCard(null)}
+          onSave={(patch) => {
+            setEquipment(equipment.map(e => e.id === instrument.id ? { ...e, ...patch } : e));
+            notify("ยืนยันสถานะการใช้งานแล้ว");
+            setStepCard(null);
+          }} />
+      )}
       {/* Sections: plain underline tabs, so they read as places to go,
           not as more steps. */}
       <div style={{ display: "flex", gap: 2, marginBottom: 14, borderBottom: "1px solid var(--line)", overflowX: "auto" }}>
@@ -6866,7 +7005,7 @@ function CalibrationRecordsHub({
       {current === "instrument" && instrument && (<>
         <InstrumentStatusCard
           instrument={instrument} certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
-          setEquipment={makeScopedEquipmentSetter(equipment, setEquipment)} notify={notify}
+          onConfirmStatus={() => setStepCard({ kind: "status" })}
         />
         <InstrumentMasterTab
           key={instrument.id}
@@ -6957,10 +7096,9 @@ function HubSection({ children }) {
 // Sheet 07 for one instrument: the summary table had a single row once the
 // hub is scoped to one instrument, so it is shown as a card on top of the
 // instrument page instead. Status/approver are the same fields as Sheet 01.
-function InstrumentStatusCard({ instrument, certificates, intermediateChecks, dailyChecks, setEquipment, notify }) {
+function InstrumentStatusCard({ instrument, certificates, intermediateChecks, dailyChecks, onConfirmStatus }) {
   const r = computeEquipmentStatusRows([instrument], certificates, intermediateChecks, dailyChecks)[0];
   const CYCLE_LABEL = { ok: "ปกติ", warn: "ใกล้ถึงกำหนด", danger: "เลยกำหนด", none: "-" };
-  const set = (patch) => { setEquipment([{ ...instrument, ...patch }]); notify("บันทึกแล้ว"); };
   const cell = (label, value, color) => (
     <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px" }}>
       <div style={{ fontSize: 11, color: "var(--muted)" }}>{label}</div>
@@ -6981,24 +7119,13 @@ function InstrumentStatusCard({ instrument, certificates, intermediateChecks, da
         {cell("Check ไม่ผ่าน (90 วัน)", r.failedChecks90, r.failedChecks90 ? "var(--red)" : undefined)}
         {cell("RPN", r.rpn ?? "-")}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
-        <Field label="สถานะการใช้งาน">
-          <select style={S.input} value={usageStatusOf(instrument)} onChange={ev => set({ currentStatus: ev.target.value })}>
-            <option value="">- ยังไม่ประเมิน -</option>
-            {LK_STATUS_ALL.map(u => <option key={u} value={u}>{u}</option>)}
-          </select>
-        </Field>
-        <Field label={`ผู้อนุมัติ${instrument.statusApprovalDate && authorizedByOf(instrument) ? ` (ยืนยันล่าสุด ${fmtDate(instrument.statusApprovalDate)})` : ""}`}>
-          <div style={{ display: "flex", gap: 6 }}>
-            <CommitInput style={{ ...S.input, flex: 1 }} placeholder="ชื่อผู้อนุมัติ" value={authorizedByOf(instrument)}
-              onCommit={v => set({ authorizedBy: v, statusApprovalDate: v ? todayISO() : "" })} />
-            {/* Same approver confirming again after a new certificate: stamps today's
-                date without retyping the name (typing the same name saved nothing). */}
-            {authorizedByOf(instrument) && instrument.statusApprovalDate !== todayISO() && (
-              <button type="button" style={{ ...S.smallBtn, flexShrink: 0 }} onClick={() => set({ statusApprovalDate: todayISO() })}>ยืนยันวันนี้</button>
-            )}
-          </div>
-        </Field>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 10, background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 12px" }}>
+        <div style={{ flex: "1 1 240px", minWidth: 0, fontSize: 12.5 }}>
+          <span style={{ color: "var(--muted)" }}>สถานะการใช้งาน: </span>
+          <b>{usageStatusOf(instrument) || "ยังไม่ประเมิน"}</b>
+          {authorizedByOf(instrument) && <span style={{ color: "var(--muted)" }}> · อนุมัติโดย {authorizedByOf(instrument)}{instrument.statusApprovalDate ? ` · ${fmtDate(instrument.statusApprovalDate)}` : ""}</span>}
+        </div>
+        {onConfirmStatus && <button style={S.smallBtn} onClick={onConfirmStatus}><Stamp size={12} /> ยืนยันสถานะ</button>}
       </div>
     </div>
   );
