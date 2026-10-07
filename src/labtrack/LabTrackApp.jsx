@@ -150,15 +150,26 @@ const ANALYSIS_DEADLINE_COLOR = { done: "var(--green)", late: "var(--red)", warn
 // customer view: knowing the job number is what proves it's your own job,
 // so there's no browsable list of every job here, and "queue position" is
 // always a count, never another job's number.
-function AnalysisTrackView({ jobs }) {
+function AnalysisTrackView({ jobs: allJobs }) {
   const [query, setQuery] = useState(DEFAULT_JOB_PREFIX);
   const [searched, setSearched] = useState(false);
+  const isMobile = useIsMobile();
+  const [showAllParams, setShowAllParams] = useState(false);
+  // Year filter for the overview (Buddhist year of the date the job came in).
+  // The job search below always looks across every year.
+  const yearOf = (j) => (j.createdAt ? new Date(j.createdAt).getFullYear() + 543 : null);
+  const years = useMemo(() => [...new Set(allJobs.map(yearOf).filter(Boolean))].sort((a, b) => b - a), [allJobs]);
+  const [year, setYear] = useState(() => {
+    const thisYear = new Date().getFullYear() + 543;
+    return allJobs.some(j => yearOf(j) === thisYear) ? String(thisYear) : "all";
+  });
+  const jobs = useMemo(() => (year === "all" ? allJobs : allJobs.filter(j => String(yearOf(j)) === year)), [allJobs, year]);
 
   const job = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return null;
-    return jobs.find(j => (j.jobNo || "").toLowerCase() === q) || null;
-  }, [jobs, query]);
+    return allJobs.find(j => (j.jobNo || "").toLowerCase() === q) || null;
+  }, [allJobs, query]);
 
   const stats = job ? computeAnalysisJobStats(job) : null;
 
@@ -193,16 +204,60 @@ function AnalysisTrackView({ jobs }) {
         tally[key] = (tally[key] || 0) + 1;
       }
     }
-    return Object.entries(tally).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    return Object.entries(tally).sort((a, b) => b[1] - a[1]);
   }, [jobs]);
+  const shownParams = showAllParams ? topParams : topParams.slice(0, 5);
   const maxParamCount = topParams.length ? topParams[0][1] : 1;
 
   return (
     <div>
-      <TabHeader title="ติดตามงานวิเคราะห์" sub="ภาพรวมงานวิเคราะห์ของห้องปฏิบัติการ และค้นหาความคืบหน้างานของคุณ" />
+      {(() => {
+        const yearSelect = years.length > 0 && (
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid var(--line)", borderRadius: 10, padding: "0 10px", height: 34, flexShrink: 0 }}>
+            <CalendarClock size={14} color="var(--muted)" />
+            <select value={year} onChange={e => setYear(e.target.value)} aria-label="ปี"
+              style={{ border: "none", background: "transparent", fontFamily: "inherit", fontSize: 13, color: "var(--ink)", outline: "none", cursor: "pointer" }}>
+              {years.map(y => <option key={y} value={String(y)}>พ.ศ. {y}</option>)}
+              <option value="all">ทุกปี</option>
+            </select>
+          </label>
+        );
+        return (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
+              <h2 style={S.h2}>ติดตามงานวิเคราะห์</h2>
+              {yearSelect}
+            </div>
+            <div style={S.h2sub}>ภาพรวมงานวิเคราะห์ของห้องปฏิบัติการ และค้นหาความคืบหน้างานของคุณ</div>
+          </div>
+        );
+      })()}
 
+      {jobs.length === 0 && allJobs.length > 0 && <div style={{ ...S.notesBox, marginBottom: 16, fontSize: 12.5 }}>ไม่มีงานในปีที่เลือก</div>}
       {jobs.length > 0 && (
         <>
+          {isMobile ? (
+            // Phones: 2×2 cards with an icon tile, like a native app.
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
+              {[
+                { label: "งานทั้งหมด", value: overview.total, icon: ClipboardList, color: "var(--teal-dark)", tint: "#E9F1FB" },
+                { label: "กำลังวิเคราะห์", value: overview.running, icon: FlaskConical, color: "#D9941E", tint: "#FDF3E3" },
+                { label: "เสร็จสิ้นแล้ว", value: overview.complete, icon: CheckCircle2, color: "var(--green)", tint: "#E7F5EC" },
+                { label: "ล่าช้า", value: buckets.late, icon: AlertTriangle, color: "var(--red)", tint: "#FBEAE8" },
+              ].map((c, i) => {
+                const Icon = c.icon;
+                return (
+                  <div key={i} style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, padding: "12px 12px", display: "flex", gap: 10, alignItems: "flex-start", minWidth: 0 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: c.tint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={19} color={c.color} /></div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12, color: "#4B5C72", whiteSpace: "nowrap" }}>{c.label}</div>
+                      <div style={{ fontSize: 24, fontWeight: 700, color: c.color, lineHeight: 1.2, marginTop: 2 }}>{c.value}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
           <div style={S.statGrid} className="statGrid analysisOverviewGrid">
             {[
               { label: "งานทั้งหมด", value: overview.total, icon: ClipboardList, color: "var(--teal)", tint: "#E9F1FB" },
@@ -228,11 +283,12 @@ function AnalysisTrackView({ jobs }) {
               );
             })}
           </div>
+          )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px,1fr) minmax(260px,1.3fr)", gap: 14, marginBottom: 24 }} className="ltAnalysisOverviewGrid">
-            <div style={S.panel}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(260px,1fr) minmax(260px,1.3fr)", gap: isMobile ? 12 : 14, marginBottom: 24 }} className="ltAnalysisOverviewGrid">
+            <div style={{ ...S.panel, ...(isMobile ? { borderRadius: 14 } : {}) }}>
               <div style={S.panelTitle}>สถานะงานโดยรวม</div>
-              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>สัดส่วนงานทั้งหมดในระบบตามสถานะ</div>
+              {!isMobile && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>สัดส่วนงานทั้งหมดในระบบตามสถานะ</div>}
               <DonutChart
                 segs={[
                   { value: overview.waiting, color: "var(--muted)", label: "รอดำเนินการ" },
@@ -242,20 +298,29 @@ function AnalysisTrackView({ jobs }) {
                 centerLabel="ทั้งหมด"
               />
             </div>
-            <div style={S.panel}>
-              <div style={S.panelTitle}>พารามิเตอร์ที่มีงานมากที่สุด</div>
-              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, marginBottom: 12 }}>นับรวมทุกงานในระบบ ไม่ระบุเลขทะเบียนรายตัว</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ ...S.panel, ...(isMobile ? { borderRadius: 14 } : {}) }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div style={S.panelTitle}>พารามิเตอร์ที่มีงานมากที่สุด</div>
+                {topParams.length > 5 && (
+                  <button type="button" onClick={() => setShowAllParams(!showAllParams)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 3, background: "#EEF4FC", color: "var(--teal-dark)", border: "none", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                    {showAllParams ? "แสดง 5 อันดับ" : `ดูทั้งหมด (${topParams.length})`} <ChevronRight size={13} style={{ transform: showAllParams ? "rotate(-90deg)" : "none" }} />
+                  </button>
+                )}
+              </div>
+              {!isMobile && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>นับรวมทุกงานในระบบ ไม่ระบุเลขทะเบียนรายตัว</div>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
                 {topParams.length === 0 && <div style={{ fontSize: 12, color: "var(--muted)" }}>ยังไม่มีข้อมูล</div>}
-                {topParams.map(([name, count]) => (
-                  <div key={name}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
-                      <span>{name}</span>
-                      <span style={{ fontFamily: "var(--font-mono)", color: "var(--muted)" }}>{count}</span>
+                {shownParams.map(([name, count], i) => (
+                  <div key={name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ width: 24, height: 24, borderRadius: "50%", background: "#EEF2F6", color: "#4B5C72", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, marginBottom: 4 }}>{name}</div>
+                      <div style={{ height: 7, borderRadius: 4, background: "#EEF2F6", overflow: "hidden" }}>
+                        <div style={{ width: `${Math.round((count / maxParamCount) * 100)}%`, height: "100%", background: "var(--teal)", borderRadius: 4 }} />
+                      </div>
                     </div>
-                    <div style={{ height: 8, borderRadius: 4, background: "#EEF2F6", overflow: "hidden" }}>
-                      <div style={{ width: `${Math.round((count / maxParamCount) * 100)}%`, height: "100%", background: "var(--teal)" }} />
-                    </div>
+                    <span style={{ fontSize: 12.5, color: "var(--ink)", minWidth: 28, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{count}</span>
                   </div>
                 ))}
               </div>
@@ -311,7 +376,7 @@ function AnalysisTrackView({ jobs }) {
           <div style={{ ...S.panelTitle, marginBottom: 10 }}>รายละเอียดแต่ละพารามิเตอร์</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {(job.parameters || []).map((p) => {
-              const q = p.status === ANALYSIS_STATUS.WAIT ? analysisParamQueuePosition(jobs, p.name, job.jobNo) : null;
+              const q = p.status === ANALYSIS_STATUS.WAIT ? analysisParamQueuePosition(allJobs, p.name, job.jobNo) : null;
               return (
                 <div key={p.id} style={{ ...S.eqCard, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                   <span style={{ fontSize: 13.5 }}>{p.name}</span>
@@ -1522,6 +1587,11 @@ const SEED_ITEMS = [
 const REQUEST_ANALYSIS_LINK_ADMIN = { key: "requestAnalysis", label: "ขอรับบริการวิเคราะห์", icon: ExternalLink, external: "https://centrallab-mpir.mitrphol.com/login/admin", featured: true };
 const REQUEST_ANALYSIS_LINK = { key: "requestAnalysis", label: "ขอรับบริการวิเคราะห์", icon: ExternalLink, external: "https://centrallab-mpir.mitrphol.com/", featured: true };
 
+// Short labels for the phone bottom bar (the sidebar keeps the full names).
+const BOTTOM_NAV_SHORT = {
+  analysisTracking: "งานวิเคราะห์", requestAnalysis: "ขอรับบริการ", bookings: "จอง/ยืม", usageCalendar: "ปฏิทิน",
+  catalog: "เครื่องมือ", dailyCheck: "ตรวจเช็ค", calibrationRecords: "สอบเทียบ", consumables: "พัสดุ", purchase: "ใบขอซื้อ",
+};
 const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   REQUEST_ANALYSIS_LINK_ADMIN,
@@ -1729,6 +1799,8 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
     ? bookings.filter(b => isBookingCurrent(b) && (b.requestedByUsername || b.requestedBy) === currentUsername)
     : [];
   const myOverdueCount = myCurrentBookings.filter(isBookingOverdue).length;
+  const myInUseCount = myCurrentBookings.filter(isBookingInUse).length;
+  const isPhone = useIsMobile();
   // Restricted accounts' sidebar badge must only ever count THIS account's
   // own pending requests — never the company-wide pending count — both to
   // match what the bookings page itself shows them, and so the badge never
@@ -1830,7 +1902,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
 
         {/* main */}
         <main style={S.main} className="ltMain">
-          {restrictToBooking && tab !== "bookings" && myCurrentBookings.length > 0 && (
+          {restrictToBooking && tab !== "bookings" && (isPhone ? myOverdueCount > 0 : myInUseCount > 0) && (
             <div
               style={{
                 ...S.notesBox, marginBottom: 14, display: "flex", alignItems: "center",
@@ -1840,8 +1912,8 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             >
               <span style={{ fontSize: 12.5, fontWeight: 600, color: myOverdueCount > 0 ? "var(--red)" : "var(--ink)" }}>
                 {myOverdueCount > 0
-                  ? `คุณมี ${myCurrentBookings.length} รายการที่ต้องคืน (เลยกำหนดแล้ว ${myOverdueCount} รายการ)`
-                  : `คุณมี ${myCurrentBookings.length} รายการที่ต้องคืนหลังใช้เสร็จ`}
+                  ? `คุณมี ${myInUseCount} รายการที่ต้องคืน (เลยกำหนดแล้ว ${myOverdueCount} รายการ)`
+                  : `คุณมี ${myInUseCount} รายการที่ต้องคืนหลังใช้เสร็จ`}
               </span>
               <button style={S.smallBtn} onClick={() => { setTab("bookings"); setBookingsFocusView("current"); }}>
                 ไปที่รายการที่ต้องคืน <ChevronRight size={13} />
@@ -1940,7 +2012,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
                   <Icon size={19} strokeWidth={active ? 2.4 : 2} />
                   {count > 0 && <span className="ltBottomNavBadge">{count}</span>}
                 </span>
-                <span style={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{n.label}</span>
+                <span style={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{BOTTOM_NAV_SHORT[n.key] || n.label}</span>
               </button>
             );
           })}
@@ -8941,9 +9013,9 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   const ownOverdueAll = ownCurrentAll.filter(isBookingOverdue);
   const ownNearDueAll = ownCurrentAll.filter(b => isBookingNearDue(b));
   const ownNormalCurrentAll = ownCurrentAll.filter(b => !isBookingOverdue(b));
-  const ownDueDates = ownNormalCurrentAll.map(b => b.dueBackDate).filter(Boolean).sort();
+  const ownDueDates = ownNormalCurrentAll.filter(isBookingInUse).map(bookingDueDate).filter(Boolean).sort();
   const nearestDueLabel = ownDueDates.length ? fmtDate(ownDueDates[0]) : null;
-  const worstOverdueDays = ownOverdueAll.length ? Math.max(...ownOverdueAll.map(b => Math.abs(daysUntil(b.dueBackDate)))) : null;
+  const worstOverdueDays = ownOverdueAll.length ? Math.max(...ownOverdueAll.map(b => Math.abs(Math.min(0, daysUntil(bookingDueDate(b)))))) : null;
 
   // Counts for the two merged read-mostly sub-pages below — these are
   // always company-wide (not ownOnly), since "what's busy right now" and
@@ -9088,6 +9160,89 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
     ];
   }
 
+  // ---- Phones: the list below the original header/summary/tabs is shown
+  // as cards (photo + icon rows) instead of a squeezed table. ----
+  const assetOf = (b) => (b.assetType === "item" ? items : equipment).find(x => x.id === b.equipmentId);
+  const cardRow = (Icon, children, color) => (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 7, fontSize: 12.5, color: color || "#3B4E66", minWidth: 0 }}>
+      <Icon size={14} color={color || "#5B7A96"} style={{ flexShrink: 0, marginTop: 2 }} /><span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{children}</span>
+    </div>
+  );
+  const cardPill = (text, fg, bg, line) => <span style={{ display: "inline-flex", alignItems: "center", background: bg, color: fg, border: `1px solid ${line}`, borderRadius: 999, padding: "2px 10px", fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap" }}>{text}</span>;
+  const statusPill = (b) => {
+    const label = bookingHistoryStatusLabel(b);
+    if (isBookingOverdue(b)) return cardPill(label, "#C6493B", "#FDF1F1", "#F2C4C4");
+    if (isBookingInUse(b)) return cardPill(label, "#A86A00", "#FFF6E0", "#F3DDA5");
+    if (b.status === "pending") return cardPill(label, "#A86A00", "#fff", "#F3DDA5");
+    if (b.status === "approved" && !isBookingCurrent(b)) return cardPill(label, "#1E8A57", "#EAF7F0", "#BFE6D0");
+    if (b.status === "approved") return cardPill(label, "#1D5FB8", "#EAF2FD", "#BFD5F3");
+    return cardPill(label, "#6B7A8C", "#F3F6F9", "#DCE3EA");
+  };
+  function bookingCard(b) {
+    const asset = assetOf(b);
+    const over = isBookingOverdue(b);
+    const conflicts = (b.status === "pending" || isBookingCurrent(b))
+      ? findBookingConflicts(bookings, b.equipmentId, bookingRange(b), b.id, { assetType: b.assetType, startTime: b.startTime, endTime: b.endTime }) : [];
+    const endLine = b.returnedAt
+      ? <>คืนแล้ว {fmtDate(String(b.returnedAt).slice(0, 10))}{b.returnedBy ? ` · ${b.returnedBy}` : ""}</>
+      : b.type === "reservation"
+        ? <>{fmtDate(b.endDate || b.startDate)}{b.endTime ? `  ${b.endTime} น.` : ""}</>
+        : b.dueBackDate ? <>กำหนดคืน {fmtDate(b.dueBackDate)}{b.endTime ? `  ${b.endTime} น.` : ""}</> : <>ยังไม่คืน</>;
+    return (
+      <div key={b.id} style={{ background: "#fff", border: `1px solid ${over ? "#F2C4C4" : "var(--line)"}`, borderRadius: 16, padding: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: "var(--teal-dark)" }}>{b.equipmentCode || b.equipmentName}</span>
+          {statusPill(b)}
+          {b.offSite && cardPill("นอกสถานที่", "#A86A00", "#fff", "#F3DDA5")}
+        </div>
+        {b.equipmentCode && <div style={{ fontSize: 12.5, color: "#4B5C72", marginTop: 1 }}>{b.equipmentName}{b.assetType === "item" && b.qty > 1 ? ` · ${b.qty} ชิ้น` : ""}</div>}
+        <div style={{ display: "flex", gap: 12, marginTop: 10 }}>
+          <Thumb src={toDisplayImageUrl(asset?.imageUrl)} size={84} radius={12} />
+          <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 4 }}>
+            {cardRow(CalendarCheck, <><span style={{ color: "var(--muted)" }}>{BOOKING_TYPE_LABEL[b.type]}</span> {fmtDate(b.startDate)}{b.startTime ? `  ${b.startTime} น.` : ""}</>)}
+            {cardRow(Undo2, endLine, b.returnedAt ? "#1E8A57" : over ? "#C6493B" : undefined)}
+            {cardRow(User, b.requestedBy || "-")}
+            {b.purpose && cardRow(ClipboardList, b.purpose)}
+            {(b.offSiteLocation || asset?.location) && cardRow(MapPin, b.offSiteLocation || asset.location)}
+          </div>
+        </div>
+        {over && <div style={{ marginTop: 10, background: "#FDF1F1", color: "#C6493B", borderRadius: 10, padding: "6px 10px", fontSize: 12, fontWeight: 600 }}>{overdueText(b)}</div>}
+        {conflicts.length > 0 && (
+          <div style={{ marginTop: 8, background: "#FDF1F1", color: "#C6493B", borderRadius: 10, padding: "6px 10px", fontSize: 11.5 }}>
+            ชนกับ: {conflicts.map(c => `${c.requestedBy || "-"}${c.startTime && c.endTime ? ` (${c.startTime}-${c.endTime} น.)` : ""}`).join(", ")}
+          </div>
+        )}
+        {b.approvalNote && <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--muted)", fontStyle: "italic" }}>หมายเหตุ: {b.approvalNote}</div>}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, paddingTop: 10, borderTop: "1px solid #EEF3F8" }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: "var(--muted)" }}>
+            {b.status === "pending" ? "รอการอนุมัติ"
+              : b.status === "approved" ? <span style={{ color: "#1E8A57" }}>อนุมัติแล้ว{b.approvedBy ? ` · ${b.approvedBy}` : ""}</span>
+              : b.status === "rejected" ? <span style={{ color: "#C6493B" }}>ปฏิเสธ{b.approvedBy ? ` · ${b.approvedBy}` : ""}</span>
+              : "ยกเลิกแล้ว"}
+          </div>
+          <BookingActions
+            booking={b}
+            canApprove={!restrictToBooking}
+            currentUsername={currentUsername}
+            defaultActorName={actorName || currentDisplayName}
+            urgent={over}
+            onApprove={(note, name) => approve(b, note, name)}
+            onReject={(note, name) => reject(b, note, name)}
+            onCancel={() => cancel(b)}
+            onReturn={(qty, name) => markReturned(b, qty, name)}
+            onDelete={() => deleteHistoryItem(b)}
+          />
+        </div>
+      </div>
+    );
+  }
+  const cardList = (list, empty) => (
+    <div style={{ display: "grid", gap: 10 }}>
+      {list.length === 0 && <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, padding: "22px 16px", textAlign: "center", color: "var(--muted)", fontSize: 13 }}>{empty}</div>}
+      {list.map(bookingCard)}
+    </div>
+  );
+
   return (
     <div>
       <TabHeader
@@ -9103,7 +9258,7 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>สรุปสถานะของฉัน</div>
             <BookingSummaryCards
               pendingCount={ownPendingAllCount}
-              currentCount={ownCurrentAll.length}
+              currentCount={ownCurrentAll.filter(isBookingInUse).length}
               overdueCount={ownOverdueAll.length}
               nearestDueLabel={nearestDueLabel}
               worstOverdueDays={worstOverdueDays}
@@ -9186,7 +9341,25 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
             </button>
           </Toolbar>
 
-          {view === "current" ? (
+          {isMobile ? (
+            view === "current" ? (
+              <div style={{ display: "grid", gap: 14 }}>
+                {[
+                  { label: "เกินกำหนดคืน", color: "var(--red)", list: shown.filter(isBookingOverdue) },
+                  { label: "กำลังใช้งาน", color: "var(--teal-dark)", list: shown.filter(b => !isBookingOverdue(b) && isBookingInUse(b)) },
+                  { label: "จองล่วงหน้า (ยังไม่ถึงเวลา)", color: "var(--muted)", list: shown.filter(b => !isBookingOverdue(b) && !isBookingInUse(b)) },
+                ].filter(g => g.list.length > 0).map(g => (
+                  <div key={g.label}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: g.color, margin: "0 2px 8px" }}>{g.label} ({g.list.length})</div>
+                    {cardList(g.list, "")}
+                  </div>
+                ))}
+                {shown.length === 0 && cardList([], "ไม่มีรายการที่ต้องคืนหรือกำลังใช้งานอยู่")}
+              </div>
+            ) : cardList(shown,
+              view === "pending" ? (restrictToBooking ? "คุณยังไม่มีคำขอที่รออนุมัติ" : "ไม่มีคำขอรออนุมัติ")
+              : view === "history-equipment" ? "ยังไม่มีประวัติเครื่องมือ" : "ยังไม่มีประวัติอุปกรณ์")
+          ) : view === "current" ? (
             <GroupedBookingTable
               cols={bookingCols}
               groups={[
