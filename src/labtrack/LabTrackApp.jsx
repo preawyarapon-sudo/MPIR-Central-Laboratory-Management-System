@@ -5250,6 +5250,19 @@ function defaultTypeBPoint(points, level) {
   if (lv == null) return latest.slice().sort((a, b) => derivedUOf(b) - derivedUOf(a))[0];
   return latest.slice().sort((a, b) => Math.abs((numOrNull(a.calibrationPoint) ?? numOrNull(a.referenceValue) ?? 0) - lv) - Math.abs((numOrNull(b.calibrationPoint) ?? numOrNull(b.referenceValue) ?? 0) - lv))[0];
 }
+// Date a budget belongs to: its evaluation date, else its newest certificate.
+function budgetDateOf(rows) {
+  return rows[0]?.reviewDate || rows.map(r => r.certDate || "").sort().pop() || "";
+}
+// The U actually written on a report: rounded UP to the instrument's
+// resolution (never rounded down, which would understate it).
+function reportedUOf(U, instrument) {
+  if (U == null || !isFinite(U)) return null;
+  const m = String(instrument?.resolution || "").match(/\d*\.(\d+)/);
+  const d = m ? m[1].length : 2;
+  const f = 10 ** d;
+  return { value: Math.ceil(U * f - 1e-9) / f, decimals: d };
+}
 // WI step 4: is this budget due for review?
 function wiReviewNotes(rows, certificates) {
   const notes = [];
@@ -5449,6 +5462,7 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
   function saveWi(rows) {
     const id = rows[0]?.budgetId;
     setBudgets([...budgets.filter(b => b.budgetId !== id), ...rows]);
+    setOpenId(id);
     notify(`บันทึก Uncertainty Budget ${id} แล้ว`);
     setWiDlg(null);
   }
@@ -5479,6 +5493,12 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
     return { ...blankUncertaintyRow(first.instrumentId, first.budgetId), ...Object.fromEntries(BUDGET_LEVEL_KEYS.map(k => [k, first[k] ?? ""])), unit: first.unit || "" };
   }
   const budgetDefaults = Object.fromEntries(Object.entries(groups).map(([id, rows]) => [id, rows[0]]));
+  // One line per budget, newest first; the newest of each parameter is the
+  // value in use for reports. Clicking a line opens its details.
+  const [openId, setOpenId] = useState(null);
+  const ordered = Object.entries(groups).sort((a, b) => budgetDateOf(b[1]).localeCompare(budgetDateOf(a[1])));
+  const currentByParam = {};
+  ordered.forEach(([id, rows]) => { const p = rows[0]?.parameter || id; if (!currentByParam[p]) currentByParam[p] = id; });
   return (
     <div>
       <div style={S.detailHead}>
@@ -5491,16 +5511,40 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
       {wiDlg && <WiBudgetWizard instrument={equipment[0]} allEquipment={allEq} allCertificates={allCerts} existing={wiDlg.existing}
         currentDisplayName={currentDisplayName} onCancel={() => setWiDlg(null)} onSave={saveWi} />}
       {Object.keys(groups).length === 0 && <div style={S.tableWrap}><div style={{ ...S.emptyState, padding: 24 }}>ยังไม่มี Uncertainty Budget — กด "ประเมินความไม่แน่นอน" เพื่อเริ่ม</div></div>}
-      {Object.entries(groups).map(([budgetId, rows]) => {
+      {ordered.map(([budgetId, rows]) => {
         const instrument = byId[rows[0]?.instrumentId];
         const { rows: calcRows, uc, k, U } = combineUncertaintyBudget(rows);
         const relPct = rows[0]?.measuredValue ? (U / Math.abs(Number(rows[0].measuredValue))) * 100 : null;
         const isWi = rows.some(r => r.wiSource);
-        const reviewNotes = isWi ? wiReviewNotes(rows, allCerts) : [];
+        // Only the budget in use is checked for review; older ones are history.
+        const reviewNotes = isWi && currentByParam[rows[0]?.parameter || budgetId] === budgetId ? wiReviewNotes(rows, allCerts) : [];
         const sub = [rows[0]?.parameter, rows[0]?.testMethod].filter(Boolean).join(" · ");
+        const open = openId === budgetId;
+        const d = budgetDateOf(rows);
+        const year = d ? Number(d.slice(0, 4)) + 543 : null;
+        const rep = reportedUOf(U, instrument);
+        const unit = rows[0]?.unit || "";
+        const inUse = currentByParam[rows[0]?.parameter || budgetId] === budgetId;
         const who = [rows[0]?.preparedBy && `จัดทำโดย ${rows[0].preparedBy}`, rows[0]?.reviewDate && fmtDate(rows[0].reviewDate), rows[0]?.approvedBy && `อนุมัติโดย ${rows[0].approvedBy}`].filter(Boolean).join(" · ");
         return (
-          <div key={budgetId} style={{ ...S.tableWrap, marginBottom: 16 }}>
+          <div key={budgetId} style={{ ...S.tableWrap, marginBottom: 10 }}>
+            <button onClick={() => setOpenId(open ? null : budgetId)} aria-expanded={open}
+              style={{ width: "100%", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", textAlign: "left", cursor: "pointer",
+                background: open ? "#F5F8FB" : "#fff", border: "none", borderBottom: open ? "1px solid var(--line)" : "none", padding: "12px 16px", fontFamily: "inherit" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--teal-dark)", minWidth: 74 }}>{year ? `ปี ${year}` : "ไม่ระบุปี"}</span>
+              <span style={{ flex: "1 1 260px", minWidth: 0, fontSize: 13.5 }}>
+                {rows[0]?.parameter || budgetId} — ค่าความไม่แน่นอนที่ใช้รายงาน{" "}
+                <b style={{ fontSize: 15 }}>{rep ? `± ${rep.value.toFixed(rep.decimals)} ${unit}` : "-"}</b>
+                <span style={{ color: "var(--muted)", fontSize: 12 }}> (U = {U.toFixed(4)}, k = {k})</span>
+              </span>
+              {reviewNotes.length > 0
+                ? <span style={{ fontSize: 11.5, fontWeight: 600, color: "#A86A00", background: "#FFF6E0", border: "1px solid #F3DDA5", borderRadius: 20, padding: "2px 9px" }}>ถึงรอบทบทวน</span>
+                : inUse
+                  ? <span style={{ fontSize: 11.5, fontWeight: 600, color: "#1E8A57", background: "#EAF7F0", border: "1px solid #BFE6D0", borderRadius: 20, padding: "2px 9px" }}>ใช้อยู่</span>
+                  : <span style={{ fontSize: 11.5, color: "var(--muted)" }}>ฉบับก่อนหน้า</span>}
+              {open ? <ChevronUp size={16} color="var(--muted)" /> : <ChevronDown size={16} color="var(--muted)" />}
+            </button>
+            {open && (<>
             <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div style={{ minWidth: 0 }}>
                 <div><b>{rows[0]?.parameter || budgetId}</b>{sub && rows[0]?.testMethod ? <span style={{ color: "var(--muted)", fontSize: 12 }}> · {rows[0].testMethod}</span> : null} <span style={{ color: "var(--muted)", fontSize: 11.5, fontFamily: "var(--font-mono)" }}>{budgetId}</span></div>
@@ -5543,6 +5587,7 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
               </tbody>
             </table>
             </div>
+            </>)}
           </div>
         );
       })}
