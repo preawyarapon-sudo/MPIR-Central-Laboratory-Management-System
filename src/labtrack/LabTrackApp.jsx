@@ -4246,7 +4246,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           <Info size={15} color="#A86A00" style={{ flexShrink: 0, marginTop: 2 }} />
           <span>
             <b>หลังปรับแก้ผ่านเกณฑ์ — เครื่องใช้งานต่อได้</b> แต่ค่าก่อนปรับไม่ผ่าน แปลว่าช่วงก่อนส่งสอบเทียบเครื่องอาจวัดคลาดเกินเกณฑ์
-            ต้องประเมินผลกระทบย้อนหลังต่อผลที่ออกไปแล้ว (ISO/IEC 17025 ข้อ 7.10) ที่หน้า "การแก้ไข & อนุมัติ"
+            ควรประเมินผลกระทบย้อนหลังต่อผลที่ออกไปแล้ว (ISO/IEC 17025 ข้อ 7.10)
           </span>
         </div>
       )}
@@ -5782,8 +5782,6 @@ function ApprovalRecordForm({ row, equipment, certificates = [], onCancel, onSav
 const INSTRUMENT_STATUS = {
   overdue:  { label: "เกินกำหนด", color: "var(--red)", bg: "#FDF1F1", border: "#F2C4C4", icon: AlertTriangle },
   fail:     { label: "ไม่ผ่านเกณฑ์", color: "var(--red)", bg: "#FDF1F1", border: "#F2C4C4", icon: XCircle },
-  impact:   { label: "ผ่านหลังปรับ · รอประเมินผลกระทบ", color: "#A86A00", bg: "#FFF6E0", border: "#F3DDA5", icon: FileWarning },
-  inAction: { label: "อยู่ระหว่างดำเนินการ", color: "#1D5FB8", bg: "#EAF2FD", border: "#BFD5F3", icon: Info },
   dueSoon:  { label: "ใกล้ครบกำหนด", color: "#A86A00", bg: "#FFF6E0", border: "#F3DDA5", icon: Clock },
   pending:  { label: "รอตรวจสอบ", color: "#6B7A8C", bg: "#F1F4F7", border: "#DCE3EA", icon: Clock },
   pass:     { label: "ผ่านการสอบเทียบ", color: "#1E8A57", bg: "#EAF7F0", border: "#BFE6D0", icon: CheckCircle2 },
@@ -5792,15 +5790,9 @@ function instrumentOverallStatus(e, certificates, actionImpacts) {
   const days = daysUntil(e.nextDue);
   const own = certificates.filter(c => c.instrumentId === e.id);
   const sum = latestCalibrationSummary(e, own);
-  const openAction = actionImpacts.some(a => a.instrumentId === e.id && a.actionStatus !== "ปิดเรื่อง");
   const pick = (key, title) => ({ key, ...INSTRUMENT_STATUS[key], title });
   if (statusOf(days) === "danger") return pick("overdue", `เลยวันครบกำหนดสอบเทียบ ${fmtDate(e.nextDue)}`);
   if (sum && isBadDecision(sum.decision)) return pick("fail", `ผลสอบเทียบรอบ ${fmtDate(sum.date)}${sum.adjusted ? " (หลังปรับ)" : ""}: ${sum.decision}`);
-  // Passed after adjustment but was out of tolerance before it: usable now,
-  // but results issued before the adjustment still need an impact review.
-  if (sum && isBadDecision(sum.asFoundDecision) && !actionImpacts.some(a => a.instrumentId === e.id && (a.findingKey === `asfound:${e.id}:${sum.date}` || (a.dateIdentified || "") >= sum.date)))
-    return pick("impact", `หลังปรับแก้ผ่านเกณฑ์ แต่ค่าก่อนปรับ ${sum.asFoundDecision} — ยังไม่ได้เปิดเรื่องประเมินผลกระทบย้อนหลัง`);
-  if (openAction) return pick("inAction", "มีเรื่องใน \"การดำเนินการ / ผลกระทบ\" ที่ยังไม่ปิด");
   if (statusOf(days) === "warn") return pick("dueSoon", `ครบกำหนดสอบเทียบ ${fmtDate(e.nextDue)}`);
   if (!sum) return pick("pending", "ยังไม่มีใบรับรองสอบเทียบในระบบ");
   if (sum.decision === "INCOMPLETE DATA") return pick("pending", "ข้อมูลใบรับรองหรือเกณฑ์ยังไม่ครบ ตัดสินผลไม่ได้");
@@ -6434,20 +6426,6 @@ const CALIBRATION_GUIDE_SHEETS = [
       { label: "ข้อความบนป้ายสถานะ", kind: "auto", note: "= สถานะการใช้งาน + วันครบกำหนดสอบเทียบ" },
     ],
   },
-  {
-    code: "08", name: "การดำเนินการ & ผลกระทบ (Action / Impact)",
-    purpose: "บันทึกเมื่อผลสอบเทียบ/ตรวจสอบไม่ผ่านเกณฑ์ และประเมินผลกระทบย้อนหลังต่อผลทดสอบที่รายงานไปแล้ว (ISO/IEC 17025:2017 ข้อ 7.10, 8.7)",
-    fields: [
-      { label: "ทุกช่องในหน้านี้", kind: "input", note: "บันทึกเชิงคุณภาพ (CAR/NC) — รายการใหม่ระบบร่างปัญหา/ผลที่ประเมินได้/ช่วงเวลาที่อาจกระทบ จากผลสอบเทียบหรือ Check ที่ไม่ผ่านล่าสุดให้ แก้ไขได้" },
-    ],
-  },
-  {
-    code: "09", name: "บันทึกการอนุมัติ (Approval Record)",
-    purpose: "บันทึกการทบทวน/อนุมัติเกณฑ์ Decision Rule การใช้ Correction ความถี่ตรวจสอบ และการอนุมัติให้ใช้งานเครื่องมือ",
-    fields: [
-      { label: "ทุกช่องในหน้านี้", kind: "input", note: "ลายเซ็น/บันทึกอนุมัติ — เลือกเรื่องแล้วระบบร่างสาระสำคัญจากข้อมูลเครื่องมือ/03 และเติมเลขที่ใบรับรองล่าสุด/ผู้จัดทำให้" },
-    ],
-  },
 ];
 function GuideFieldRow({ f }) {
   const isAuto = f.kind === "auto";
@@ -6477,7 +6455,7 @@ function CalibrationGuideModal({ onClose }) {
     <Modal title="คู่มือบันทึกการสอบเทียบ — ช่องกรอกเองและช่องคำนวณอัตโนมัติ" onClose={onClose} xwide>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#E9F1FB", border: "1px solid #CFE6F5", borderRadius: 10, padding: "10px 13px", marginBottom: 14, fontSize: 12, color: "var(--teal-dark)" }}>
         <Sparkles size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>แต่ละเครื่องมือมีบันทึก 9 ส่วน เรียงตามลำดับการใช้งานจริง: ตั้งเกณฑ์ → บันทึกใบรับรอง → ระบบตัดสินผ่าน/ไม่ผ่านให้เอง → ตรวจสอบระหว่างรอบ → Uncertainty Budget → ดูแนวโน้ม → สรุปสถานะ → บันทึกการแก้ไข/ผลกระทบถ้ามี → อนุมัติ. แตะหัวข้อเพื่อขยาย/ย่อ</span>
+        <span>แต่ละเครื่องมือมีบันทึก 7 ส่วน เรียงตามลำดับการใช้งานจริง: ตั้งเกณฑ์ → บันทึกใบรับรอง → ระบบตัดสินผ่าน/ไม่ผ่านให้เอง → ตรวจสอบระหว่างรอบ → Uncertainty Budget → ดูแนวโน้ม → สรุปสถานะ. แตะหัวข้อเพื่อขยาย/ย่อ</span>
       </div>
       {CALIBRATION_GUIDE_SHEETS.map(sheet => {
         const isOpen = openCode === sheet.code;
@@ -6581,7 +6559,7 @@ function CalibrationRecordsHub({
     const chips = [
       q.trim() && { label: `ค้นหา: ${q.trim()}`, clear: () => setQ("") },
       typeFilter && { label: `ประเภท: ${typeFilter}`, clear: () => setTypeFilter("") },
-      statusFilter && { label: `สถานะ: ${statusFilter === "gaps" ? "เกณฑ์ไม่ครบ" : INSTRUMENT_STATUS[statusFilter].label}`, clear: () => setStatusFilter("") },
+      statusFilter && { label: `สถานะ: ${statusFilter === "gaps" ? "เกณฑ์ไม่ครบ" : (INSTRUMENT_STATUS[statusFilter]?.label || statusFilter)}`, clear: () => setStatusFilter("") },
       dueFilter && { label: `รอบสอบเทียบ: ${DUE_LABEL[dueFilter]}`, clear: () => setDueFilter("") },
     ].filter(Boolean);
     const clearAll = () => { setQ(""); setTypeFilter(""); setStatusFilter(""); setDueFilter(""); };
@@ -6839,11 +6817,6 @@ function CalibrationRecordsHub({
       flag: (icFail90 + dcFail90) ? { text: `ไม่ผ่าน ${icFail90 + dcFail90} ครั้ง (90 วัน)`, tone: "var(--red)" } : null },
     { key: "uncertainty", sheets: "SHEET 05", title: "Uncertainty Budget",
       sub: budgetsN ? `${budgetsN} Budget · ${scopedBudgets.length} องค์ประกอบ` : "ยังไม่มี Budget" },
-    { key: "actions", sheets: "SHEET 08", title: "การดำเนินการ / ผลกระทบ",
-      sub: scopedActionImpacts.length ? `${scopedActionImpacts.length} รายการ` : "ยังไม่มีรายการ",
-      flag: openActions ? { text: `เปิดอยู่ ${openActions} เรื่อง`, tone: "var(--amber)" } : null },
-    { key: "approvals", sheets: "SHEET 09", title: "บันทึกการอนุมัติ",
-      sub: apSorted.length ? `${apSorted.length} รายการ · ล่าสุด ${fmtDate(apSorted[0].date)}` : "ยังไม่มีบันทึก" },
   ];
   // Pages shown directly (no card step): 4 tabs, and the tabs that hold two
   // sheets get a small switch underneath. Warning flags from each sheet are
@@ -6852,17 +6825,12 @@ function CalibrationRecordsHub({
     { key: "instrument", label: "ข้อมูลเครื่องมือ & สถานะ", sheets: "01 · 07", icon: Wrench, leaves: ["instrument"] },
     { key: "certificates", label: "ใบรับรอง & ผลสอบเทียบ", sheets: "02 · 03 · 06", icon: FileCheck2, leaves: ["certificates", "results"] },
     { key: "checks", label: "ตรวจสอบระหว่างรอบ & Uncertainty", sheets: "04 · 05", icon: ClipboardCheck, leaves: ["checks", "uncertainty"] },
-    { key: "actions", label: "การแก้ไข & อนุมัติ", sheets: "08 · 09", icon: Stamp, leaves: ["actions", "approvals"] },
   ];
   const featureOf = (k) => FEATURES.find(f => f.key === k);
   // ---- "ขั้นตอนรอบสอบเทียบ": where this instrument stands in its cycle ----
   // Each step is derived from the records (nothing extra to tick), and the
   // first unfinished one is offered as the next thing to do.
   const latestPts = latestCert ? scopedCertificates.filter(c => c.calibrationDate === latestCert) : [];
-  const finding = instrument ? proposeActionImpact(instrument, scopedCertificates, scopedChecks, scopedDailyChecks) : null;
-  const needsAction = !!finding?.findingKey && (finding.findingKey.startsWith("cert:") || finding.findingKey.startsWith("asfound:"));
-  const asFoundOnly = needsAction && finding.findingKey.startsWith("asfound:");
-  const actionOpened = needsAction && scopedActionImpacts.some(a => a.findingKey === finding.findingKey || (a.dateIdentified || "") >= latestCert);
   const statusConfirmed = !!usageStatusOf(instrument || {}) && !!authorizedByOf(instrument || {}) && (!latestCert || (instrument?.statusApprovalDate || "") >= latestCert);
   const CYCLE_STEPS = [
     { key: "criteria", label: "ตั้งเกณฑ์", view: "instrument", done: gaps.length === 0, todo: gaps.length ? `ยังขาด ${gaps.join(", ")}` : "" },
@@ -6872,9 +6840,6 @@ function CalibrationRecordsHub({
     { key: "evaluate", label: "ลงชื่อประเมินผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.evaluatedBy), todo: "ผลรอบล่าสุดยังไม่ได้ลงชื่อผู้ประเมิน" },
     { key: "approve", label: "อนุมัติผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.approvedBy),
       todo: canApprove ? "รออนุมัติโดย Technical Manager" : "รอผู้มีสิทธิ์อนุมัติ (Technical Manager)" },
-    ...(needsAction ? [{ key: "action", view: "actions", done: actionOpened,
-      label: asFoundOnly ? "ประเมินผลกระทบย้อนหลัง" : "เปิดเรื่องแก้ไข / ประเมินผลกระทบ",
-      todo: asFoundOnly ? `หลังปรับผ่าน แต่ค่าก่อนปรับ ${calSum?.asFoundDecision || ""} — ต้องประเมินผลที่ออกไปก่อนปรับแก้` : `ผลรอบล่าสุด ${calSum?.decision || ""} — ต้องประเมินผลกระทบ` }] : []),
     { key: "status", label: "ยืนยันสถานะการใช้งาน", view: "instrument", done: statusConfirmed,
       todo: !usageStatusOf(instrument || {}) || !authorizedByOf(instrument || {}) ? "ยังไม่ได้ระบุสถานะ/ผู้อนุมัติ" : "ยืนยันสถานะอีกครั้งหลังใบรับรองรอบล่าสุด" },
   ];
@@ -6887,7 +6852,8 @@ function CalibrationRecordsHub({
   }
   const doneCount = CYCLE_STEPS.filter(st => st.done).length;
   const scopedCertSetter = makeScopedListSetter(certificates, setCertificates, selectedInstrumentId);
-  const current = view || (gaps.length ? "instrument" : "certificates");
+  const defaultView = gaps.length ? "instrument" : "certificates";
+  const current = view && TAB_GROUPS.some(g => g.leaves.includes(view)) ? view : defaultView;
   const currentGroup = TAB_GROUPS.find(g => g.leaves.includes(current)) || TAB_GROUPS[0];
   const pickTab = (g) => setView(g.leaves.includes(current) ? current : (lastLeaf[g.key] || g.leaves[0]));
   const pickLeaf = (k) => { setView(k); setLastLeaf(prev => ({ ...prev, [currentGroup.key]: k })); };
@@ -7045,21 +7011,6 @@ function CalibrationRecordsHub({
           equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
           setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
           notify={notify}
-        />
-      )}
-      {current === "actions" && (
-        <ActionImpactTab
-          equipment={scopedEquipment} actionImpacts={scopedActionImpacts}
-          certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
-          setActionImpacts={makeScopedListSetter(actionImpacts, setActionImpacts, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName}
-        />
-      )}
-      {current === "approvals" && (
-        <ApprovalRecordTab
-          equipment={scopedEquipment} approvalRecords={scopedApprovalRecords} certificates={scopedCertificates}
-          setApprovalRecords={makeScopedListSetter(approvalRecords, setApprovalRecords, selectedInstrumentId)}
-          notify={notify} currentDisplayName={currentDisplayName}
         />
       )}
     </div>
