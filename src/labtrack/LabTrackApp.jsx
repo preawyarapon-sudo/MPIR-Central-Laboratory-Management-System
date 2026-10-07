@@ -6482,9 +6482,9 @@ function CalibrationRecordsHub({
       const Icon = st.icon;
       return (
         <span title={st.title} style={{
-          display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
-          color: st.color, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 20, padding: "3px 9px",
-        }}><Icon size={12} /> {st.label}</span>
+          display: "inline-flex", alignItems: "center", gap: 4, maxWidth: "100%", minWidth: 0, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+          color: st.color, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 20, padding: "3px 9px", boxSizing: "border-box",
+        }}><Icon size={12} style={{ flexShrink: 0 }} /><span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{st.label}</span></span>
       );
     };
     const infoRow = (Icon, children, color) => (
@@ -6602,8 +6602,8 @@ function CalibrationRecordsHub({
                 <div style={{ display: "flex", gap: 12, padding: "14px 14px 12px", borderBottom: "1px solid var(--line)" }}>
                   <InstrumentThumb e={e} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", paddingTop: 2 }}>{e.code}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "flex-start", gap: "4px 8px" }}>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", paddingTop: 2, whiteSpace: "nowrap" }}>{e.code}</div>
                       {badge(st)}
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, marginTop: 2 }}>
@@ -6790,56 +6790,68 @@ function CalibrationRecordsHub({
         </div>
         <button style={S.smallBtn} onClick={() => exportAll(selectedInstrumentId)}><FileDown size={13} /> ส่งออก Excel เฉพาะเครื่องนี้</button>
       </div>
-      <div style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, padding: "10px 14px", marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)" }}>ขั้นตอนรอบสอบเทียบ</span>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>เสร็จ {doneCount}/{CYCLE_STEPS.length}</span>
-          <div style={{ flex: 1 }} />
-          {nextStep ? (
+      {/* Cycle progress: one connected line of steps (done → current → later),
+          with the single next action spelled out underneath. */}
+      <div style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, padding: "14px 16px 12px", marginBottom: 16 }}>
+        <div style={{ overflowX: "auto", paddingBottom: 2 }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${CYCLE_STEPS.length}, minmax(84px, 1fr))`, minWidth: CYCLE_STEPS.length * 84 }}>
+            {CYCLE_STEPS.map((st, i) => {
+              const isNext = nextStep && nextStep.key === st.key;
+              const prevDone = i > 0 && CYCLE_STEPS[i - 1].done;
+              const line = (on) => ({ flex: 1, height: 2, background: on ? "#1E8A57" : "#DCE3EA" });
+              return (
+                <button key={st.key} onClick={() => setView(st.view)} title={st.done ? "เสร็จแล้ว" : st.todo}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", width: "100%" }}>
+                    <span style={i === 0 ? { flex: 1 } : line(prevDone)} />
+                    <span style={{
+                      width: 22, height: 22, borderRadius: "50%", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 11, fontWeight: 700, boxSizing: "border-box",
+                      background: st.done ? "#1E8A57" : isNext ? "var(--teal)" : "#fff",
+                      color: st.done || isNext ? "#fff" : "#8A97A8",
+                      border: st.done || isNext ? "none" : "1.5px solid #C5CFDA",
+                      boxShadow: isNext ? "0 0 0 4px #DCE9F8" : "none",
+                    }}>{st.done ? <Check size={12} strokeWidth={3} /> : i + 1}</span>
+                    <span style={i === CYCLE_STEPS.length - 1 ? { flex: 1 } : line(st.done)} />
+                  </div>
+                  <span style={{
+                    fontSize: 11.5, lineHeight: 1.35, textAlign: "center", padding: "0 4px",
+                    fontWeight: isNext ? 700 : 500, color: isNext ? "var(--teal-dark)" : st.done ? "#4B5C72" : "#8A97A8",
+                  }}>{st.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "1px solid #EEF2F6" }}>
+          {nextStep ? (<>
+            <div style={{ flex: "1 1 220px", minWidth: 0, fontSize: 12.5, lineHeight: 1.5 }}>
+              <span style={{ fontWeight: 700, color: "var(--ink)" }}>ขั้นถัดไป: {nextStep.label}</span>
+              <span style={{ color: "var(--muted)" }}> — {nextStep.todo}</span>
+            </div>
             <button style={{ ...S.primaryBtn, padding: "6px 12px", fontSize: 12.5 }} onClick={() => setView(nextStep.view)}>
-              ถัดไป: {nextStep.label} <ChevronRight size={14} />
+              ไปทำขั้นนี้ <ChevronRight size={14} />
             </button>
-          ) : (
-            <span style={{ fontSize: 12.5, color: "var(--green)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}><CheckCircle2 size={14} /> ครบทุกขั้นตอนของรอบนี้แล้ว</span>
+          </>) : (
+            <span style={{ fontSize: 12.5, color: "var(--green)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}><CheckCircle2 size={15} /> ครบทุกขั้นตอนของรอบนี้แล้ว</span>
           )}
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {CYCLE_STEPS.map((st, i) => {
-            const isNext = nextStep && nextStep.key === st.key;
-            return (
-              <button key={st.key} onClick={() => setView(st.view)} title={st.done ? "เสร็จแล้ว" : st.todo} style={{
-                display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: isNext ? 700 : 500,
-                borderRadius: 20, padding: "5px 11px",
-                background: st.done ? "#EAF7F0" : isNext ? "#FFF6E0" : "#F5F7FA",
-                color: st.done ? "#1E8A57" : isNext ? "#A86A00" : "#6B7A8C",
-                border: `1px solid ${st.done ? "#BFE6D0" : isNext ? "#F3DDA5" : "#E1E7EE"}`,
-              }}>
-                <span style={{
-                  width: 18, height: 18, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700,
-                  background: st.done ? "#1E8A57" : isNext ? "#D9941E" : "#C5CFDA", color: "#fff",
-                }}>{st.done ? <Check size={11} /> : i + 1}</span>
-                {st.label}
-              </button>
-            );
-          })}
-        </div>
-        {nextStep && <div style={{ fontSize: 11.5, color: "#A86A00", marginTop: 6 }}>{nextStep.todo}</div>}
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
+      {/* Sections: plain underline tabs, so they read as places to go,
+          not as more steps. */}
+      <div style={{ display: "flex", gap: 2, marginBottom: 14, borderBottom: "1px solid var(--line)", overflowX: "auto" }}>
         {TAB_GROUPS.map(g => {
           const Icon = g.icon;
           const active = currentGroup.key === g.key;
           const flag = g.leaves.map(featureOf).find(f => f?.flag)?.flag;
           return (
             <button key={g.key} onClick={() => pickTab(g)} title={flag ? flag.text : ""} style={{
-              display: "flex", alignItems: "center", gap: 6,
-              background: active ? "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)" : "#fff",
-              color: active ? "#fff" : "#4B5C72",
-              border: active ? "1px solid transparent" : "1px solid var(--line)",
-              borderRadius: 20, padding: "7px 12px", fontSize: 12.5, fontWeight: active ? 600 : 500,
+              display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", cursor: "pointer",
+              background: "none", border: "none", borderBottom: `2px solid ${active ? "var(--teal)" : "transparent"}`, marginBottom: -1,
+              color: active ? "var(--teal-dark)" : "#5B6B80", padding: "9px 12px", fontSize: 13, fontWeight: active ? 700 : 500,
             }}>
-              <Icon size={13} /> {g.label}
-              {flag && <span style={{ width: 8, height: 8, borderRadius: "50%", background: flag.tone, boxShadow: active ? "0 0 0 2px #fff" : "none" }} />}
+              <Icon size={14} /> {g.label}
+              {flag && <span style={{ width: 7, height: 7, borderRadius: "50%", background: flag.tone }} />}
             </button>
           );
         })}
