@@ -3285,7 +3285,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
               <Plus size={16} /> เพิ่มใบรับรองสอบเทียบ — บันทึกที่ "บันทึกการสอบเทียบ" แล้วจะแสดงในประวัตินี้ทันที
             </button>
           )}
-          <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 8 : 10, ...(isMobile ? {} : { maxHeight: 560, overflowY: "auto", paddingRight: 4 }) }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 8 : 10 }}>
             {shown.length === 0 && <EmptyState text="ไม่มีประวัติกิจกรรมในหมวดนี้" small />}
             {shown.map(t => {
               const Icon = t.icon;
@@ -5308,7 +5308,13 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                     const proposal = trendIntervalProposal(tr);
                     return (
                       <tr key={c.id} style={{ ...S.tr, ...(isBeforeAdj(c) && g.adjusted ? { background: "#FFFCF3" } : {}) }}>
-                        <td style={S.td}>{calPointLabel(c) || "-"}{(isBeforeAdj(c) || isAfterAdj(c)) && <span style={{ marginLeft: 6 }}><AdjTag c={c} /></span>}</td>
+                        <td style={{ ...S.td, minWidth: 200 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            <b style={{ whiteSpace: "nowrap" }}>{c.calibrationPoint !== "" && c.calibrationPoint != null ? `${c.calibrationPoint}${c.unit ? " " + c.unit : ""}` : "-"}</b>
+                            {(isBeforeAdj(c) || isAfterAdj(c)) && <AdjTag c={c} />}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{c.parameter || ""}{c.rangeId !== "" && c.rangeId != null ? ` [${c.rangeId}]` : ""}</div>
+                        </td>
                         <td style={{ ...S.td, ...mono }} title={errorSourceLabel(c)}>{fx(tr?.error ?? derivedErrorOf(c))}</td>
                         {detail && <td style={{ ...S.td, ...mono }}>{U != null ? round4(U) : "-"}</td>}
                         <td style={{ ...S.td, ...mono }}>{ev.tol != null ? `± ${round4(ev.tol)}` : <span style={{ fontFamily: "inherit", color: "var(--amber)" }}>ยังไม่ตั้ง</span>}</td>
@@ -5323,7 +5329,7 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                         </>}
                         <td style={{ ...S.td, fontSize: 11.5, color: "var(--muted)" }}>
                           {tr?.flag || "-"}
-                          {proposal && proposal !== "คงรอบเดิม" && <div style={{ color: "var(--amber)", marginTop: 2 }}>{proposal}</div>}
+                          {proposal && proposal !== "คงรอบเดิม" && !(isBeforeAdj(c) && g.adjusted) && <div style={{ color: "var(--amber)", marginTop: 2 }}>{proposal}</div>}
                         </td>
                       </tr>
                     );
@@ -14017,7 +14023,7 @@ const S = {
     height: 240, backgroundImage: "url('/sidebar-deco.png')", backgroundSize: "cover", backgroundPosition: "bottom center",
     backgroundRepeat: "no-repeat", flexShrink: 0,
   },
-  main: { flex: 1, minWidth: 0, padding: "22px 26px", overflowY: "auto", maxHeight: 640 },
+  main: { flex: 1, minWidth: 0, padding: "22px 26px" },
 
   hero: { position: "relative", background: "linear-gradient(135deg, var(--teal-dark), var(--teal))", color: "#fff", borderRadius: 14, padding: "26px 26px", overflow: "hidden", marginBottom: 18 },
   heroGrid: { position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)", backgroundSize: "22px 22px", maskImage: "radial-gradient(ellipse at top right, black, transparent 70%)" },
@@ -14094,7 +14100,7 @@ const S = {
   detailHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 10 },
   detailName: { fontSize: 15, fontWeight: 600, wordBreak: "break-word" },
   notesBox: { fontSize: 12.5, color: "var(--muted)", background: "#F5F8F7", borderRadius: 8, padding: "8px 10px", marginTop: 8 },
-  tag: { fontSize: 11, fontWeight: 600, border: "1px solid", borderRadius: 20, padding: "3px 9px" },
+  tag: { fontSize: 11, fontWeight: 600, border: "1px solid", borderRadius: 20, padding: "3px 9px", whiteSpace: "nowrap", display: "inline-block" },
   activityRow: { display: "flex", gap: 12, borderBottom: "1px solid var(--line)", paddingBottom: 8 },
   activityDate: { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", width: 78, flexShrink: 0, paddingTop: 1 },
   activityType: { fontSize: 12.5, fontWeight: 600 },
