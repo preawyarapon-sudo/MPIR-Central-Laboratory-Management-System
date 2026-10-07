@@ -4102,7 +4102,7 @@ function blankCertificate(instrumentId, certificateNo = "") {
     source: "manual",
   };
 }
-function CertificateDataTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", presetInstrumentId = null, onSyncDates = null, listFooter = null }) {
+function CertificateDataTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", presetInstrumentId = null, onSyncDates = null, listFooter = null, groupTop = null, groupExtras = null }) {
   // Drill-down: instrument list -> that instrument's certificates (grouped
   // by year) -> the calibration points inside one certificate. Sheet 02
   // itself is still stored as one row per point (Sheet 03/04/06 all read it
@@ -4428,7 +4428,13 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                           <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[decision], color: CALIB_DECISION_COLOR[decision] }}>{rs.adjusted ? `หลังปรับ ${decision}` : decision}</span>
                           {rs.asFoundDecision && <div style={{ fontSize: 11, marginTop: 3, color: isBadDecision(rs.asFoundDecision) ? "var(--red)" : "var(--muted)" }}>ก่อนปรับ {rs.asFoundDecision}</div>}
                         </td>
-                        <td style={S.td}><span style={{ ...S.tag, borderColor: recordStatusColor(worst), color: recordStatusColor(worst) }}>{worst}</span></td>
+                        <td style={S.td}>
+                          <span style={{ ...S.tag, borderColor: recordStatusColor(worst), color: recordStatusColor(worst) }}>{worst}</span>
+                          {(() => {
+                            const ap = g.points.every(c => c.approvedBy), ev = g.points.every(c => c.evaluatedBy);
+                            return <div style={{ fontSize: 11, marginTop: 3, color: ap ? "var(--green)" : "var(--amber)" }}>{ap ? "อนุมัติแล้ว" : ev ? "รออนุมัติ" : "รอลงชื่อประเมิน"}</div>;
+                          })()}
+                        </td>
                         <td style={S.td}><ChevronRight size={14} color="var(--muted)" /></td>
                       </tr>
                     );
@@ -4536,6 +4542,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           ? <div><span style={{ color: "var(--muted)" }}>ไฟล์ใบรับรอง</span><div><a href={head.pdfLink} target="_blank" rel="noreferrer" style={{ color: "var(--teal-dark)" }}>เปิดไฟล์ PDF</a></div></div>
           : info("ไฟล์ใบรับรอง", "")}
       </div>
+      {groupTop && groupTop({ certificateNo: gCertNo, calibrationDate: gCalDate, points: pointsForGroup })}
       {groupRs.adjusted && isBadDecision(groupRs.asFoundDecision) && !isBadDecision(groupDecision) && (
         <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12, background: "#FFF6E0", border: "1px solid #F3DDA5", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, lineHeight: 1.6 }}>
           <Info size={15} color="#A86A00" style={{ flexShrink: 0, marginTop: 2 }} />
@@ -4600,6 +4607,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           จุดที่ขึ้น Draft มีข้อมูลไม่ครบ (ชี้เมาส์ที่สถานะเพื่อดูช่องที่ขาด) — กดแก้ไขจุดนั้นแล้วเติมให้ครบ สถานะจะเปลี่ยนเป็น Verified เอง
         </div>
       )}
+      {groupExtras && groupExtras({ certificateNo: gCertNo, calibrationDate: gCalDate, points: pointsForGroup })}
       {formEl}
     </div>
   );
@@ -5162,7 +5170,7 @@ function StatusConfirmCard({ instrument, summary, currentDisplayName = "", onCan
   );
 }
 
-function CalibrationResultsTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", canApprove = true }) {
+function CalibrationResultsTab({ equipment, certificates, setCertificates, notify, currentDisplayName = "", canApprove = true, trendOnly = false }) {
   const [q, setQ] = useState("");
   const byId = useMemo(() => Object.fromEntries(equipment.map(e => [e.id, e])), [equipment]);
   const trendById = useMemo(() => Object.fromEntries(computeTrendRows(certificates, equipment).map(r => [r.cert.id, r])), [certificates, equipment]);
@@ -5235,7 +5243,9 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
           currentDisplayName={currentDisplayName} onCancel={() => setSignDlg(null)} onConfirm={confirmSign} />
       )}
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ผลสอบเทียบและแนวโน้ม (Acceptance &amp; Trend)</h2><p style={S.h2sub}>คำนวณอัตโนมัติ ไม่ต้องกรอก · ลงชื่อประเมิน/อนุมัติครั้งเดียวต่อใบรับรอง · ชี้ที่ผลตัดสินเพื่อดูเหตุผล</p></div>
+        {trendOnly
+          ? <div><h2 style={S.h2}>แนวโน้มเครื่อง</h2><p style={S.h2sub}>ค่า Error ของแต่ละจุดสอบเทียบข้ามรอบ · Drift และการคาดการณ์รอบถัดไป · ลงชื่อ/อนุมัติทำที่หน้าใบสอบเทียบแต่ละใบ</p></div>
+          : <div><h2 style={S.h2}>ผลสอบเทียบและแนวโน้ม (Acceptance &amp; Trend)</h2><p style={S.h2sub}>คำนวณอัตโนมัติ ไม่ต้องกรอก · ลงชื่อประเมิน/อนุมัติครั้งเดียวต่อใบรับรอง · ชี้ที่ผลตัดสินเพื่อดูเหตุผล</p></div>}
       </div>
       <div style={S.toolbar}>
         <div style={S.searchWrap}><Search size={14} color="var(--muted)" /><input style={S.searchInput} placeholder="ค้นหาเลขที่ใบรับรอง / พารามิเตอร์ / จุด" value={q} onChange={e => setQ(e.target.value)} /></div>
@@ -5268,6 +5278,11 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                           </span>
                         )}
                         <div style={{ flex: 1 }} />
+                        {trendOnly ? (
+                          <span style={{ fontSize: 12, color: appr ? "var(--green)" : "var(--muted)" }}>
+                            {appr ? `อนุมัติโดย ${appr.by}` : evald ? `ประเมินโดย ${evald.by} · รออนุมัติ` : "รอลงชื่อประเมินผล"}
+                          </span>
+                        ) : (<>
                         {evald ? (
                           <span style={{ fontSize: 12 }}>ประเมินโดย <b>{evald.by}</b> {evald.date ? `· ${fmtDate(evald.date)}` : ""} <button style={{ ...S.smallBtn, padding: "2px 7px" }} onClick={() => sign(g, "evaluated", true)}>ยกเลิก</button></span>
                         ) : (
@@ -5282,6 +5297,7 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                             title={!canApprove ? "เฉพาะผู้มีสิทธิ์อนุมัติ (Technical Manager)" : evald ? "" : "ลงชื่อผู้ประเมินก่อน"}
                             onClick={() => sign(g, "approved")}><Stamp size={12} /> อนุมัติ (Technical Manager)</button>
                         )}
+                        </>)}
                       </div>
                     </td>
                   </tr>
@@ -5750,7 +5766,7 @@ function WiBudgetWizard({ instrument, allEquipment, allCertificates, existing = 
   return <WizardModal title={`ประเมินความไม่แน่นอนตาม ${WI08.code}`} steps={steps} onCancel={onCancel} onSave={() => onSave(build())} saveDisabled={saveDisabled} />;
 }
 
-function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [], allEquipment = null, allCertificates = null, currentDisplayName = "", notify }) {
+function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [], allEquipment = null, allCertificates = null, currentDisplayName = "", notify, allowCreate = true }) {
   const [editing, setEditing] = useState(null);
   const [wiDlg, setWiDlg] = useState(null); // { existing: rows | null }
   const allEq = allEquipment || equipment, allCerts = allCertificates || certificates;
@@ -5798,10 +5814,10 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
     <div>
       <div style={S.detailHead}>
         <div><h2 style={S.h2}>Uncertainty Budget</h2><p style={S.h2sub}>ประเมินตาม {WI08.code}: Type A จากการวัดซ้ำ + Type B จากใบรับรองสอบเทียบ, U = 2 × uc</p></div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {allowCreate && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button style={S.primaryBtn} onClick={() => setWiDlg({ existing: null })}><Plus size={15} /> ประเมินความไม่แน่นอน</button>
           <button style={S.ghostBtn} onClick={() => setEditing(newBudget())} title="สร้าง Budget แบบกรอกองค์ประกอบเองทีละแถว">กรอกเองทีละองค์ประกอบ</button>
-        </div>
+        </div>}
       </div>
       {wiDlg && <WiBudgetWizard instrument={equipment[0]} allEquipment={allEq} allCertificates={allCerts} existing={wiDlg.existing}
         currentDisplayName={currentDisplayName} onCancel={() => setWiDlg(null)} onSave={saveWi} />}
@@ -6628,17 +6644,8 @@ function InstrumentMasterTab({ instrument, equipment, setEquipment, certificates
   return (
     <div>
       <div style={S.detailHead}>
-        <div><h2 style={S.h2}>ข้อมูลเครื่องมือ — เกณฑ์การสอบเทียบ</h2><p style={S.h2sub}>กรอกครั้งเดียวต่อเครื่องมือ — ใช้ตัดสินผลในทุกชีท</p></div>
+        <div><h2 style={S.h2}>ข้อมูลเพิ่มเติมสำหรับการสอบเทียบ</h2><p style={S.h2sub}>กรอกครั้งเดียวต่อเครื่องมือ — ใช้ตัดสินผลในทุกชีท</p></div>
         <button style={S.primaryBtn} onClick={openEdit}><Pencil size={14} /> แก้ไข</button>
-      </div>
-      {/* Identity is edited on the Equipment page — one quiet line, not a block. */}
-      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, display: "flex", flexWrap: "wrap", gap: "2px 12px" }}>
-        <span>{instrument.type || "-"}</span>
-        {(instrument.brand || instrument.model) && <span>{[instrument.brand, instrument.model].filter(Boolean).join(" ")}</span>}
-        {instrument.serialNo && <span>S/N {instrument.serialNo}</span>}
-        {instrument.location && <span>ตำแหน่ง {instrument.location}</span>}
-        <span>รอบสอบเทียบ {instrument.intervalMonths ? `${instrument.intervalMonths} เดือน` : "ยังไม่ตั้ง"}</span>
-        <span style={{ fontStyle: "italic" }}>(แก้ข้อมูลเหล่านี้ที่หน้า "เครื่องมือ")</span>
       </div>
 
       {gaps.length > 0 && (
@@ -7097,6 +7104,180 @@ function CalibrationGuideModal({ onClose }) {
 // back), so returning lands on the same instrument and page instead of the
 // picker. Also keeps the picker's filters.
 const calibHubMemory = { instrumentId: null, view: null, q: "", typeFilter: "", statusFilter: "", dueFilter: "", layout: "cards", sortBy: "code" };
+/* ---------- Calibration records: one certificate = one calibration round ----------
+   A round runs from a certificate's calibration date until the next
+   certificate's date. Intermediate/daily checks and Uncertainty Budgets
+   belong to the round their date falls in (the oldest round also takes
+   anything dated before it), so they move to a new certificate as soon as
+   one is recorded — nothing has to be re-linked by hand. */
+function roundRangeOf(certs, instrumentId, calibrationDate) {
+  const rounds = calibrationRounds(certs, instrumentId);
+  const i = rounds.findIndex(r => r.date === calibrationDate);
+  if (i < 0) return { from: calibrationDate || "", to: "", isLatest: false };
+  return { from: i === 0 ? "" : rounds[i].date, to: rounds[i].nextDate || "", isLatest: !rounds[i].nextDate };
+}
+const inRoundRange = (d, r) => (!r.from || (d || "") >= r.from) && (!r.to || (d || "") < r.to);
+
+// Equipment identity, read straight from the equipment record (edited on the
+// "เครื่องมือ" page — one source, nothing copied).
+function EquipmentIdentityCard({ instrument: e }) {
+  const isMobile = useIsMobile();
+  const row = (label, value, color) => (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderTop: "1px solid #EEF2F6", fontSize: 13 }}>
+      <span style={{ color: "var(--muted)" }}>{label}</span>
+      <span style={{ textAlign: "right", fontWeight: 500, color: value ? (color || "var(--ink)") : "#B4BFCC", wordBreak: "break-word" }}>{value || "ยังไม่กรอก"}</span>
+    </div>
+  );
+  const days = daysUntil(e.nextDue), st = statusOf(days);
+  return (
+    <div style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 14, padding: 16, marginBottom: 16, display: "flex", gap: 18, flexWrap: "wrap" }}>
+      <Thumb src={toDisplayImageUrl(e.imageUrl)} size={isMobile ? 72 : 120} radius={12} />
+      <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--teal-dark)" }}>ข้อมูลเครื่อง</span>
+          <span style={{ fontSize: 11.5, color: "var(--muted)" }}>ดึงจากหน้า "เครื่องมือ" · แก้ไขที่หน้านั้น</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: "0 24px" }}>
+          <div>
+            {row("รหัส / ชื่อ", `${e.code || "-"} — ${e.name || "-"}`)}
+            {row("ประเภท", e.type)}
+            {row("ยี่ห้อ / รุ่น", [e.brand, e.model].filter(Boolean).join(" · "))}
+            {row("Serial No.", e.serialNo)}
+          </div>
+          <div>
+            {row("ตำแหน่ง", e.location)}
+            {row("รอบสอบเทียบ", e.intervalMonths ? `${e.intervalMonths} เดือน` : "")}
+            {row("สอบเทียบล่าสุด", e.lastCalibration ? fmtDate(e.lastCalibration) : "")}
+            {row("ครบกำหนดถัดไป", e.nextDue ? `${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "", STATUS_COLOR[st])}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Approval steps of ONE certificate: record → evaluate → approve (→ confirm
+// usage status, for the latest certificate only).
+function CertificateApprovalCard({ instrument, points, isLatest, canApprove = true, currentDisplayName = "", onSign, onConfirmStatus }) {
+  const [dlg, setDlg] = useState(null); // { field, clear }
+  if (!points.length) return null;
+  const p0 = points[0];
+  const recorded = !points.some(c => c.recordStatus === "Draft");
+  const evaluated = points.every(c => c.evaluatedBy);
+  const approved = points.every(c => c.approvedBy);
+  const statusDone = !!usageStatusOf(instrument) && !!authorizedByOf(instrument) && (instrument.statusApprovalDate || "") >= (p0.calibrationDate || "");
+  const steps = [
+    { key: "record", label: "บันทึกจุดสอบเทียบ", done: recorded, todo: "มีจุดที่ข้อมูลไม่ครบ (Draft) — แก้ไขจุดนั้นในตารางด้านล่าง" },
+    { key: "evaluate", label: "ลงชื่อประเมินผล", done: evaluated, todo: "ตรวจผลทุกจุดแล้วลงชื่อผู้ประเมิน", by: evaluated ? `${p0.evaluatedBy}${p0.evaluationDate ? ` · ${fmtDate(p0.evaluationDate)}` : ""}` : "" },
+    { key: "approve", label: "อนุมัติผล", done: approved, todo: canApprove ? "อนุมัติโดย Technical Manager" : "รอผู้มีสิทธิ์อนุมัติ (Technical Manager)", by: approved ? `${p0.approvedBy}${p0.approvalDate ? ` · ${fmtDate(p0.approvalDate)}` : ""}` : "" },
+    ...(isLatest ? [{ key: "status", label: "ยืนยันสถานะการใช้งาน", done: statusDone, todo: "ยืนยันสถานะเครื่องหลังได้ผลใบนี้", by: statusDone ? `${usageStatusOf(instrument)} · ${authorizedByOf(instrument)}` : "" }] : []),
+  ];
+  const next = steps.find(st => !st.done);
+  const act = (st) => {
+    if (st.key === "evaluate") setDlg({ field: "evaluated" });
+    else if (st.key === "approve" && evaluated) setDlg({ field: "approved" });
+    else if (st.key === "status") onConfirmStatus();
+  };
+  const g = { instrument, certificateNo: p0.certificateNo || "", points: points.map(c => ({ c })) };
+  return (
+    <div style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--teal-dark)", marginBottom: 10 }}>ขั้นตอนของใบนี้</div>
+      <div style={{ overflowX: "auto" }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${steps.length}, minmax(110px, 1fr))`, minWidth: steps.length * 110 }}>
+          {steps.map((st, i) => {
+            const isNext = next && next.key === st.key;
+            const line = (on) => ({ flex: 1, height: 2, background: on ? "#1E8A57" : "#DCE3EA" });
+            return (
+              <div key={st.key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", width: "100%" }}>
+                  <span style={i === 0 ? { flex: 1 } : line(steps[i - 1].done)} />
+                  <span style={{ width: 22, height: 22, borderRadius: "50%", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, boxSizing: "border-box",
+                    background: st.done ? "#1E8A57" : isNext ? "var(--teal)" : "#fff", color: st.done || isNext ? "#fff" : "#8A97A8",
+                    border: st.done || isNext ? "none" : "1.5px solid #C5CFDA", boxShadow: isNext ? "0 0 0 4px #DCE9F8" : "none" }}>
+                    {st.done ? <Check size={12} strokeWidth={3} /> : i + 1}
+                  </span>
+                  <span style={i === steps.length - 1 ? { flex: 1 } : line(st.done)} />
+                </div>
+                <span style={{ fontSize: 11.5, textAlign: "center", fontWeight: isNext ? 700 : 500, color: isNext ? "var(--teal-dark)" : st.done ? "#4B5C72" : "#8A97A8" }}>{st.label}</span>
+                {st.by && <span style={{ fontSize: 10.5, color: "var(--muted)", textAlign: "center", padding: "0 4px" }}>{st.by}</span>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10, paddingTop: 10, borderTop: "1px solid #EEF2F6" }}>
+        {next ? (<>
+          <div style={{ flex: "1 1 220px", fontSize: 12.5 }}><b>ขั้นถัดไป: {next.label}</b><span style={{ color: "var(--muted)" }}> — {next.todo}</span></div>
+          {next.key !== "record" && (
+            <button style={{ ...S.primaryBtn, padding: "6px 12px", fontSize: 12.5, opacity: next.key === "approve" && !canApprove ? 0.5 : 1 }}
+              disabled={next.key === "approve" && !canApprove} onClick={() => act(next)}>
+              {next.key === "evaluate" ? <><Pencil size={13} /> ลงชื่อประเมินผล</> : next.key === "approve" ? <><Stamp size={13} /> อนุมัติผล</> : <><Stamp size={13} /> ยืนยันสถานะ</>}
+            </button>
+          )}
+        </>) : (
+          <span style={{ flex: 1, fontSize: 12.5, color: "var(--green)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}><CheckCircle2 size={15} /> ใบนี้ครบทุกขั้นตอนแล้ว</span>
+        )}
+        {(evaluated || approved) && (
+          <button style={{ ...S.ghostBtn, padding: "5px 10px", fontSize: 12 }} onClick={() => setDlg({ field: approved ? "approved" : "evaluated", clear: true })}>
+            ยกเลิกการ{approved ? "อนุมัติ" : "ลงชื่อประเมิน"}
+          </button>
+        )}
+      </div>
+      {dlg && (
+        <SignOffCard g={g} field={dlg.field} clear={!!dlg.clear} canApprove={canApprove} currentDisplayName={currentDisplayName}
+          onCancel={() => setDlg(null)} onConfirm={(name) => { onSign(dlg.field, name, !!dlg.clear); setDlg(null); }} />
+      )}
+    </div>
+  );
+}
+
+// Everything that belongs to one certificate's round, under its points.
+function CertificateRoundPanel({ instrument, range, certificates, dailyChecks, intermediateChecks, setIntermediateChecks, budgets, setBudgets, allEquipment, allCertificates, currentDisplayName, notify, onOpenChecks }) {
+  const [tab, setTab] = useState("checks");
+  const [editingIc, setEditingIc] = useState(null);
+  const daily = dailyChecks.filter(c => inRoundRange(c.date, range));
+  const ics = intermediateChecks.filter(c => inRoundRange(c.checkDate, range));
+  const roundBudgets = budgets.filter(b => inRoundRange(budgetDateOf(budgets.filter(x => x.budgetId === b.budgetId)), range));
+  const nBudgets = new Set(roundBudgets.map(b => b.budgetId)).size;
+  const fails = daily.filter(c => c.result === false).length + ics.filter(c => calcIntermediateCheck(c, instrument).result === "FAIL").length;
+  const period = `${range.from ? fmtDate(range.from) : "ก่อนหน้า"} – ${range.to ? fmtDate(addDaysISO(range.to, -1)) : "ปัจจุบัน"}`;
+  return (
+    <div style={{ marginTop: 20, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>ระหว่างรอบของใบนี้</span>
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>{period}{range.isLatest ? " · รายการใหม่จะอยู่ใต้ใบนี้จนกว่าจะมีใบสอบเทียบใหม่" : ""}</span>
+      </div>
+      <SubSwitch value={tab} onChange={setTab} options={[
+        { key: "checks", label: "ตรวจสอบระหว่างรอบ", badge: fails ? `ไม่ผ่าน ${fails}` : String(daily.length + ics.length), tone: fails ? "var(--red)" : undefined },
+        { key: "uncertainty", label: "Uncertainty Budget", badge: String(nBudgets) },
+      ]} />
+      {tab === "checks" && (<>
+        {range.isLatest && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            <button style={S.primaryBtn} onClick={() => setEditingIc(newIntermediateCheckFor(instrument, intermediateChecks, certificates, currentDisplayName))}><Plus size={14} /> Intermediate check</button>
+            {onOpenChecks && <button style={S.ghostBtn} onClick={onOpenChecks}><ClipboardCheck size={14} /> บันทึก Daily check</button>}
+          </div>
+        )}
+        <CheckHistoryTable instrument={instrument} dailyChecks={daily} checks={ics} certificates={certificates} readOnly />
+      </>)}
+      {tab === "uncertainty" && (<>
+        {!range.isLatest && <div style={{ ...S.notesBox, fontSize: 12.5, marginBottom: 10 }}>Budget ที่ประเมินในช่วงของใบนี้ — การประเมินใหม่ให้ทำที่ใบสอบเทียบล่าสุด</div>}
+        <UncertaintyBudgetTab
+          equipment={[instrument]} budgets={roundBudgets} certificates={certificates} allowCreate={range.isLatest}
+          allEquipment={allEquipment} allCertificates={allCertificates} currentDisplayName={currentDisplayName}
+          setBudgets={(list) => { const ids = new Set(roundBudgets.map(b => b.id)); setBudgets([...budgets.filter(b => !ids.has(b.id)), ...list]); }}
+          notify={notify}
+        />
+      </>)}
+      {editingIc && (
+        <IntermediateCheckForm row={editingIc} equipment={[instrument]} certificates={certificates} currentDisplayName={currentDisplayName}
+          onCancel={() => setEditingIc(null)}
+          onSave={(row) => { setIntermediateChecks(saveIntermediateCheckInto(intermediateChecks, row, instrument)); notify("บันทึก Intermediate check แล้ว"); setEditingIc(null); }} />
+      )}
+    </div>
+  );
+}
+
 function CalibrationRecordsHub({
   equipment, setEquipment,
   certificates, setCertificates,
@@ -7428,11 +7609,11 @@ function CalibrationRecordsHub({
   // sheets get a small switch underneath. Warning flags from each sheet are
   // carried onto its tab / switch so problems stay visible.
   const TAB_GROUPS = [
-    { key: "instrument", label: "ข้อมูลเครื่องมือ & สถานะ", sheets: "01 · 07", icon: Wrench, leaves: ["instrument"] },
-    { key: "certificates", label: "ใบรับรอง & ผลสอบเทียบ", sheets: "02 · 03 · 06", icon: FileCheck2, leaves: ["certificates", "results"] },
-    { key: "checks", label: "ตรวจสอบระหว่างรอบ & Uncertainty", sheets: "04 · 05", icon: ClipboardCheck, leaves: ["checks", "uncertainty"] },
+    { key: "instrument", label: "ข้อมูลเครื่อง", icon: Wrench, leaves: ["instrument"] },
+    { key: "certificates", label: "บันทึกใบสอบเทียบ", icon: FileCheck2, leaves: ["certificates"] },
+    { key: "trend", label: "แนวโน้มเครื่อง", icon: TrendingUp, leaves: ["trend"] },
   ];
-  const featureOf = (k) => FEATURES.find(f => f.key === k);
+  const featureOf = (k) => (k === "trend" ? FEATURES.find(f => f.key === "results") : FEATURES.find(f => f.key === k));
   // ---- "ขั้นตอนรอบสอบเทียบ": where this instrument stands in its cycle ----
   // Each step is derived from the records (nothing extra to tick), and the
   // first unfinished one is offered as the next thing to do.
@@ -7459,7 +7640,10 @@ function CalibrationRecordsHub({
   const doneCount = CYCLE_STEPS.filter(st => st.done).length;
   const scopedCertSetter = makeScopedListSetter(certificates, setCertificates, selectedInstrumentId);
   const defaultView = gaps.length ? "instrument" : "certificates";
-  const current = view && TAB_GROUPS.some(g => g.leaves.includes(view)) ? view : defaultView;
+  // Older links/memory may still name the former pages.
+  const LEGACY_VIEW = { results: "trend", checks: "certificates", uncertainty: "certificates" };
+  const wanted = LEGACY_VIEW[view] || view;
+  const current = wanted && TAB_GROUPS.some(g => g.leaves.includes(wanted)) ? wanted : defaultView;
   const currentGroup = TAB_GROUPS.find(g => g.leaves.includes(current)) || TAB_GROUPS[0];
   const pickTab = (g) => setView(g.leaves.includes(current) ? current : (lastLeaf[g.key] || g.leaves[0]));
   const pickLeaf = (k) => { setView(k); setLastLeaf(prev => ({ ...prev, [currentGroup.key]: k })); };
@@ -7481,63 +7665,12 @@ function CalibrationRecordsHub({
         </div>
         <button style={S.smallBtn} onClick={() => exportAll(selectedInstrumentId)}><FileDown size={13} /> ส่งออก Excel เฉพาะเครื่องนี้</button>
       </div>
-      {/* Cycle progress: one connected line of steps (done → current → later),
-          with the single next action spelled out underneath. */}
-      <div style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, padding: "14px 16px 12px", marginBottom: 16 }}>
-        <div style={{ overflowX: "auto", paddingBottom: 2 }}>
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${CYCLE_STEPS.length}, minmax(84px, 1fr))`, minWidth: CYCLE_STEPS.length * 84 }}>
-            {CYCLE_STEPS.map((st, i) => {
-              const isNext = nextStep && nextStep.key === st.key;
-              const prevDone = i > 0 && CYCLE_STEPS[i - 1].done;
-              const line = (on) => ({ flex: 1, height: 2, background: on ? "#1E8A57" : "#DCE3EA" });
-              return (
-                <button key={st.key} onClick={() => setView(st.view)} title={st.done ? "เสร็จแล้ว" : st.todo}
-                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", width: "100%" }}>
-                    <span style={i === 0 ? { flex: 1 } : line(prevDone)} />
-                    <span style={{
-                      width: 22, height: 22, borderRadius: "50%", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 11, fontWeight: 700, boxSizing: "border-box",
-                      background: st.done ? "#1E8A57" : isNext ? "var(--teal)" : "#fff",
-                      color: st.done || isNext ? "#fff" : "#8A97A8",
-                      border: st.done || isNext ? "none" : "1.5px solid #C5CFDA",
-                      boxShadow: isNext ? "0 0 0 4px #DCE9F8" : "none",
-                    }}>{st.done ? <Check size={12} strokeWidth={3} /> : i + 1}</span>
-                    <span style={i === CYCLE_STEPS.length - 1 ? { flex: 1 } : line(st.done)} />
-                  </div>
-                  <span style={{
-                    fontSize: 11.5, lineHeight: 1.35, textAlign: "center", padding: "0 4px",
-                    fontWeight: isNext ? 700 : 500, color: isNext ? "var(--teal-dark)" : st.done ? "#4B5C72" : "#8A97A8",
-                  }}>{st.label}</span>
-                </button>
-              );
-            })}
-          </div>
+      {gaps.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5 }}>
+          <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>ยังไม่ได้ตั้งเกณฑ์: {gaps.join(", ")}</span>
+          <button style={S.smallBtn} onClick={() => setView("instrument")}>ไปตั้งเกณฑ์</button>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "1px solid #EEF2F6" }}>
-          {nextStep ? (<>
-            <div style={{ flex: "1 1 220px", minWidth: 0, fontSize: 12.5, lineHeight: 1.5 }}>
-              <span style={{ fontWeight: 700, color: "var(--ink)" }}>ขั้นถัดไป: {nextStep.label}</span>
-              <span style={{ color: "var(--muted)" }}> — {nextStep.todo}</span>
-            </div>
-            <button style={{ ...S.primaryBtn, padding: "6px 12px", fontSize: 12.5 }} onClick={() => goStep(nextStep)}>
-              ไปทำขั้นนี้ <ChevronRight size={14} />
-            </button>
-          </>) : (
-            <span style={{ fontSize: 12.5, color: "var(--green)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}><CheckCircle2 size={15} /> ครบทุกขั้นตอนของรอบนี้แล้ว</span>
-          )}
-        </div>
-      </div>
-      {stepCard?.kind === "sign" && latestGroup && (
-        <SignOffCard g={latestGroup} field={stepCard.field} canApprove={canApprove} currentDisplayName={currentDisplayName}
-          onCancel={() => setStepCard(null)}
-          onConfirm={(name) => {
-            const ids = new Set(latestPts.map(c => c.id));
-            const patch = signoffPatch(latestGroup, stepCard.field, name, false);
-            scopedCertSetter(scopedCertificates.map(c => ids.has(c.id) ? { ...c, ...patch } : c));
-            notify(stepCard.field === "approved" ? `อนุมัติผลใบรับรอง ${latestGroup.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${latestGroup.certificateNo || "-"} แล้ว`);
-            setStepCard(null);
-          }} />
       )}
       {stepCard?.kind === "status" && instrument && (
         <StatusConfirmCard instrument={instrument} summary={calSum} currentDisplayName={currentDisplayName}
@@ -7575,6 +7708,7 @@ function CalibrationRecordsHub({
       )}
 
       {current === "instrument" && instrument && (<>
+        <EquipmentIdentityCard instrument={instrument} />
         <InstrumentStatusCard
           instrument={instrument} certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
           onConfirmStatus={() => setStepCard({ kind: "status" })}
@@ -7592,32 +7726,35 @@ function CalibrationRecordsHub({
           equipment={scopedEquipment} certificates={scopedCertificates} setCertificates={scopedCertSetter}
           notify={notify} currentDisplayName={currentDisplayName} presetInstrumentId={selectedInstrumentId}
           onSyncDates={syncDates}
+          groupTop={(g) => instrument && (
+            <CertificateApprovalCard
+              instrument={instrument} points={g.points} canApprove={canApprove} currentDisplayName={currentDisplayName}
+              isLatest={roundRangeOf(scopedCertificates, selectedInstrumentId, g.calibrationDate).isLatest}
+              onConfirmStatus={() => setStepCard({ kind: "status" })}
+              onSign={(field, name, clear) => {
+                const ids = new Set(g.points.map(c => c.id));
+                const patch = signoffPatch({ instrument, points: g.points.map(c => ({ c })) }, field, name, clear);
+                scopedCertSetter(scopedCertificates.map(c => ids.has(c.id) ? { ...c, ...patch } : c));
+                notify(clear ? "ยกเลิกการลงชื่อแล้ว" : field === "approved" ? `อนุมัติผลใบรับรอง ${g.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${g.certificateNo || "-"} แล้ว`);
+              }}
+            />
+          )}
+          groupExtras={(g) => instrument && g.points.length > 0 && (
+            <CertificateRoundPanel
+              instrument={instrument} range={roundRangeOf(scopedCertificates, selectedInstrumentId, g.calibrationDate)}
+              certificates={scopedCertificates} dailyChecks={scopedDailyChecks}
+              intermediateChecks={scopedChecks} setIntermediateChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
+              budgets={scopedBudgets} setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
+              allEquipment={equipment} allCertificates={certificates} currentDisplayName={currentDisplayName} notify={notify}
+              onOpenChecks={onOpenChecks ? () => onOpenChecks(selectedInstrumentId) : null}
+            />
+          )}
         />
       )}
-      {current === "results" && (
+      {current === "trend" && (
         <CalibrationResultsTab
           equipment={scopedEquipment} certificates={scopedCertificates} setCertificates={scopedCertSetter}
-          notify={notify} currentDisplayName={currentDisplayName} canApprove={canApprove}
-        />
-      )}
-      {current === "checks" && (
-        <div>
-          <div style={S.detailHead}>
-            <div>
-              <h2 style={S.h2}>ตรวจสอบระหว่างรอบ (Daily / Intermediate Check)</h2>
-              <p style={S.h2sub}>ประวัติรวมทั้งสองแบบ แบ่งตามรอบใบรับรอง · บันทึกได้ที่เมนู "ตรวจเช็คเครื่องมือ"</p>
-            </div>
-            {onOpenChecks && <button style={S.primaryBtn} onClick={() => onOpenChecks(selectedInstrumentId)}><ClipboardCheck size={15} /> ไปบันทึกที่หน้าตรวจเช็คเครื่องมือ</button>}
-          </div>
-          <CheckHistoryTable instrument={instrument} dailyChecks={scopedDailyChecks} checks={scopedChecks} certificates={scopedCertificates} readOnly />
-        </div>
-      )}
-      {current === "uncertainty" && (
-        <UncertaintyBudgetTab
-          equipment={scopedEquipment} budgets={scopedBudgets} certificates={scopedCertificates}
-          allEquipment={equipment} allCertificates={certificates} currentDisplayName={currentDisplayName}
-          setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
-          notify={notify}
+          notify={notify} currentDisplayName={currentDisplayName} canApprove={canApprove} trendOnly
         />
       )}
     </div>
