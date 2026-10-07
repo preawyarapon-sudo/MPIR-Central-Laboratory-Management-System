@@ -7548,6 +7548,128 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
 // (MPIR Sheet 04). Every calibrated instrument is listed; the Daily button
 // only appears for types that have a daily form. QR deep links still open
 // the Daily form straight away.
+/* ---------- Daily check page: headline value + log table ---------- */
+// The one number that sums up a check, for the "ผลล่าสุด" card and the log.
+const CHECK_RESULT_UNIT = { refractometerResult: "°Brix", polarimeterResult: "°", ovenResult: "°C", coolingBathResult: "°C", humidityResult: "%RH", ecResult: "µS/cm" };
+function checkHeadline(c) {
+  for (const k of Object.keys(CHECK_RESULT_UNIT)) {
+    if (!c?.[k]) continue;
+    const r = c[k], unit = CHECK_RESULT_UNIT[k];
+    const ref = k === "refractometerResult" && r.standard != null ? `ค่ามาตรฐาน: ${Number(r.standard).toFixed(2)} ${unit}`
+      : r.min != null && r.max != null ? `ช่วงยอมรับ: ${r.min} – ${r.max} ${unit}` : "";
+    return { value: r.reading != null ? String(r.reading) : null, unit, ref, pass: r.pass ?? c.result ?? null };
+  }
+  const multi = c?.weightResults || c?.phResults;
+  if (multi) {
+    const ok = multi.filter(x => x.pass).length;
+    return { value: `${ok}/${multi.length}`, unit: "จุด", ref: c.weightResults ? "จุดตรวจน้ำหนักที่ผ่าน" : "บัฟเฟอร์ที่ผ่าน", pass: c.result ?? null };
+  }
+  return { value: null, unit: "", ref: "", pass: c?.result ?? null };
+}
+const RESULT_STYLE = {
+  PASS: { th: "ผ่าน", fg: "#1E8A57", bg: "#EAF7F0", line: "#BFE6D0", note: "อยู่ในเกณฑ์" },
+  WARNING: { th: "เฝ้าระวัง", fg: "#A86A00", bg: "#FFF6E0", line: "#F3DDA5", note: "เกิน Warning limit" },
+  FAIL: { th: "ไม่ผ่าน", fg: "#C6493B", bg: "#FDF1F1", line: "#F2C4C4", note: "เกินเกณฑ์" },
+  "-": { th: "-", fg: "#6B7A8C", bg: "#F3F6F9", line: "#DCE3EA", note: "" },
+};
+// One row model for daily and intermediate checks.
+function checkLogRows(dailyChecks, icChecks, instrument) {
+  return [
+    ...dailyChecks.map(c => {
+      const h = checkHeadline(c);
+      return { kind: "daily", key: c.id, rec: c, date: c.date || "", time: c.time || "", value: h.value, unit: h.unit,
+        result: c.result === true ? "PASS" : c.result === false ? "FAIL" : "-", by: c.checkedBy || "",
+        approval: c.approved ? `อนุมัติแล้ว${c.approvedByName ? ` · ${c.approvedByName}` : ""}` : "รออนุมัติ", approved: !!c.approved, note: c.remarks || "" };
+    }),
+    ...icChecks.map(c => {
+      const calc = calcIntermediateCheck(c, instrument);
+      return { kind: "ic", key: c.id, rec: c, date: c.checkDate || "", time: "",
+        value: calc.correctedMean != null ? calc.correctedMean.toFixed(4) : null, unit: c.unit || instrument?.calUnit || "",
+        result: calc.result in RESULT_STYLE ? calc.result : "-", by: c.checkedBy || "",
+        approval: c.reviewedBy ? `ทบทวน · ${c.reviewedBy}` : "", approved: !!c.reviewedBy, note: c.remarks || "" };
+    }),
+  ];
+}
+function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll }) {
+  const [sort, setSort] = useState({ key: "date", dir: -1 });
+  const keyOf = {
+    date: r => r.date + " " + r.time, kind: r => r.kind, value: r => numOrNull(r.value) ?? -Infinity,
+    result: r => ["FAIL", "WARNING", "PASS", "-"].indexOf(r.result), by: r => r.by, note: r => r.note,
+  };
+  const sorted = rows.slice().sort((a, b) => {
+    const x = keyOf[sort.key](a), y = keyOf[sort.key](b);
+    return (x < y ? -1 : x > y ? 1 : 0) * sort.dir || (b.date + b.time).localeCompare(a.date + a.time);
+  });
+  const th = { padding: "14px 18px", fontSize: 12.5, fontWeight: 600, color: "#4B5C72", textAlign: "left", background: "#F7FAFD", borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" };
+  const td = { padding: "14px 18px", borderBottom: "1px solid #EEF3F8", verticalAlign: "middle", fontSize: 13 };
+  const head = (key, label) => (
+    <th style={th}>
+      {key ? (
+        <button type="button" onClick={() => setSort(sort.key === key ? { key, dir: -sort.dir } : { key, dir: key === "date" ? -1 : 1 })}
+          style={{ background: "none", border: "none", padding: 0, font: "inherit", color: "inherit", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {label}
+          <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 0.5, fontSize: 9, color: "#9AAABB" }}>
+            <span style={{ color: sort.key === key && sort.dir === 1 ? "var(--teal)" : undefined }}>▲</span>
+            <span style={{ color: sort.key === key && sort.dir === -1 ? "var(--teal)" : undefined }}>▼</span>
+          </span>
+        </button>
+      ) : label}
+    </th>
+  );
+  const pill = (bg, fg, line, text, extra = {}) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: bg, color: fg, border: `1px solid ${line}`, borderRadius: 999, padding: "4px 14px", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", ...extra }}>{text}</span>
+  );
+  const actBtn = { width: 36, height: 36, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff", border: "1px solid var(--line)", borderRadius: 10, cursor: "pointer", color: "var(--ink)" };
+  return (
+    <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 16, overflow: "hidden" }}>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+          <thead><tr>
+            {head("date", "วันที่ / เวลา")}{head("kind", "ประเภท")}{head("value", `ผลการตรวจ${unitLabel ? ` (${unitLabel})` : ""}`)}
+            {head("result", "สถานะ")}{head("by", "ผู้ตรวจ / อนุมัติ")}{head("note", "หมายเหตุ")}{head(null, "การจัดการ")}
+          </tr></thead>
+          <tbody>
+            {sorted.map(r => {
+              const st = RESULT_STYLE[r.result];
+              return (
+                <tr key={r.key} onClick={() => onEdit(r)} style={{ cursor: "pointer" }}>
+                  <td style={td}><div style={{ fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>{fmtDate(r.date)}</div>{r.time && <div style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 2 }}>{r.time}</div>}</td>
+                  <td style={td}>{r.kind === "daily" ? pill("#EAF2FD", "#1D5FB8", "#BFD5F3", "Daily") : pill("#F3EEFB", "#6A43B5", "#D9CCF0", "Intermediate")}</td>
+                  <td style={td}>
+                    {r.value != null ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, background: st.bg, color: st.fg, borderRadius: 10, padding: "8px 14px", fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>
+                        {r.result === "FAIL" ? <XCircle size={16} /> : r.result === "WARNING" ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+                        {r.value}{r.unit ? ` ${r.unit}` : ""}
+                      </span>
+                    ) : <span style={{ color: "var(--muted)" }}>-</span>}
+                  </td>
+                  <td style={td}>{pill("#fff", st.fg, st.line, st.th)}</td>
+                  <td style={td}>
+                    <div style={{ fontWeight: 500 }}>{r.by || "-"}</div>
+                    {r.approval && <div style={{ fontSize: 12, marginTop: 2, color: r.approved ? "#1E8A57" : "#A86A00" }}>{r.approval}</div>}
+                  </td>
+                  <td style={{ ...td, color: r.note ? "var(--ink)" : "var(--muted)", maxWidth: 220 }}>{r.note || "-"}</td>
+                  <td style={td} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button type="button" style={actBtn} title="แก้ไข" onClick={() => onEdit(r)}><Pencil size={15} /></button>
+                      <button type="button" style={actBtn} title="ลบ" onClick={() => { if (window.confirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) onDelete(r); }}><Trash2 size={15} /></button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {sorted.length === 0 && (
+              <tr><td colSpan={7} style={{ ...td, textAlign: "center", color: "var(--muted)", padding: "28px 18px" }}>
+                {emptyText}{onShowAll && <> · <button type="button" onClick={onShowAll} style={{ background: "none", border: "none", padding: 0, color: "var(--teal)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}>ดูทั้งหมด</button></>}
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, intermediateChecks = [], setIntermediateChecks = null, notify, initialCheckId, focusRequest = null, onBackToCalibration = null, guestMode = false, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const checkable = useMemo(() => equipment
     .filter(e => e.type !== "เครื่องปรับอากาศ" && (!guestMode || hasDailyForm(e)))
@@ -7558,6 +7680,8 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
   const [editingIc, setEditingIc] = useState(null);
   useEffect(() => { if (focusRequest?.id) setEquipId(focusRequest.id); }, [focusRequest]);
   const [showShare, setShowShare] = useState(false);
+  const [logKind, setLogKind] = useState("all");
+  const [range, setRange] = useState("month"); // month | 3m | round | all
   const deepLinkHandled = useRef(false);
 
   useEffect(() => {
@@ -7639,129 +7763,199 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
         <EmptyState text="ยังไม่มีเครื่องมือ — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่" />
       ) : (
         <>
-          <Toolbar>
-            <select style={S.select} value={equipId} onChange={e => setEquipId(e.target.value)}>
-              {checkable.map(e => (
-                <option key={e.id} value={e.id}>{e.code}{e.name ? ` — ${e.name}` : ""} · {e.type}{e.location ? ` (${e.location})` : ""}</option>
-              ))}
-            </select>
-            {hasDailyForm(equip) && (
-              <button
-                style={S.primaryBtn}
-                onClick={() => setEditing(isScale ? blankScaleCheckEntry(equipId) : blankMeterCheckEntry(equipId))}
-              >
-                <Plus size={15} /> Daily check วันนี้
-              </button>
-            )}
-            {canIc && equip && (
-              <button style={hasDailyForm(equip) ? S.ghostBtn : S.primaryBtn} onClick={() => setEditingIc(newIntermediateCheckFor(equip, intermediateChecks, certificates, currentDisplayName))}>
-                <Plus size={15} /> Intermediate check
-              </button>
-            )}
-          </Toolbar>
-          {equip && !hasDailyForm(equip) && (
-            <div style={{ fontSize: 12, color: "var(--muted)", margin: "-4px 0 12px" }}>เครื่องประเภท "{equip.type || "-"}" ยังไม่มีฟอร์ม Daily check — บันทึกเป็น Intermediate check ได้</div>
-          )}
-          {canIc && unlockedIc.length > 0 && snapshotCriteria(equip) && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5 }}>
-              <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
-              <span style={{ flex: 1 }}><b>{unlockedIc.length}</b> รายการ Intermediate check เก่ายังไม่ได้ล็อกเกณฑ์ — ผลจะเปลี่ยนตาม Tolerance ปัจจุบันจนกว่าจะล็อก</span>
-              <button style={S.smallBtn} onClick={lockLegacyIc}>ล็อกด้วยเกณฑ์ปัจจุบัน</button>
-            </div>
-          )}
-
-          {equip && (
-            <div style={{ ...S.panel, display: "flex", gap: 14, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
-              <Thumb src={toDisplayImageUrl(equip.imageUrl)} size={60} radius={10} />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 700 }}>{equip.code}{equip.name ? ` — ${equip.name}` : ""}</div>
-                <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2, wordBreak: "break-word" }}>
-                  {equip.type}
-                  {[equip.brand, equip.model].filter(Boolean).length ? ` · ${[equip.brand, equip.model].filter(Boolean).join(" ")}` : ""}
-                  {equip.location ? ` · ${equip.location}` : ""}
-                </div>
-              </div>
-              <button style={S.ghostBtn} onClick={() => setShowShare(true)}>
-                <QrCode size={14} style={{ marginRight: 5 }} /> QR / ลิงก์เครื่องนี้
-              </button>
-            </div>
-          )}
-
-          {/* Sheet 04: Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance), Action
-              Limit = ค่าอ้างอิง ± Tolerance — computed straight from the
-              Tolerance/MPE set on this instrument in Sheet 01 (ทะเบียน
-              เครื่องมือ). Reference point defaults to the midpoint of the
-              instrument's working range; shown only when Tolerance is set,
-              so equipment not part of the formal calibration register is
-              unaffected. */}
-          {equip && equip.tolerance != null && equip.tolerance !== "" && (() => {
-            const refBasis = (Number(equip.workingRangeMin) + Number(equip.workingRangeMax)) / 2 || Number(equip.workingRangeMax) || 0;
-            const lims = warningActionLimits(equip, refBasis);
-            if (!lims) return null;
-            return (
-              <div style={{ ...S.panel, marginBottom: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                  <AlertTriangle size={14} color="var(--amber)" />
-                  <span style={{ fontSize: 12.5, fontWeight: 700 }}>เกณฑ์ Warning / Action Limit (อ้างอิงจุดกลางช่วงใช้งาน {refBasis}{equip.calUnit ? ` ${equip.calUnit}` : ""})</span>
-                </div>
-                <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
-                  <span>LWL: <b style={{ color: "var(--amber)" }}>{lims.lwl.toFixed(4)}</b></span>
-                  <span>UWL: <b style={{ color: "var(--amber)" }}>{lims.uwl.toFixed(4)}</b></span>
-                  <span>LAL: <b style={{ color: "var(--red)" }}>{lims.lal.toFixed(4)}</b></span>
-                  <span>UAL: <b style={{ color: "var(--red)" }}>{lims.ual.toFixed(4)}</b></span>
-                </div>
+          {(() => {
+            // ---- data for the page ----
+            const today = todayISO();
+            const allRows = equip ? checkLogRows(checks, icForEquip, equip) : [];
+            const last = allRows.slice().sort((x, y) => (y.date + y.time).localeCompare(x.date + x.time))[0];
+            const lastDaily = checks[0];
+            const head = lastDaily ? checkHeadline(lastDaily) : null;
+            const unitLabel = head?.unit && head.unit !== "จุด" ? head.unit : (equip?.calUnit || "");
+            const doneToday = allRows.filter(r => r.date === today).length;
+            const plannedToday = /ทุกวัน|daily/i.test(equip?.checkFrequency || "") || hasDailyForm(equip) ? 1 : 0;
+            // Warning/Action limits at the value actually checked: the daily
+            // standard for a refractometer, else the last intermediate check's
+            // reference, else the middle of the working range.
+            const lastIc = icForEquip.slice().sort((x, y) => (y.checkDate || "").localeCompare(x.checkDate || ""))[0];
+            const refBasis = equip?.type === "Refractometer" ? REFRACTOMETER_STD_BRIX
+              : numOrNull(lastIc?.referenceValue) ?? (((Number(equip?.workingRangeMin) + Number(equip?.workingRangeMax)) / 2) || numOrNull(equip?.workingRangeMax));
+            const lims = equip && numOrNull(equip.tolerance) != null && refBasis != null ? warningActionLimits(equip, refBasis) : null;
+            // ---- date range ----
+            const first = today.slice(0, 8) + "01";
+            const endOfMonth = addDaysISO(addDaysISO(first, 32).slice(0, 8) + "01", -1);
+            const roundStart = equip ? latestCertDate(certificates.filter(c => c.instrumentId === equip.id)) : "";
+            const ranges = {
+              month: { label: "เดือนนี้", from: first, to: endOfMonth },
+              "3m": { label: "3 เดือนล่าสุด", from: addDaysISO(today, -90), to: today },
+              ...(roundStart ? { round: { label: "รอบสอบเทียบปัจจุบัน", from: roundStart, to: today } } : {}),
+              all: { label: "ทั้งหมด", from: "", to: "" },
+            };
+            const rg = ranges[range] || ranges.month;
+            const inRange = allRows.filter(r => (!rg.from || r.date >= rg.from) && (!rg.to || r.date <= rg.to));
+            const shown = inRange.filter(r => logKind === "all" || r.kind === logKind);
+            const count = (k) => inRange.filter(r => k === "all" || r.kind === k).length;
+            const lastStyle = RESULT_STYLE[last?.result || "-"];
+            // ---- styles ----
+            const card = { background: "#fff", border: "1px solid var(--line)", borderRadius: 16, boxShadow: "0 1px 2px rgba(11,42,74,0.04)" };
+            const tile = (bg) => ({ width: 52, height: 52, borderRadius: 14, background: bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 });
+            const statCard = (bg, line) => ({ ...card, background: bg, borderColor: line, padding: "18px 20px", display: "flex", gap: 16, alignItems: "flex-start", minWidth: 0 });
+            const statLabel = { fontSize: 13.5, fontWeight: 600, color: "#3B4E66" };
+            const metaItem = (Icon, label, value) => (
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", minWidth: 0 }}>
+                <Icon size={18} color="#5B7A96" style={{ flexShrink: 0, marginTop: 2 }} />
+                <div style={{ minWidth: 0 }}><div style={{ fontSize: 12, color: "var(--muted)" }}>{label}</div><div style={{ fontSize: 13.5, wordBreak: "break-word" }}>{value || "ยังไม่ระบุ"}</div></div>
               </div>
             );
+            return (<>
+              {/* toolbar */}
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+                <select style={{ ...S.select, flex: "1 1 280px", maxWidth: 460, height: 46, borderRadius: 12, fontSize: 14 }} value={equipId} onChange={e => setEquipId(e.target.value)}>
+                  {checkable.map(e => (
+                    <option key={e.id} value={e.id}>{e.code}{e.name ? ` — ${e.name}` : ""}{e.location ? ` (${e.location})` : ""}</option>
+                  ))}
+                </select>
+                {hasDailyForm(equip) && (
+                  <button style={{ ...S.primaryBtn, height: 46, borderRadius: 12, padding: "0 20px", fontSize: 14 }}
+                    onClick={() => setEditing(isScale ? blankScaleCheckEntry(equipId) : blankMeterCheckEntry(equipId))}>
+                    <Plus size={17} /> Daily check วันนี้
+                  </button>
+                )}
+                {canIc && equip && (
+                  <button style={{ ...(hasDailyForm(equip) ? S.ghostBtn : S.primaryBtn), height: 46, borderRadius: 12, padding: "0 18px", fontSize: 14 }}
+                    onClick={() => setEditingIc(newIntermediateCheckFor(equip, intermediateChecks, certificates, currentDisplayName))}>
+                    <Plus size={17} /> Intermediate check
+                  </button>
+                )}
+                <div style={{ flex: 1 }} />
+                {equip && (
+                  <button style={{ ...S.ghostBtn, height: 46, borderRadius: 12, padding: "0 16px", fontSize: 14 }} onClick={() => setShowShare(true)}>
+                    <QrCode size={18} style={{ marginRight: 6 }} /> QR / ลิงก์เครื่องนี้
+                  </button>
+                )}
+              </div>
+              {equip && !hasDailyForm(equip) && (
+                <div style={{ fontSize: 12, color: "var(--muted)", margin: "-6px 0 12px" }}>เครื่องประเภท "{equip.type || "-"}" ยังไม่มีฟอร์ม Daily check — บันทึกเป็น Intermediate check ได้</div>
+              )}
+              {canIc && unlockedIc.length > 0 && snapshotCriteria(equip) && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 12, padding: "9px 13px", fontSize: 12.5 }}>
+                  <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
+                  <span style={{ flex: 1 }}><b>{unlockedIc.length}</b> รายการ Intermediate check เก่ายังไม่ได้ล็อกเกณฑ์</span>
+                  <button style={S.smallBtn} onClick={lockLegacyIc}>ล็อกด้วยเกณฑ์ปัจจุบัน</button>
+                </div>
+              )}
+
+              {equip && (<>
+                {/* instrument header */}
+                <div style={{ ...card, padding: 20, marginBottom: 18, display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 20, alignItems: "center", flex: "1 1 420px", minWidth: 0 }}>
+                    <Thumb src={toDisplayImageUrl(equip.imageUrl)} size={104} radius={14} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3, wordBreak: "break-word" }}>{equip.code}{equip.name ? ` — ${equip.name}` : ""}</div>
+                      <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>{[equip.type, equip.model || equip.brand, equip.location].filter(Boolean).join(" - ")}</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginTop: 14 }}>
+                        {metaItem(User, "ผู้รับผิดชอบ", equip.custodian)}
+                        {metaItem(MapPin, "สถานที่", equip.location)}
+                        {metaItem(FileCheck2, "วิธีตรวจสอบ", equip.relatedTestMethod || equip.referenceDocument)}
+                      </div>
+                    </div>
+                  </div>
+                  {lims && (
+                    <div style={{ flex: "1 1 380px", background: "#FFF8EC", border: "1px solid #F6DDB0", borderRadius: 14, padding: "14px 18px", minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>
+                        <AlertTriangle size={20} color="#D9941E" style={{ flexShrink: 0 }} />
+                        เกณฑ์ Warning / Action Limit (ที่ค่ามาตรฐาน {refBasis}{equip.calUnit ? ` ${equip.calUnit}` : ""})
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                        {[["LWL", lims.lwl, "#D9941E"], ["UWL", lims.uwl, "#D9941E"], ["LAL", lims.lal, "#C6493B"], ["UAL", lims.ual, "#C6493B"]].map(([k, v, col], i) => (
+                          <div key={k} style={{ textAlign: "center", borderLeft: i ? "1px solid #F1D9AE" : "none", padding: "0 6px" }}>
+                            <div style={{ fontSize: 12.5, color: "#5B6B80" }}>{k}</div>
+                            <div style={{ fontSize: 19, fontWeight: 700, color: col, marginTop: 4, fontVariantNumeric: "tabular-nums" }}>{v.toFixed(4)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* stat cards */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 14, marginBottom: 22 }}>
+                  <div style={statCard("#F6FAFE", "#D9E8F6")}>
+                    <div style={tile("#E3EFFB")}><CalendarCheck size={26} color="var(--teal)" /></div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={statLabel}>ตรวจล่าสุด</div>
+                      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4 }}>{last ? fmtDate(last.date) : "-"}</div>
+                      <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{last ? (last.time || (last.kind === "ic" ? "Intermediate check" : "")) : "ยังไม่มีการตรวจ"}</div>
+                    </div>
+                  </div>
+                  <div style={statCard("#F3FBF6", "#D3EEDF")}>
+                    <div style={tile("#DFF3E8")}><TrendingUp size={26} color="#1E8A57" /></div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={statLabel}>ผลล่าสุด</div>
+                      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4, color: head?.pass === false ? "#C6493B" : "#1E8A57" }}>
+                        {head?.value ?? "-"}{head?.value != null && <span style={{ fontSize: 16, marginLeft: 6 }}>{head.unit}</span>}
+                      </div>
+                      <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{head?.ref || (lastDaily ? "" : "ยังไม่มี Daily check")}</div>
+                    </div>
+                  </div>
+                  <div style={statCard(lastStyle.bg === "#F3F6F9" ? "#F7F9FB" : lastStyle.bg, lastStyle.line)}>
+                    <div style={tile("#fff")}>{last?.result === "FAIL" ? <XCircle size={28} color={lastStyle.fg} /> : last?.result === "WARNING" ? <AlertTriangle size={28} color={lastStyle.fg} /> : <CheckCircle2 size={28} color={lastStyle.fg} />}</div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={statLabel}>สถานะล่าสุด</div>
+                      <div style={{ marginTop: 8 }}>
+                        <span style={{ display: "inline-block", background: lastStyle.fg, color: "#fff", borderRadius: 999, padding: "5px 18px", fontSize: 15, fontWeight: 700 }}>{last ? lastStyle.th : "-"}</span>
+                      </div>
+                      <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>{last ? [lastStyle.note, last.kind === "daily" ? (last.approved ? "อนุมัติแล้ว" : "รออนุมัติ") : ""].filter(Boolean).join(" · ") : ""}</div>
+                    </div>
+                  </div>
+                  <div style={statCard(plannedToday && doneToday < plannedToday ? "#FFF9EE" : "#F3FBF6", plannedToday && doneToday < plannedToday ? "#F6DDB0" : "#D3EEDF")}>
+                    <div style={tile(plannedToday && doneToday < plannedToday ? "#FCEBCB" : "#DFF3E8")}><ClipboardList size={26} color={plannedToday && doneToday < plannedToday ? "#D9941E" : "#1E8A57"} /></div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={statLabel}>ดำเนินการวันนี้</div>
+                      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4 }}>{plannedToday ? `${doneToday}/${plannedToday}` : doneToday}</div>
+                      <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{plannedToday ? (doneToday >= plannedToday ? "ครบตามแผนแล้ว" : "ยังไม่ได้ตรวจวันนี้") : "ครั้งที่บันทึกวันนี้"}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* filters */}
+                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
+                  <div style={{ display: "inline-flex", background: "#EEF3F9", border: "1px solid var(--line)", borderRadius: 14, padding: 4, gap: 2, flexWrap: "wrap" }}>
+                    {[["all", "ทั้งหมด"], ["daily", "Daily check"], ["ic", "Intermediate check"]].map(([k, label]) => {
+                      const on = logKind === k;
+                      return (
+                        <button key={k} type="button" onClick={() => setLogKind(k)} style={{
+                          display: "inline-flex", alignItems: "center", gap: 8, border: "none", cursor: "pointer", borderRadius: 11, padding: "9px 16px", fontSize: 14, fontFamily: "inherit",
+                          background: on ? "linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%)" : "transparent", color: on ? "#fff" : "#3B4E66", fontWeight: on ? 700 : 500,
+                        }}>
+                          {label}
+                          <span style={{ minWidth: 24, height: 24, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12.5, fontWeight: 600,
+                            background: on ? "#fff" : "#fff", color: on ? "var(--teal-dark)" : "#3B4E66", border: on ? "none" : "1px solid var(--line)", padding: "0 6px" }}>{count(k)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{ flex: 1 }} />
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: "0 14px", height: 46, cursor: "pointer" }}>
+                    <CalendarClock size={18} color="#3B4E66" />
+                    <span style={{ fontSize: 13.5, whiteSpace: "nowrap" }}>{rg.from ? `${fmtDate(rg.from)}  –  ${fmtDate(rg.to)}` : "ทุกช่วงเวลา"}</span>
+                    <select value={range} onChange={e => setRange(e.target.value)} aria-label="ช่วงวันที่"
+                      style={{ border: "none", background: "transparent", fontFamily: "inherit", fontSize: 13, color: "var(--muted)", cursor: "pointer", outline: "none" }}>
+                      {Object.entries(ranges).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                    </select>
+                  </label>
+                </div>
+
+                <CheckLogTable
+                  key={equip.id}
+                  rows={shown} unitLabel={unitLabel}
+                  onEdit={r => (r.kind === "daily" ? setEditing(r.rec) : canIc ? setEditingIc(r.rec) : null)}
+                  onDelete={r => (r.kind === "daily" ? remove(r.rec.id) : canIc ? removeIc(r.rec.id) : null)}
+                  emptyText={allRows.length ? `ไม่มีรายการในช่วง ${rg.label}` : "ยังไม่มีบันทึกการตรวจเช็คของเครื่องนี้"}
+                  onShowAll={allRows.length && range !== "all" ? () => setRange("all") : null}
+                />
+              </>)}
+            </>);
           })()}
-
-          {equip && hasDailyForm(equip) && (
-            <div style={S.statGrid}>
-              <div style={S.statCard}>
-                <div style={S.statTop}><Clock size={16} color="var(--teal)" /><span style={S.statLabel}>ตรวจล่าสุด</span></div>
-                <div style={S.statValue}>{lastCheck ? fmtDate(lastCheck.date) : "-"}</div>
-                <div style={S.statSub}>{lastCheck ? lastCheck.time : "ยังไม่มีการตรวจสอบ"}</div>
-              </div>
-              <div style={S.statCard}>
-                <div style={S.statTop}>
-                  <CheckCircle2 size={16} color={lastCheck ? (lastCheck.result ? "var(--green)" : "var(--red)") : "var(--muted)"} />
-                  <span style={S.statLabel}>ผลล่าสุด</span>
-                </div>
-                <div style={S.statValue}>{lastCheck ? (lastCheck.result ? "ผ่าน" : "ไม่ผ่าน") : "-"}</div>
-                <div style={S.statSub}>{lastCheck ? <CheckPointsMini c={lastCheck} /> : ""}</div>
-              </div>
-              <div style={S.statCard}>
-                <div style={S.statTop}><AlertTriangle size={16} color="var(--amber)" /><span style={S.statLabel}>{isScale ? "จุดตรวจล่าสุด (10/50/200 ก.)" : "ก่อนใช้งานทุกครั้ง"}</span></div>
-                <div style={S.statValue}>
-                  {!lastCheck ? "-" : isScale
-                    ? `${lastCheck.weightResults.filter(w => w.pass).length}/${lastCheck.weightResults.length}`
-                    : (() => {
-                        const items = equip?.type === "Polarimeter" ? POLARIMETER_PREUSE_ITEMS
-                          : equip?.type === "Oven" ? OVEN_PREUSE_ITEMS
-                          : equip?.type === "เครื่องควบคุมความชื้น" ? HUMIDITY_PREUSE_ITEMS
-                          : equip?.type === "Cooling Bath" ? COOLING_BATH_PREUSE_ITEMS
-                          : equip?.type === "Refractometer" ? REFRACTOMETER_PREUSE_ITEMS
-                          : equip?.type === "Glass Thermometer" ? GLASS_THERMOMETER_PREUSE_ITEMS
-                          : METER_PREUSE_ITEMS;
-                        // count only the items that existed when this check was recorded
-                        const asked = items.filter(i => lastCheck.preUse?.[i.key] !== undefined);
-                        const base = asked.length ? asked : items;
-                        return `${base.filter(i => lastCheck.preUse?.[i.key] === "OK").length}/${base.length}`;
-                      })()}
-                </div>
-                <div style={S.statSub}>{lastCheck ? (isScale ? "จุดผ่านเกณฑ์" : "ข้อผ่านเกณฑ์") : ""}</div>
-              </div>
-            </div>
-          )}
-
-          {equip && (
-            <CheckHistoryTable
-              key={equip.id}
-              instrument={equip} dailyChecks={checks} checks={icForEquip} certificates={certificates}
-              readOnly={false}
-              onEditDaily={c => setEditing(c)} onDeleteDaily={remove}
-              onEditIc={c => (canIc ? setEditingIc(c) : null)} onDeleteIc={id => (canIc ? removeIc(id) : null)}
-            />
-          )}
         </>
       )}
 
