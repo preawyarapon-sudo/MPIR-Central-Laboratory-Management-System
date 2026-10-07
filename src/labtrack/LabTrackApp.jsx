@@ -5,7 +5,7 @@ import {
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
   CalendarCheck, XCircle, Undo2, Box, ExternalLink, ImageOff, User,
   LayoutGrid, ZoomIn, QrCode, Printer, FileCheck2, BadgeCheck,
-  Sparkles, ClipboardCheck, Gauge, TrendingUp,
+  Sparkles, ClipboardCheck, Gauge, TrendingUp, Calculator,
   ShieldCheck, FileWarning, Stamp, Check, BookOpen, ChevronDown, ChevronUp,
   Scale, Microscope, Thermometer, Info, Table2
 } from "lucide-react";
@@ -3066,14 +3066,12 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
       const p0 = pts[0];
       const rs = roundSummary(pts, item);
       const signed = pts.every(c => c.approvedBy) ? "อนุมัติผลแล้ว" : pts.every(c => c.evaluatedBy) ? "ประเมินผลแล้ว · รออนุมัติ" : "รอลงชื่อประเมินผล";
-      const asFoundBad = rs.adjusted && isBadDecision(rs.asFoundDecision);
       return {
         key: "c" + (p0.certificateNo || p0.id) + p0.calibrationDate, cat: "calibration", icon: FlaskConical, title: "สอบเทียบ",
         when: fmtDate(p0.calibrationDate), sortKey: p0.calibrationDate || "",
         who: `ใบรับรอง ${p0.certificateNo || "-"} · ${pts.length} จุด`, whoSub: [p0.provider, signed].filter(Boolean).join(" · "),
         status: DECISION_PILL[rs.decision] ? { ...DECISION_PILL[rs.decision], text: `${rs.adjusted ? "หลังปรับ " : ""}${DECISION_PILL[rs.decision].text}` } : (rs.decision && rs.decision !== "-" ? { text: rs.decision, fg: "#6B7A8C", bg: "#fff", line: "var(--line)" } : null),
-        note: asFoundBad ? { tone: "bad", icon: AlertTriangle, text: `ค่าก่อนปรับ ${rs.asFoundDecision} — ควรประเมินผลกระทบย้อนหลัง` }
-          : p0.pdfLink ? { tone: "info", icon: FileDown, text: <a href={p0.pdfLink} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ color: "var(--teal-dark)" }}>ดูไฟล์ใบรับรอง</a> } : null,
+        note: p0.pdfLink ? { tone: "info", icon: FileDown, text: <a href={p0.pdfLink} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ color: "var(--teal-dark)" }}>ดูไฟล์ใบรับรอง</a> } : null,
         onOpen: onOpenCalibration ? () => onOpenCalibration("certificates") : null,
       };
     }),
@@ -4427,7 +4425,6 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
                         <td style={S.td}>{g.points.length} จุด</td>
                         <td style={S.td}>
                           <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[decision], color: CALIB_DECISION_COLOR[decision] }}>{rs.adjusted ? `หลังปรับ ${decision}` : decision}</span>
-                          {rs.asFoundDecision && <div style={{ fontSize: 11, marginTop: 3, color: isBadDecision(rs.asFoundDecision) ? "var(--red)" : "var(--muted)" }}>ก่อนปรับ {rs.asFoundDecision}</div>}
                         </td>
                         <td style={S.td}>
                           <span style={{ ...S.tag, borderColor: recordStatusColor(worst), color: recordStatusColor(worst) }}>{worst}</span>
@@ -4534,9 +4531,6 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           <div style={{ display: "flex", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
             <span style={{ ...S.tag, borderColor: recordStatusColor(groupStatus), color: recordStatusColor(groupStatus) }}>{groupStatus}</span>
             <span title={groupRs.adjusted ? "ใช้ค่าหลังปรับแก้ตัดสินสถานะเครื่อง" : ""} style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[groupDecision], color: CALIB_DECISION_COLOR[groupDecision] }}>{groupRs.adjusted ? `หลังปรับ ${groupDecision}` : groupDecision}</span>
-            {groupRs.asFoundDecision && (
-              <span style={{ ...S.tag, borderColor: isBadDecision(groupRs.asFoundDecision) ? "var(--red)" : "var(--line)", color: isBadDecision(groupRs.asFoundDecision) ? "var(--red)" : "var(--muted)" }}>ก่อนปรับ {groupRs.asFoundDecision}</span>
-            )}
           </div>
         </div>
         {head.pdfLink
@@ -4544,15 +4538,6 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
           : info("ไฟล์ใบรับรอง", "")}
       </div>
       {groupTop && groupTop({ certificateNo: gCertNo, calibrationDate: gCalDate, points: pointsForGroup })}
-      {groupRs.adjusted && isBadDecision(groupRs.asFoundDecision) && !isBadDecision(groupDecision) && (
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12, background: "#FFF6E0", border: "1px solid #F3DDA5", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, lineHeight: 1.6 }}>
-          <Info size={15} color="#A86A00" style={{ flexShrink: 0, marginTop: 2 }} />
-          <span>
-            <b>หลังปรับแก้ผ่านเกณฑ์ — เครื่องใช้งานต่อได้</b> แต่ค่าก่อนปรับไม่ผ่าน แปลว่าช่วงก่อนส่งสอบเทียบเครื่องอาจวัดคลาดเกินเกณฑ์
-            ควรประเมินผลกระทบย้อนหลังต่อผลที่ออกไปแล้ว (ISO/IEC 17025 ข้อ 7.10)
-          </span>
-        </div>
-      )}
       {ambiguous.length > 0 && (
         <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12, background: "#FDF1F1", border: "1px solid #F2C4C4", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, lineHeight: 1.6 }}>
           <FileWarning size={15} color="var(--red)" style={{ flexShrink: 0, marginTop: 2 }} />
@@ -5115,7 +5100,7 @@ function SignOffCard({ g, field, clear = false, canApprove = true, currentDispla
         ["ใบรับรอง", `${g.certificateNo || "-"} · สอบเทียบ ${fmtDate(p0.calibrationDate)}${p0.provider ? ` · ${p0.provider}` : ""}`],
         ["จำนวนจุด", `${g.points.length} จุด`],
         ["เกณฑ์ที่ใช้ตัดสิน", numOrNull(crit?.tolerance) != null ? `± ${crit.tolerance}${g.instrument?.calUnit ? ` ${g.instrument.calUnit}` : ""} (${crit.toleranceType || "absolute"})${rule ? ` · ${rule}` : ""}` : "ยังไม่ได้กำหนด"],
-        ["ผลตัดสิน", sum ? `${sum.adjusted ? "หลังปรับ " : ""}${sum.decision}${sum.asFoundDecision ? ` · ก่อนปรับ ${sum.asFoundDecision}` : ""}` : "-"],
+        ["ผลตัดสิน", sum ? `${sum.adjusted ? "หลังปรับ " : ""}${sum.decision}` : "-"],
         isApprove && !clear && ["ผู้ประเมิน", p0.evaluatedBy ? `${p0.evaluatedBy}${p0.evaluationDate ? ` · ${fmtDate(p0.evaluationDate)}` : ""}` : "ยังไม่ได้ลงชื่อ"],
         clear && [isApprove ? "อนุมัติโดย" : "ประเมินโดย", already],
       ]} />
@@ -5153,7 +5138,7 @@ function StatusConfirmCard({ instrument, summary, currentDisplayName = "", onCan
     <Modal title="ยืนยันสถานะการใช้งาน" wide onClose={onCancel}>
       <CardSummary rows={[
         ["เครื่องมือ", `${instrument.code || ""} — ${instrument.name || ""}`],
-        ["ผลสอบเทียบล่าสุด", summary ? `${summary.adjusted ? "หลังปรับ " : ""}${summary.decision}${summary.asFoundDecision ? ` · ก่อนปรับ ${summary.asFoundDecision}` : ""}` : "ยังไม่มีใบรับรอง"],
+        ["ผลสอบเทียบล่าสุด", summary ? `${summary.adjusted ? "หลังปรับ " : ""}${summary.decision}` : "ยังไม่มีใบรับรอง"],
         ["สถานะปัจจุบัน", usageStatusOf(instrument) ? `${usageStatusOf(instrument)}${authorizedByOf(instrument) ? ` · ${authorizedByOf(instrument)}` : ""}${instrument.statusApprovalDate ? ` · ${fmtDate(instrument.statusApprovalDate)}` : ""}` : "ยังไม่ประเมิน"],
       ]} />
       <div style={{ display: "grid", gap: 10 }}>
@@ -5271,9 +5256,6 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                         <b style={mono}>{g.certificateNo || "-"}</b>
                         <span style={{ color: "var(--muted)", fontSize: 12 }}>สอบเทียบ {fmtDate(g.calibrationDate)} (พ.ศ. {beYear(g.calibrationDate) || "-"}){g.provider ? ` · ${g.provider}` : ""} · {g.points.length} จุด</span>
                         <span style={{ ...S.tag, borderColor: CALIB_DECISION_COLOR[g.decision], color: CALIB_DECISION_COLOR[g.decision] }}>ทั้งใบ{g.adjusted ? " (หลังปรับ)" : ""}: {g.decision}</span>
-                        {g.asFoundDecision && (
-                          <span title="ใช้ประเมินผลกระทบย้อนหลัง ไม่ใช้ตัดสินสถานะเครื่องปัจจุบัน" style={{ ...S.tag, borderColor: isBadDecision(g.asFoundDecision) ? "var(--red)" : "var(--line)", color: isBadDecision(g.asFoundDecision) ? "var(--red)" : "var(--muted)" }}>ก่อนปรับ: {g.asFoundDecision}</span>
-                        )}
                         {g.points[0]?.c.criteriaAt && (
                           <span title={`ล็อกเมื่อ ${fmtDate(g.points[0].c.criteriaAt.capturedAt)}`} style={{ fontSize: 11.5, color: criteriaChanged(g.instrument, g.points[0].c) ? "var(--amber)" : "var(--muted)" }}>
                             🔒 {criteriaText(g.points[0].c.criteriaAt)}{criteriaChanged(g.instrument, g.points[0].c) ? " — ต่างจากเกณฑ์ ณ วันสอบเทียบในข้อมูลเครื่องมือ (ยกเลิกการลงชื่อแล้วลงใหม่เพื่อประเมินใหม่)" : ""}
@@ -7313,6 +7295,7 @@ function CalibrationRecordsHub({
   }, [selectedInstrumentId, view, q, typeFilter, statusFilter, dueFilter, layout, sortBy]);
   const [showGrid, setShowGrid] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [editingIc, setEditingIc] = useState(null);
   const exportAll = (onlyId = null) => exportMPIRWorkbook(equipment, dailyChecks, {
     certificates, intermediateChecks, uncertaintyBudgets, actionImpacts, approvalRecords,
   }, { onlyInstrumentId: onlyId });
@@ -7604,7 +7587,6 @@ function CalibrationRecordsHub({
     { key: "results", sheets: "SHEET 03 · 06", title: "ผลตัดสิน & แนวโน้ม",
       sub: calSum ? `ผลรอบล่าสุด ${calSum.decision}` : "รอข้อมูลใบรับรอง",
       flag: calSum && calSum.decision !== "PASS" ? { text: calSum.decision, tone: decisionTone(calSum.decision) }
-        : calSum && isBadDecision(calSum.asFoundDecision) ? { text: `ก่อนปรับ ${calSum.asFoundDecision}`, tone: "var(--amber)" }
         : unsignedRound ? { text: "รอลงชื่อประเมิน", tone: "var(--amber)" } : null },
     { key: "checks", sheets: "SHEET 04", title: "ตรวจสอบระหว่างรอบ",
       sub: `Daily ${scopedDailyChecks.length} · Intermediate ${icSorted.length}`,
@@ -7622,6 +7604,8 @@ function CalibrationRecordsHub({
     { key: "instrument", label: "ข้อมูลเครื่อง", icon: Wrench, leaves: ["instrument"] },
     { key: "certificates", label: "บันทึกใบสอบเทียบ", icon: FileCheck2, leaves: ["certificates"] },
     { key: "daily", label: "Daily check", icon: ClipboardCheck, leaves: ["daily"] },
+    { key: "checks", label: "Intermediate check", icon: Gauge, leaves: ["checks"] },
+    { key: "uncertainty", label: "Uncertainty Budget", icon: Calculator, leaves: ["uncertainty"] },
     { key: "trend", label: "แนวโน้มเครื่อง", icon: TrendingUp, leaves: ["trend"] },
   ];
   const featureOf = (k) => (k === "trend" ? FEATURES.find(f => f.key === "results") : FEATURES.find(f => f.key === k));
@@ -7652,7 +7636,7 @@ function CalibrationRecordsHub({
   const scopedCertSetter = makeScopedListSetter(certificates, setCertificates, selectedInstrumentId);
   const defaultView = gaps.length ? "instrument" : "certificates";
   // Older links/memory may still name the former pages.
-  const LEGACY_VIEW = { results: "trend", checks: "certificates", uncertainty: "certificates" };
+  const LEGACY_VIEW = { results: "trend" };
   const wanted = LEGACY_VIEW[view] || view;
   const current = wanted && TAB_GROUPS.some(g => g.leaves.includes(wanted)) ? wanted : defaultView;
   const currentGroup = TAB_GROUPS.find(g => g.leaves.includes(current)) || TAB_GROUPS[0];
@@ -7671,7 +7655,6 @@ function CalibrationRecordsHub({
             สอบเทียบล่าสุด {instrument?.lastCalibration ? fmtDate(instrument.lastCalibration) : "-"}
             {" · "}ครบกำหนด {instrument?.nextDue ? fmtDate(instrument.nextDue) : "-"}
             {" · "}ผลล่าสุด {calSum ? `${calSum.decision}${calSum.adjusted ? " (หลังปรับ)" : ""}` : "ยังไม่มีใบรับรอง"}
-            {calSum?.asFoundDecision ? ` · ก่อนปรับ ${calSum.asFoundDecision}` : ""}
           </p>
         </div>
         <button style={S.smallBtn} onClick={() => exportAll(selectedInstrumentId)}><FileDown size={13} /> ส่งออก Excel เฉพาะเครื่องนี้</button>
@@ -7743,6 +7726,30 @@ function CalibrationRecordsHub({
             : <EmptyState text="ยังไม่มีบันทึก Daily check ของเครื่องนี้" small />}
         </div>
       )}
+      {current === "checks" && instrument && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontSize: 12.5, color: "var(--muted)", flex: 1 }}>Intermediate check ทั้งหมดของเครื่องนี้ แบ่งตามรอบใบรับรอง{icFail90 ? ` · ไม่ผ่าน ${icFail90} ครั้งใน 90 วัน` : ""}</span>
+            <button style={S.primaryBtn} onClick={() => setEditingIc(newIntermediateCheckFor(instrument, intermediateChecks, scopedCertificates, currentDisplayName))}><Plus size={14} /> บันทึก Intermediate check</button>
+          </div>
+          {scopedChecks.length
+            ? <CheckHistoryTable instrument={instrument} checks={scopedChecks} certificates={scopedCertificates} readOnly hideKindSwitch />
+            : <EmptyState text="ยังไม่มีบันทึก Intermediate check ของเครื่องนี้" small />}
+          {editingIc && (
+            <IntermediateCheckForm row={editingIc} equipment={[instrument]} certificates={scopedCertificates} currentDisplayName={currentDisplayName}
+              onCancel={() => setEditingIc(null)}
+              onSave={(row) => { setIntermediateChecks(saveIntermediateCheckInto(intermediateChecks, row, instrument)); notify("บันทึก Intermediate check แล้ว"); setEditingIc(null); }} />
+          )}
+        </div>
+      )}
+      {current === "uncertainty" && instrument && (
+        <UncertaintyBudgetTab
+          equipment={[instrument]} budgets={scopedBudgets} certificates={scopedCertificates} allowCreate
+          allEquipment={equipment} allCertificates={certificates} currentDisplayName={currentDisplayName}
+          setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
+          notify={notify}
+        />
+      )}
       {current === "certificates" && (
         <CertificateDataTab
           equipment={scopedEquipment} certificates={scopedCertificates} setCertificates={scopedCertSetter}
@@ -7759,16 +7766,6 @@ function CalibrationRecordsHub({
                 scopedCertSetter(scopedCertificates.map(c => ids.has(c.id) ? { ...c, ...patch } : c));
                 notify(clear ? "ยกเลิกการลงชื่อแล้ว" : field === "approved" ? `อนุมัติผลใบรับรอง ${g.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${g.certificateNo || "-"} แล้ว`);
               }}
-            />
-          )}
-          groupExtras={(g) => instrument && g.points.length > 0 && (
-            <CertificateRoundPanel
-              instrument={instrument} range={roundRangeOf(scopedCertificates, selectedInstrumentId, g.calibrationDate)}
-              certificates={scopedCertificates} dailyChecks={scopedDailyChecks}
-              intermediateChecks={scopedChecks} setIntermediateChecks={makeScopedListSetter(intermediateChecks, setIntermediateChecks, selectedInstrumentId)}
-              budgets={scopedBudgets} setBudgets={makeScopedListSetter(uncertaintyBudgets, setUncertaintyBudgets, selectedInstrumentId)}
-              allEquipment={equipment} allCertificates={certificates} currentDisplayName={currentDisplayName} notify={notify}
-              onOpenChecks={onOpenChecks ? () => onOpenChecks(selectedInstrumentId) : null}
             />
           )}
         />
@@ -7830,7 +7827,6 @@ function InstrumentStatusCard({ instrument, certificates, intermediateChecks, da
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 8 }}>
         {cell("รอบสอบเทียบ", `${CYCLE_LABEL[r.cycleStatus]}${r.days != null ? ` (${r.days} วัน)` : ""}`, STATUS_COLOR[r.cycleStatus])}
         {cell(r.adjusted ? "ผลสอบเทียบล่าสุด (หลังปรับ)" : "ผลสอบเทียบล่าสุด", r.overall || "-", CALIB_DECISION_COLOR[r.overall])}
-        {r.asFoundDecision && cell("ค่าก่อนปรับ", r.asFoundDecision, isBadDecision(r.asFoundDecision) ? "var(--red)" : undefined)}
         {cell("Tolerance Utilization สูงสุด", r.maxUtilization ? `${r.maxUtilization.toFixed(1)}%` : "-")}
         {cell("จุด FAIL / WARNING", r.failingCount, r.failingCount ? "var(--red)" : undefined)}
         {cell("Check ไม่ผ่าน (90 วัน)", r.failedChecks90, r.failedChecks90 ? "var(--red)" : undefined)}
