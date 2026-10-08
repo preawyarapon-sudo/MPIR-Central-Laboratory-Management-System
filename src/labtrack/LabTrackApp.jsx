@@ -5088,7 +5088,7 @@ function SignOffCard({ g, field, clear = false, canApprove = true, currentDispla
   const isApprove = field === "approved";
   const already = isApprove ? p0.approvedBy : p0.evaluatedBy;
   const blocked = clear ? ""
-    : isApprove && !canApprove ? "เฉพาะผู้มีสิทธิ์อนุมัติ (Technical Manager)"
+    : isApprove && !canApprove ? "เฉพาะผู้มีสิทธิ์อนุมัติ (Lab manager)"
     : isApprove && !p0.evaluatedBy ? "ต้องลงชื่อผู้ประเมินก่อน"
     : !name.trim() ? `ระบุชื่อผู้${isApprove ? "อนุมัติ" : "ประเมิน"}`
     : !checked ? "ยืนยันว่าตรวจผลแล้ว" : "";
@@ -5112,7 +5112,7 @@ function SignOffCard({ g, field, clear = false, canApprove = true, currentDispla
         </div>
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
-          <Field label={isApprove ? "ชื่อผู้อนุมัติ (Technical Manager)" : "ชื่อผู้ประเมิน"}>
+          <Field label={isApprove ? "ชื่อผู้อนุมัติ (Lab manager)" : "ชื่อผู้ประเมิน"}>
             <input style={S.input} value={name} onChange={e => setName(e.target.value)} placeholder="ชื่อ-นามสกุล" />
           </Field>
           <Field label="วันที่"><div style={{ ...S.input, background: "#F5F8F7", boxSizing: "border-box" }}>{fmtDate(todayISO())}</div></Field>
@@ -5278,8 +5278,8 @@ function CalibrationResultsTab({ equipment, certificates, setCertificates, notif
                           // Approval is the Technical Manager's decision — only users with
                           // approval rights (same permission as Daily check approval) can sign it.
                           <button style={{ ...S.smallBtn, opacity: evald && canApprove ? 1 : 0.5 }} disabled={!evald}
-                            title={!canApprove ? "เฉพาะผู้มีสิทธิ์อนุมัติ (Technical Manager)" : evald ? "" : "ลงชื่อผู้ประเมินก่อน"}
-                            onClick={() => sign(g, "approved")}><Stamp size={12} /> อนุมัติ (Technical Manager)</button>
+                            title={!canApprove ? "เฉพาะผู้มีสิทธิ์อนุมัติ (Lab manager)" : evald ? "" : "ลงชื่อผู้ประเมินก่อน"}
+                            onClick={() => sign(g, "approved")}><Stamp size={12} /> อนุมัติ (Lab manager)</button>
                         )}
                         </>)}
                       </div>
@@ -6929,7 +6929,7 @@ const CALIBRATION_GUIDE_SHEETS = [
     fields: [
       { label: "รหัส / ชื่อ / ประเภท / ยี่ห้อ / รุ่น / Serial No. / ตำแหน่งที่ตั้ง / สอบเทียบล่าสุด / รอบสอบเทียบ (เดือน)", kind: "linked", note: "ดึงมาจากหน้า \"เครื่องมือ\" โดยอัตโนมัติ (เครื่องมือตัวเดียวกัน) — แก้ไขได้ที่หน้านั้น ไม่ต้องกรอกซ้ำในข้อมูลเครื่องมือ" },
       { label: "ผู้รับผิดชอบ (Custodian) / เลขทรัพย์สิน (Asset No.) / กลุ่มเครื่องมือ / ขอบข่ายการใช้งาน / วิธีทดสอบที่เกี่ยวข้อง / พารามิเตอร์ที่วัด / หน่วย / ช่วงใช้งาน / ความละเอียด", kind: "input" },
-      { label: "Tolerance / MPE, ชนิดของเกณฑ์ (absolute / % of reading / % of full scale), แหล่งอ้างอิงเกณฑ์, เอกสารอ้างอิง, Decision Rule ที่อนุมัติ, ความถี่สอบเทียบ, ความถี่ Daily/Intermediate Check", kind: "input", note: "ต้องอนุมัติโดย Technical Manager ก่อนใช้จริง" },
+      { label: "Tolerance / MPE, ชนิดของเกณฑ์ (absolute / % of reading / % of full scale), แหล่งอ้างอิงเกณฑ์, เอกสารอ้างอิง, Decision Rule ที่อนุมัติ, ความถี่สอบเทียบ, ความถี่ Daily/Intermediate Check", kind: "input", note: "ต้องอนุมัติโดย Lab manager ก่อนใช้จริง" },
       { label: "Severity / Occurrence / Detectability (1–5)", kind: "input" },
       { label: "วันที่สอบเทียบล่าสุด (auto)", kind: "auto", note: "ดึงจากใบรับรองที่มีวันที่ล่าสุดของเครื่องมือนี้ — ถ้ายังไม่มีใบรับรองในระบบ ใช้ \"วันที่สอบเทียบล่าสุด (กรอกเอง)\" แทน" },
       { label: "วันครบกำหนดถัดไป / วันคงเหลือ", kind: "auto", note: "วันครบกำหนด = วันที่สอบเทียบล่าสุด + ความถี่สอบเทียบ (เดือน); วันคงเหลือ = วันครบกำหนด − วันนี้" },
@@ -6967,7 +6967,7 @@ const CALIBRATION_GUIDE_SHEETS = [
       { label: "En (Normalized Error)", kind: "auto", note: "= Error ÷ (2 × U) — สูตรอย่างง่าย สมมติว่าความไม่แน่นอนของค่าอ้างอิงน้อยมาก" },
       { label: "ผลการตัดสิน (Decision)", kind: "auto", note: "Simple: |Error| ≤ Tolerance → PASS, ไม่งั้น FAIL | Conservative: |Error|+U ≤ Tolerance → PASS | Guard band: |Error| ≤ Limit → PASS, ≤ Tolerance → CONDITIONAL PASS, เกิน → FAIL. กรณี FAIL แต่ |Error| ≤ Tolerance×1.1 จะลดเป็น WARNING (near-miss) แทน" },
       { label: "เหตุผล/เงื่อนไข (Rationale)", kind: "auto", note: "ข้อความอธิบายว่าใช้สูตรไหนเทียบกับอะไร" },
-      { label: "ผู้ประเมิน/วันที่ประเมิน, ผู้อนุมัติเกณฑ์ (Technical Manager)/วันที่อนุมัติ", kind: "input", note: "กดลงชื่อครั้งเดียวต่อใบรับรอง ใช้ชื่อผู้ที่ล็อกอินและวันที่วันนี้ให้อัตโนมัติ; การลงชื่อผู้ประเมินล็อก Tolerance/Decision Rule ณ วันนั้นไว้กับใบรับรอง (ยกเลิกลงชื่อ = ปลดล็อก)" },
+      { label: "ผู้ประเมิน/วันที่ประเมิน, ผู้อนุมัติเกณฑ์ (Lab manager)/วันที่อนุมัติ", kind: "input", note: "กดลงชื่อครั้งเดียวต่อใบรับรอง ใช้ชื่อผู้ที่ล็อกอินและวันที่วันนี้ให้อัตโนมัติ; การลงชื่อผู้ประเมินล็อก Tolerance/Decision Rule ณ วันนั้นไว้กับใบรับรอง (ยกเลิกลงชื่อ = ปลดล็อก)" },
     ],
   },
   {
@@ -7085,7 +7085,7 @@ function CalibrationGuideModal({ onClose }) {
         );
       })}
       <div style={{ marginTop: 4, fontSize: 11, color: "var(--muted)" }}>
-        อ้างอิงโครงสร้างจากแบบฟอร์ม MPIR Calibration Record (RDI-LF-070) — ค่า Tolerance และ Decision Rule ที่ตั้งไว้เป็นข้อเสนอตั้งต้น ต้องได้รับอนุมัติจาก Technical Manager ก่อนใช้ตัดสินผลจริง
+        อ้างอิงโครงสร้างจากแบบฟอร์ม MPIR Calibration Record (RDI-LF-070) — ค่า Tolerance และ Decision Rule ที่ตั้งไว้เป็นข้อเสนอตั้งต้น ต้องได้รับอนุมัติจาก Lab manager ก่อนใช้ตัดสินผลจริง
       </div>
     </Modal>
   );
@@ -7160,7 +7160,7 @@ function CertificateApprovalCard({ instrument, points, isLatest, canApprove = tr
   const steps = [
     { key: "record", label: "บันทึกจุดสอบเทียบ", done: recorded, todo: "มีจุดที่ข้อมูลไม่ครบ (Draft) — แก้ไขจุดนั้นในตารางด้านล่าง" },
     { key: "evaluate", label: "ลงชื่อประเมินผล", done: evaluated, todo: "ตรวจผลทุกจุดแล้วลงชื่อผู้ประเมิน", by: evaluated ? `${p0.evaluatedBy}${p0.evaluationDate ? ` · ${fmtDate(p0.evaluationDate)}` : ""}` : "" },
-    { key: "approve", label: "อนุมัติผล", done: approved, todo: canApprove ? "อนุมัติโดย Technical Manager" : "รอผู้มีสิทธิ์อนุมัติ (Technical Manager)", by: approved ? `${p0.approvedBy}${p0.approvalDate ? ` · ${fmtDate(p0.approvalDate)}` : ""}` : "" },
+    { key: "approve", label: "อนุมัติผล", done: approved, todo: canApprove ? "อนุมัติโดย Lab manager" : "รอผู้มีสิทธิ์อนุมัติ (Lab manager)", by: approved ? `${p0.approvedBy}${p0.approvalDate ? ` · ${fmtDate(p0.approvalDate)}` : ""}` : "" },
     ...(isLatest ? [{ key: "status", label: "ยืนยันสถานะการใช้งาน", done: statusDone, todo: "ยืนยันสถานะเครื่องหลังได้ผลใบนี้", by: statusDone ? `${usageStatusOf(instrument)} · ${authorizedByOf(instrument)}` : "" }] : []),
   ];
   const next = steps.find(st => !st.done);
@@ -7621,7 +7621,7 @@ function CalibrationRecordsHub({
       todo: !latestCert ? "ยังไม่มีใบรับรองในระบบ" : "มีจุดที่ข้อมูลไม่ครบ (Draft)" },
     { key: "evaluate", label: "ลงชื่อประเมินผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.evaluatedBy), todo: "ผลรอบล่าสุดยังไม่ได้ลงชื่อผู้ประเมิน" },
     { key: "approve", label: "อนุมัติผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.approvedBy),
-      todo: canApprove ? "รออนุมัติโดย Technical Manager" : "รอผู้มีสิทธิ์อนุมัติ (Technical Manager)" },
+      todo: canApprove ? "รออนุมัติโดย Lab manager" : "รอผู้มีสิทธิ์อนุมัติ (Lab manager)" },
     { key: "status", label: "ยืนยันสถานะการใช้งาน", view: "instrument", done: statusConfirmed,
       todo: !usageStatusOf(instrument || {}) || !authorizedByOf(instrument || {}) ? "ยังไม่ได้ระบุสถานะ/ผู้อนุมัติ" : "ยืนยันสถานะอีกครั้งหลังใบรับรองรอบล่าสุด" },
   ];
@@ -11526,7 +11526,7 @@ const MPIR_DOC = {
       "name": "01_Instrument_Master",
       "subtitle": "ทะเบียนเครื่องมือวัด / Instrument Master Register   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): ทะเบียนกลางของเครื่องมือทุกรายการ พร้อมเกณฑ์ความคลาดเคลื่อนสูงสุดที่ยอมรับได้ (MPE/Tolerance) แหล่งอ้างอิงของเกณฑ์ Decision Rule ที่อนุมัติ ความถี่สอบเทียบ และคะแนนความเสี่ยง — เป็นแหล่งอ้างอิงหลักของทุก Sheet",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
       "headers": [
         "รหัสเครื่องมือ\nInstrument ID",
         "ชื่อเครื่องมือ\nInstrument Name",
@@ -11572,7 +11572,7 @@ const MPIR_DOC = {
       "name": "02_Certificate_Data",
       "subtitle": "ตารางถ่ายโอนข้อมูลจากใบรับรองการสอบเทียบ / Calibration Certificate Data Transfer   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): บันทึกข้อมูลจากใบรับรองการสอบเทียบรายจุดสอบเทียบ (หนึ่งแถวต่อหนึ่ง Calibration Point) รองรับใบรับรองที่รายงานผลต่างรูปแบบกัน และตรวจสอบความครบถ้วนของใบรับรองโดยอัตโนมัติ",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | โครงสร้างคอลัมน์ของ Sheet นี้ใช้เป็น JSON schema สำหรับการดึงข้อมูลจากไฟล์ PDF ใบรับรองใน web app ได้โดยตรง",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | โครงสร้างคอลัมน์ของ Sheet นี้ใช้เป็น JSON schema สำหรับการดึงข้อมูลจากไฟล์ PDF ใบรับรองใน web app ได้โดยตรง",
       "headers": [
         "รหัสรายการ\nRecord ID",
         "รหัสเครื่องมือ\nInstrument ID",
@@ -11622,7 +11622,7 @@ const MPIR_DOC = {
       "name": "03_Acceptance_Criteria",
       "subtitle": "เกณฑ์การยอมรับผลการสอบเทียบและการตัดสิน / Acceptance Criteria and Decision   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): เปรียบเทียบผลจากใบรับรอง (Sheet 02) กับเกณฑ์ที่ห้องปฏิบัติการกำหนด (Sheet 01) ตาม Decision Rule ที่เลือก แล้วกำหนดสถานะ PASS / CONDITIONAL PASS / WARNING / FAIL / REVIEW REQUIRED / INCOMPLETE DATA",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | ห้ามสรุปว่าเครื่องมือ \"ผ่าน\" จากข้อความ Statement of Conformity ในใบรับรองเพียงอย่างเดียว",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | ห้ามสรุปว่าเครื่องมือ \"ผ่าน\" จากข้อความ Statement of Conformity ในใบรับรองเพียงอย่างเดียว",
       "headers": [
         "ลำดับ\nIndex",
         "รหัสเครื่องมือ\nInstrument ID",
@@ -11651,7 +11651,7 @@ const MPIR_DOC = {
         "ต้องใช้ Correction หรือไม่\nCorrection Required",
         "ผู้ประเมิน\nEvaluated By",
         "วันที่ประเมิน\nEvaluation Date",
-        "ผู้อนุมัติเกณฑ์ (Technical Manager)\nApproved By",
+        "ผู้อนุมัติเกณฑ์ (Lab manager)\nApproved By",
         "วันที่อนุมัติ\nApproval Date",
         "รอบการสอบเทียบ (พ.ศ.)\nCalibration Year (BE)"
       ]
@@ -11660,7 +11660,7 @@ const MPIR_DOC = {
       "name": "04_Daily_Intermediate_Check",
       "subtitle": "บันทึกผล Daily Check / Intermediate Check / Performance Check / Daily, Intermediate and Performance Check Record   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): บันทึกผลการตรวจสอบระหว่างรอบการสอบเทียบ โดยเกณฑ์เตือน (Warning Limit) และเกณฑ์ดำเนินการ (Action Limit) คำนวณจาก Tolerance ที่อนุมัติใน Sheet 01 และ Correction จากใบรับรองใน Sheet 02",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance | การกำหนดเกณฑ์แบบอื่นต้องได้รับอนุมัติจาก Technical Manager และบันทึกใน Sheet 09",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance | การกำหนดเกณฑ์แบบอื่นต้องได้รับอนุมัติจาก Lab manager และบันทึกใน Sheet 09",
       "headers": [
         "วันที่ตรวจสอบ\nCheck Date",
         "รหัสเครื่องมือ\nInstrument ID",
@@ -11702,7 +11702,7 @@ const MPIR_DOC = {
       "name": "05_Uncertainty_Input",
       "subtitle": "ข้อมูลนำเข้าสำหรับการประเมินความไม่แน่นอนของการวัด / Measurement Uncertainty Input   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): รวบรวมองค์ประกอบความไม่แน่นอน (Uncertainty components) แยกตาม Budget ID เพื่อคำนวณ Combined standard uncertainty และ Expanded uncertainty ตาม Measurement Model ของแต่ละวิธีทดสอบ",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | คำเตือน: ค่าความไม่แน่นอนจากใบรับรองการสอบเทียบไม่ควรนำมาใช้แทนค่าความไม่แน่นอนของวิธีทดสอบทั้งหมดโดยตรง แต่ควรใช้เป็นองค์ประกอบหนึ่งใน Uncertainty Budget ตาม Measurement Model",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | คำเตือน: ค่าความไม่แน่นอนจากใบรับรองการสอบเทียบไม่ควรนำมาใช้แทนค่าความไม่แน่นอนของวิธีทดสอบทั้งหมดโดยตรง แต่ควรใช้เป็นองค์ประกอบหนึ่งใน Uncertainty Budget ตาม Measurement Model",
       "headers": [
         "รหัส Uncertainty Budget\nBudget ID",
         "รหัสเครื่องมือ\nInstrument ID",
@@ -11736,7 +11736,7 @@ const MPIR_DOC = {
       "name": "06_Trend_Analysis",
       "subtitle": "การติดตามแนวโน้มการเปลี่ยนแปลงของเครื่องมือ / Trend and Drift Analysis   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): เปรียบเทียบผลการสอบเทียบข้ามรอบ เพื่อประเมินอัตราการเลื่อน (Drift) คาดการณ์เวลาที่เครื่องมือจะหลุดเกณฑ์ และใช้เป็นหลักฐานประกอบการทบทวนความถี่การสอบเทียบ",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
       "headers": [
         "รหัสเครื่องมือ\nInstrument ID",
         "พารามิเตอร์\nParameter",
@@ -11762,7 +11762,7 @@ const MPIR_DOC = {
       "name": "07_Equipment_Status",
       "subtitle": "สรุปสถานะเครื่องมือ / Equipment Status Summary   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): สรุปสถานะรายเครื่องมือจากผลการสอบเทียบ (Sheet 03) ผลการตรวจสอบระหว่างรอบ (Sheet 04) และคะแนนความเสี่ยง (Sheet 01) ใช้เป็นข้อมูลสำหรับติดฉลากสถานะเครื่องมือและการทบทวนระบบ",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager | คอลัมน์ \"สถานะการใช้งาน\" เป็นการตัดสินใจของห้องปฏิบัติการ ไม่ใช่ผลคำนวณ ต้องมีผู้อนุมัติกำกับทุกครั้ง",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | คอลัมน์ \"สถานะการใช้งาน\" เป็นการตัดสินใจของห้องปฏิบัติการ ไม่ใช่ผลคำนวณ ต้องมีผู้อนุมัติกำกับทุกครั้ง",
       "headers": [
         "รหัสเครื่องมือ\nInstrument ID",
         "พารามิเตอร์\nParameter",
@@ -11789,7 +11789,7 @@ const MPIR_DOC = {
       "name": "08_Action_and_Impact",
       "subtitle": "การดำเนินการและการประเมินผลกระทบ / Action and Impact Evaluation   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): บันทึกการดำเนินการเมื่อผลการสอบเทียบหรือผลการตรวจสอบระหว่างรอบไม่เป็นไปตามเกณฑ์ รวมถึงการประเมินผลกระทบย้อนหลังต่อผลการทดสอบที่รายงานไปแล้ว ตาม ISO/IEC 17025:2017 ข้อ 7.10 และ 8.7",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
       "headers": [
         "เลขที่รายการ\nAction ID",
         "วันที่พบ\nDate Identified",
@@ -11819,7 +11819,7 @@ const MPIR_DOC = {
       "name": "09_Approval_Record",
       "subtitle": "บันทึกการทบทวนและอนุมัติ / Review and Approval Record   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): บันทึกการอนุมัติเกณฑ์การยอมรับ Decision Rule การใช้ Correction ความถี่การตรวจสอบ และการอนุมัติให้ใช้งานเครื่องมือ เพื่อใช้เป็นหลักฐานสำหรับการตรวจประเมินภายในและการตรวจประเมินจากหน่วยรับรอง",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
       "headers": [
         "เลขที่การอนุมัติ\nApproval ID",
         "วันที่\nDate",
@@ -11844,7 +11844,7 @@ const MPIR_DOC = {
   ],
   "lookup": {
     "title": "MPIR Central Laboratory, Mitr Phol Innovation and Research Center  |  แบบบันทึกและประเมินเกณฑ์การสอบเทียบเครื่องมือวัด (Calibration Record and Acceptance Evaluation Form)",
-    "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Technical Manager",
+    "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
     "headers": [
       "กลุ่มเครื่องมือ\n(LK_GROUP)",
       "ชนิดของเกณฑ์\n(LK_TOLTYPE)",
@@ -12530,7 +12530,7 @@ function buildMPIRUserGuideSheet(generatedAt) {
     ["  • 07_Equipment_Status — สรุปจาก 01 + 03 + 04 (สถานะการใช้งาน/ผู้อนุมัติ = ช่องเดียวกับ Sheet 01 ในแอป)"],
     ["  • คอลัมน์ \"ข้อเสนอ\" (ความถี่ตามความเสี่ยง, การปรับรอบสอบเทียบ, ต้องใช้ Correction) เป็นข้อเสนออัตโนมัติ ต้องทบทวนก่อนใช้"],
     [""],
-    ["โปรดตรวจทานข้อมูลที่กรอกอัตโนมัติ และให้ Technical Manager อนุมัติเกณฑ์ก่อนใช้เป็นเอกสารทางการ"],
+    ["โปรดตรวจทานข้อมูลที่กรอกอัตโนมัติ และให้ Lab manager อนุมัติเกณฑ์ก่อนใช้เป็นเอกสารทางการ"],
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws["!cols"] = [{ wch: 90 }];
