@@ -873,19 +873,23 @@ function evaluateAcceptance(cert, instrumentIn) {
     return { decision: "INCOMPLETE DATA", rationale: "ข้อมูล Error หรือ Tolerance ไม่ครบ", absError: errorVal != null ? Math.abs(errorVal) : null, tol, tur: null, en: null, utilizationPct: null };
   }
   const absError = Math.abs(errorVal);
+  // Error is often a difference of two decimals (20.02 − 20.03), which binary
+  // floating point leaves a hair off (0.010000000000002); compare with a tiny
+  // allowance so a result exactly AT the limit is not failed by rounding noise.
+  const eps = 1e-9 * Math.max(1, Math.abs(tol));
   const rule = instrument?.decisionRule || "simple";
   const g = Number(instrument?.guardBandFactor) || 1;
   let limit = tol, decision, rationale;
   if (rule === "conservative") {
     limit = tol - (U || 0);
-    decision = (absError + (U || 0)) <= tol ? "PASS" : "FAIL";
+    decision = (absError + (U || 0)) <= tol + eps ? "PASS" : "FAIL";
     rationale = `Conservative: |Error|+U (${(absError + (U || 0)).toFixed(4)}) เทียบ Tolerance (${tol})`;
   } else if (rule === "guardband") {
     limit = tol - g * (U || 0);
-    decision = absError <= limit ? "PASS" : (absError <= tol ? "CONDITIONAL PASS" : "FAIL");
+    decision = absError <= limit + eps ? "PASS" : (absError <= tol + eps ? "CONDITIONAL PASS" : "FAIL");
     rationale = `Guard band: Acceptance Limit = ${tol} − ${g}×${(U || 0).toFixed(4)} = ${limit.toFixed(4)}`;
   } else {
-    decision = absError <= tol ? "PASS" : "FAIL";
+    decision = absError <= tol + eps ? "PASS" : "FAIL";
     rationale = `Simple acceptance: |Error| (${absError.toFixed(4)}) เทียบ Tolerance (${tol})`;
   }
   // TUR (Test Uncertainty Ratio) and En (Normalized Error) are informational
@@ -899,7 +903,7 @@ function evaluateAcceptance(cert, instrumentIn) {
   // It used to divide by 2U, reporting En at half its real size.
   const en = U ? errorVal / U : null;
   const utilizationPct = tol ? Math.round((absError / tol) * 1000) / 10 : null;
-  if (decision === "FAIL" && absError <= tol * 1.1) decision = "WARNING"; // near-miss band, still flagged for review
+  if (decision === "FAIL" && absError <= tol * 1.1 + eps) decision = "WARNING"; // near-miss band, still flagged for review
   return { decision, rationale, absError, tol, limit, tur, en, utilizationPct };
 }
 
@@ -1635,6 +1639,66 @@ const RESTRICTED_NAV = [
   { key: "catalog", label: "รายการที่ยืมได้", icon: LayoutGrid },
 ];
 
+// ---- Edit trail (MPIR-LP-002 ข้อ 6.7.3) ----
+const AUDIT_IGNORE = new Set(["editLog", "_notice", "updatedAt"]);
+function auditValue(v) {
+  if (v == null) return "";
+  const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+  return s.length > 120 ? s.slice(0, 117) + "…" : s;
+}
+// Diffs prev → next by id: changed records get an editLog entry
+// { at, by, changes: [{ field, from, to }] }; deleted records that are
+// locked (approved) are put back and counted in `blocked`.
+function auditList(prevList, nextList, by, isLocked) {
+  const prevById = new Map((prevList || []).map(p => [p.id, p]));
+  const nextIds = new Set((nextList || []).map(n => n.id));
+  const restored = isLocked ? (prevList || []).filter(p => !nextIds.has(p.id) && isLocked(p)) : [];
+  const at = new Date().toISOString();
+  const list = (nextList || []).map(n => {
+    const p = prevById.get(n.id);
+    if (!p || p === n) return n;
+    const keys = new Set([...Object.keys(p), ...Object.keys(n)]);
+    const changes = [];
+    keys.forEach(k => {
+      if (AUDIT_IGNORE.has(k)) return;
+      const a = auditValue(p[k]), b = auditValue(n[k]);
+      if (a !== b) changes.push({ field: k, from: a, to: b });
+    });
+    if (!changes.length) return n;
+    return { ...n, editLog: [...(Array.isArray(p.editLog) ? p.editLog : []), { at, by, changes: changes.slice(0, 40) }] };
+  });
+  return { list: restored.length ? [...list, ...restored] : list, blocked: restored.length };
+}
+// Small "ประวัติการแก้ไข" list for any set of records carrying editLog.
+function EditLogPanel({ records, title = "ประวัติการแก้ไข" }) {
+  const [open, setOpen] = useState(false);
+  const entries = (records || []).flatMap(r => (Array.isArray(r?.editLog) ? r.editLog : []).map(e => ({ ...e, ref: r.calibrationPoint != null && r.calibrationPoint !== "" ? `จุด ${r.calibrationPoint}${r.unit ? " " + r.unit : ""}` : "" })))
+    .sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+  if (!entries.length) return null;
+  const fmt = (iso) => { const d = new Date(iso); return isNaN(d) ? iso : `${fmtDate(iso.slice(0, 10))} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+  return (
+    <div style={{ marginTop: 10, fontSize: 12 }}>
+      <button type="button" onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", padding: 0, color: "var(--teal-dark)", cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+        {open ? "▾" : "▸"} {title} ({entries.length} ครั้ง) · ล่าสุด {fmt(entries[0].at)} โดย {entries[0].by}
+      </button>
+      {open && (
+        <div style={{ marginTop: 6, border: "1px solid var(--line)", borderRadius: 8, maxHeight: 260, overflowY: "auto" }}>
+          {entries.map((e, i) => (
+            <div key={i} style={{ padding: "6px 10px", borderTop: i ? "1px solid var(--line)" : "none" }}>
+              <div style={{ color: "var(--muted)" }}>{fmt(e.at)} · {e.by}{e.ref ? ` · ${e.ref}` : ""}</div>
+              {(e.changes || []).map((c, j) => (
+                <div key={j} style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, wordBreak: "break-all" }}>
+                  {c.field}: <span style={{ color: "var(--red)" }}>{c.from || "(ว่าง)"}</span> → <span style={{ color: "var(--green)" }}>{c.to || "(ว่าง)"}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App({ restrictToBooking = false, restrictToDailyCheck = false, restrictToEquipmentView = false, currentUsername = "", currentDisplayName = "", canApprove = false }) {
   // Which tab loads first, and stays after a refresh:
   // - Default (no ?tab= yet): restricted accounts land on "ติดตามงานวิเคราะห์"
@@ -1701,6 +1765,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   const [consumables, setConsumables] = useState([]);
   const [purchaseRequests, setPurchaseRequests] = useState([]);
   const [certificates, setCertificates] = useState([]); // Sheet 02 (+ Sheet 03 fields on the same record)
+  const [verifications, setVerifications] = useState([]); // MPIR-LF-068 post-calibration verification
   const [intermediateChecks, setIntermediateChecks] = useState([]); // Sheet 04 (general form; existing DailyCheckTab covers the per-type checks separately)
   const [uncertaintyBudgets, setUncertaintyBudgets] = useState([]); // Sheet 05
   const [actionImpacts, setActionImpacts] = useState([]); // Sheet 08
@@ -1710,7 +1775,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
 
   useEffect(() => {
     (async () => {
-      const [eq, dc, ac, it, bk, ch, co, pr, ce, ic, ub, ai, ar] = await Promise.all([
+      const [eq, dc, ac, it, bk, ch, co, pr, ce, ic, ub, ai, ar, vf] = await Promise.all([
         loadList("equipment", SEED_EQUIPMENT),
         loadList("dailyChecks", SEED_DAILY_CHECKS),
         loadList("activities", SEED_ACTIVITIES),
@@ -1724,9 +1789,10 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
         loadList("uncertaintyBudgets", []),
         loadList("actionImpacts", []),
         loadList("approvalRecords", []),
+        loadList("verifications", []),
       ]);
       setEquipment(eq); setDailyChecks(dc); setActivities(ac); setItems(it); setBookings(bk); setChemicals(ch); setConsumables(co); setPurchaseRequests(pr); setCertificates(ce);
-      setIntermediateChecks(ic); setUncertaintyBudgets(ub); setActionImpacts(ai); setApprovalRecords(ar);
+      setIntermediateChecks(ic); setUncertaintyBudgets(ub); setActionImpacts(ai); setApprovalRecords(ar); setVerifications(vf);
       setLoading(false);
     })();
   }, []);
@@ -1745,20 +1811,45 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
     setTimeout(() => setToast(null), duration);
   }
 
+  // MPIR-LP-002 ข้อ 6.7.3: every edit keeps the old value, the new value,
+  // when and who (editLog on the record), and approved records cannot be
+  // deleted. Done here, at the single write path, so no screen can skip it.
+  const auditBy = currentDisplayName || currentUsername || "-";
+  const audited = (key, prevList, list, isLocked, label) => {
+    const out = auditList(prevList, list, auditBy, isLocked);
+    if (out.blocked) setTimeout(() => notify(`ลบไม่ได้: ${label}ที่อนุมัติแล้ว ${out.blocked} รายการ — บันทึกที่อนุมัติแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) ให้แก้ไขพร้อมระบุเหตุผลแทน`, 6000), 60);
+    return out.list;
+  };
   const persist = {
-    equipment: (list) => { setEquipment(list); saveList("equipment", list); },
-    dailyChecks: (list) => { setDailyChecks(list); saveList("dailyChecks", list); },
+    equipment: (list) => {
+      const out = audited("equipment", equipment, list, e => certificates.some(c => c.instrumentId === e.id && c.approvedBy), "เครื่องมือที่มีใบรับรอง");
+      setEquipment(out); saveList("equipment", out);
+    },
+    dailyChecks: (list) => {
+      const out = audited("dailyChecks", dailyChecks, list, c => c.approved === true, "Daily check");
+      setDailyChecks(out); saveList("dailyChecks", out);
+    },
     activities: (list) => { setActivities(list); saveList("activities", list); },
     items: (list) => { setItems(list); saveList("items", list); },
     bookings: (list) => { setBookings(list); saveList("bookings", list); },
     chemicals: (list) => { setChemicals(list); saveList("chemicals", list); },
     consumables: (list) => { setConsumables(list); saveList("consumables", list); },
     purchaseRequests: (list) => { setPurchaseRequests(list); saveList("purchaseRequests", list); },
-    certificates: (list) => { setCertificates(list); saveList("certificates", list); },
-    intermediateChecks: (list) => { setIntermediateChecks(list); saveList("intermediateChecks", list); },
+    certificates: (list) => {
+      const out = audited("certificates", certificates, list, c => !!c.approvedBy, "ใบรับรอง");
+      setCertificates(out); saveList("certificates", out);
+    },
+    intermediateChecks: (list) => {
+      const out = audited("intermediateChecks", intermediateChecks, list, c => !!c.reviewedBy, "Intermediate check");
+      setIntermediateChecks(out); saveList("intermediateChecks", out);
+    },
     uncertaintyBudgets: (list) => { setUncertaintyBudgets(list); saveList("uncertaintyBudgets", list); },
     actionImpacts: (list) => { setActionImpacts(list); saveList("actionImpacts", list); },
     approvalRecords: (list) => { setApprovalRecords(list); saveList("approvalRecords", list); },
+    verifications: (list) => {
+      const out = audited("verifications", verifications, list, v => !!v.approvedBy, "ผลทวนสอบที่อนุมัติแล้ว");
+      setVerifications(out); saveList("verifications", out);
+    },
   };
 
   const alerts = useMemo(() => {
@@ -1948,10 +2039,11 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
               equipment={equipment} setEquipment={persist.equipment}
               certificates={certificates} setCertificates={persist.certificates}
               intermediateChecks={intermediateChecks} setIntermediateChecks={persist.intermediateChecks}
-              dailyChecks={dailyChecks}
+              dailyChecks={dailyChecks} activities={activities}
               uncertaintyBudgets={uncertaintyBudgets} setUncertaintyBudgets={persist.uncertaintyBudgets}
               actionImpacts={actionImpacts} setActionImpacts={persist.actionImpacts}
               approvalRecords={approvalRecords} setApprovalRecords={persist.approvalRecords}
+              verifications={verifications} setVerifications={persist.verifications}
               notify={notify} currentDisplayName={currentDisplayName} canApprove={canApprove}
               onOpenChecks={(id) => { setCheckFocus({ id, from: "calibration", at: Date.now() }); setTab("dailyCheck"); }}
             />
@@ -2314,9 +2406,9 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], onOpenCalibr
     notify("ลบเครื่องมือแล้ว");
     if (selected === id) setSelected(null);
   }
-  function setAvailability(id, disabled, reason) {
+  function setAvailability(id, disabled, reason, approver = "") {
     setEquipment(equipment.map(e => e.id === id
-      ? (disabled ? { ...e, status: "maintenance", unavailableReason: reason } : { ...e, status: "active", unavailableReason: "" })
+      ? (disabled ? { ...e, status: "maintenance", unavailableReason: reason, unavailableApprovedBy: approver, unavailableSince: todayISO() } : { ...e, status: "active", unavailableReason: "", unavailableApprovedBy: "", unavailableSince: "" })
       : e
     ));
     notify(disabled ? "ปิดใช้งานชั่วคราวแล้ว" : "เปิดใช้งานอีกครั้งแล้ว");
@@ -2509,7 +2601,7 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], onOpenCalibr
           onEdit={() => { setEditing(selectedItem); setSelected(null); }}
           onDelete={() => remove(selectedItem.id)}
           onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
-          onSetAvailability={(disabled, reason) => setAvailability(selectedItem.id, disabled, reason)}
+          onSetAvailability={(disabled, reason, approver) => setAvailability(selectedItem.id, disabled, reason, approver)}
           onSetLabOnly={(on) => setLabOnly(selectedItem.id, on)}
           onOpenCalibration={onOpenCalibration ? (view) => { setSelected(null); onOpenCalibration(selectedItem.id, view); } : null}
           onAddActivity={(act) => {
@@ -2637,6 +2729,9 @@ function EquipmentForm({ item, equipment = [], groupOptions = [], onCancel, onSa
         <Field label="ยี่ห้อ"><input style={S.input} value={f.brand || ""} onChange={set("brand")} placeholder="เช่น Mitsubishi Electric" /></Field>
         <Field label="รุ่น (Model)"><input style={S.input} value={f.model || ""} onChange={set("model")} placeholder="เช่น SRK24CYV-W1" /></Field>
         <Field label="หมายเลขเครื่อง (Serial No.)"><input style={S.input} value={f.serialNo || ""} onChange={set("serialNo")} /></Field>
+        <Field label="Version ซอฟต์แวร์/เฟิร์มแวร์ (ถ้ามี)"><input style={S.input} value={f.softwareVersion || ""} onChange={set("softwareVersion")} placeholder="เช่น ND v2.1, Firmware 1.04" /></Field>
+        <Field label="รอบบำรุงรักษา (เดือน)"><input type="number" min="0" style={S.input} value={f.maintenanceIntervalMonths || ""} onChange={set("maintenanceIntervalMonths")} placeholder="เช่น 6" /></Field>
+        <Field label="แผนบำรุงรักษา"><input style={S.input} value={f.maintenancePlan || ""} onChange={set("maintenancePlan")} placeholder="เช่น ทำความสะอาดเลนส์ทุก 6 เดือน, เปลี่ยนหลอดตามคู่มือ" /></Field>
         <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder='เช่น เครื่องชั่ง, pH Meter, EC Meter, Polarimeter, Oven, เครื่องควบคุมความชื้น, Cooling Bath, Refractometer, Glass Thermometer' /></Field>
         {f.type === "Polarimeter" && (
           <>
@@ -3144,7 +3239,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
     : item.status === "active"
     ? { title: "ใช้งานอยู่", sub: !bk.text || bk.text === "-" || bk.text === "ว่าง" ? "พร้อมใช้งานปกติ" : bk.text, fg: "#1E8A57", bg: "#EEF8F2", line: "#CDEBDA", Icon: CheckCircle2 }
     : item.status === "maintenance"
-      ? { title: "ปิดใช้งานชั่วคราว", sub: item.unavailableReason || "ซ่อมบำรุง", fg: "#A86A00", bg: "#FFF6E0", line: "#F3DDA5", Icon: AlertTriangle }
+      ? { title: "ปิดใช้งานชั่วคราว", sub: [item.unavailableReason || "ซ่อมบำรุง", item.unavailableApprovedBy ? `อนุมัติโดย ${item.unavailableApprovedBy}` : ""].filter(Boolean).join(" · "), fg: "#A86A00", bg: "#FFF6E0", line: "#F3DDA5", Icon: AlertTriangle }
       : { title: "ปิดใช้งาน", sub: "", fg: "#6B7A8C", bg: "#F3F6F9", line: "#DCE3EA", Icon: XCircle };
   const infoRow = (Icon, label, value, color) => (
     <div style={{ display: "grid", gridTemplateColumns: isMobile ? "18px 84px 1fr" : "20px 104px 1fr", alignItems: "center", gap: 10, fontSize: isMobile ? 12.5 : 14 }}>
@@ -3324,9 +3419,9 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
 
       {showDisable && (
         <DisableAssetDialog
-          asset={item}
+          asset={item} askApprover
           onCancel={() => setShowDisable(false)}
-          onConfirm={(reason) => { setShowDisable(false); onSetAvailability(true, reason); }}
+          onConfirm={(reason, approver) => { setShowDisable(false); onSetAvailability(true, reason, approver); }}
         />
       )}
       {showShareView && <EquipQRLinkModal equip={item} mode="equipmentView" onClose={() => setShowShareView(false)} />}
@@ -4186,8 +4281,9 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   // wrong instrument used to leave that instrument's "สอบเทียบล่าสุด /
   // ครบกำหนด" pointing at the deleted certificate.
   function remove(id) {
-    if (!window.confirm("ลบจุดสอบเทียบนี้หรือไม่?")) return;
     const target = certificates.find(c => c.id === id);
+    if (target?.approvedBy) { notify("ลบไม่ได้: ใบรับรองที่อนุมัติแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) — ยกเลิกการอนุมัติก่อน หรือแก้ไขพร้อมระบุเหตุผล", 6000); return; }
+    if (!window.confirm("ลบจุดสอบเทียบนี้หรือไม่?")) return;
     const r = clearSignoffs(certificates.filter(c => c.id !== id), target?.instrumentId, target?.certificateNo, target?.calibrationDate);
     commit(r.list, "ลบจุดสอบเทียบแล้ว" + (r.cleared ? SIGNOFF_CLEARED_MSG : ""));
   }
@@ -4195,6 +4291,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
     const [no, date] = groupKey.split("|||");
     const match = (c) => inGroup(c, selectedInstrumentId, no, date);
     const n = certificates.filter(match).length;
+    if (certificates.some(c => match(c) && c.approvedBy)) { notify("ลบไม่ได้: ใบรับรองที่อนุมัติแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) — ยกเลิกการอนุมัติก่อน หรือแก้ไขพร้อมระบุเหตุผล", 6000); return; }
     if (!window.confirm(`ลบใบรับรอง ${no || "-"} ทั้งใบ (${n} จุด) หรือไม่?`)) return;
     commit(certificates.filter(c => !match(c)), "ลบใบรับรองแล้ว");
     setSelectedGroupKey(null);
@@ -4319,7 +4416,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
 
   const formEl = editing && (
     <CertificateForm
-      row={editing.row} mode={editing.mode} equipment={equipment}
+      row={editing.row} mode={editing.mode} equipment={equipment} certificates={certificates}
       onCancel={() => setEditing(null)}
       onSave={r => (editing.mode === "header" ? saveHeader(editing.groupKey, r) : upsert(r))}
     />
@@ -4609,11 +4706,16 @@ function AdjTag({ c }) {
 // mode "full"   — new certificate: header cards + first point
 // mode "point"  — add/edit one point: header is inherited, only point cards
 // mode "header" — edit the certificate header once for every point
-function CertificateForm({ row, equipment, mode = "full", onCancel, onSave }) {
+function CertificateForm({ row, equipment, certificates = [], mode = "full", onCancel, onSave }) {
   // New certificate: start from the instrument's Sheet 01 criteria in force
   // on the calibration date, so they are visible and editable here.
   const [f, setF] = useState(() => {
     if (mode !== "full" || numOrNull(row.certTolerance) != null) return row;
+    // Same criteria as this instrument's previous certificate (e.g. TER
+    // criteria carried over year to year), before falling back to Sheet 01.
+    const prev = certificates.filter(c => c.instrumentId === row.instrumentId && numOrNull(c.certTolerance) != null)
+      .sort((a, b) => (b.calibrationDate || "").localeCompare(a.calibrationDate || ""))[0];
+    if (prev) return { ...row, ...Object.fromEntries(CERT_CRIT_KEYS.map(k => [k, prev[k] ?? ""])) };
     const inst = equipment.find(e => e.id === row.instrumentId);
     const c = criteriaAsOf(inst, row.calibrationDate);
     if (!c || numOrNull(c.tolerance) == null) return row;
@@ -7111,7 +7213,11 @@ const inRoundRange = (d, r) => (!r.from || (d || "") >= r.from) && (!r.to || (d 
 
 // Equipment identity, read straight from the equipment record (edited on the
 // "เครื่องมือ" page — one source, nothing copied).
-function EquipmentIdentityCard({ instrument: e }) {
+function EquipmentIdentityCard({ instrument: e, activities = [] }) {
+  // Maintenance plan (MPIR-LP-002 ข้อ 6.2.1.6): next due counts from the
+  // latest repair/maintenance activity, or from registration if none.
+  const lastMaint = activities.filter(a => a.equipmentId === e.id && (a.type === "repair" || a.type === "other")).map(a => a.date || "").sort().pop() || "";
+  const maintDue = e.maintenanceIntervalMonths && lastMaint ? addMonths(lastMaint, Number(e.maintenanceIntervalMonths)) : "";
   const isMobile = useIsMobile();
   const row = (label, value, color) => (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderTop: "1px solid #EEF2F6", fontSize: 13 }}>
@@ -7134,14 +7240,17 @@ function EquipmentIdentityCard({ instrument: e }) {
             {row("ประเภท", e.type)}
             {row("ยี่ห้อ / รุ่น", [e.brand, e.model].filter(Boolean).join(" · "))}
             {row("Serial No.", e.serialNo)}
+            {row("Version ซอฟต์แวร์", e.softwareVersion)}
           </div>
           <div>
             {row("ตำแหน่ง", e.location)}
             {row("รอบสอบเทียบ", e.intervalMonths ? `${e.intervalMonths} เดือน` : "")}
             {row("สอบเทียบล่าสุด", e.lastCalibration ? fmtDate(e.lastCalibration) : "")}
             {row("ครบกำหนดถัดไป", e.nextDue ? `${fmtDate(e.nextDue)} · ${STATUS_LABEL[st]}` : "", STATUS_COLOR[st])}
+            {row("แผนบำรุงรักษา", [e.maintenanceIntervalMonths ? `ทุก ${e.maintenanceIntervalMonths} เดือน` : "", e.maintenancePlan, lastMaint ? `ทำล่าสุด ${fmtDate(lastMaint)}` : "", maintDue ? `ครบกำหนด ${fmtDate(maintDue)}` : ""].filter(Boolean).join(" · "))}
           </div>
         </div>
+        <EditLogPanel records={[e]} title="ประวัติการแก้ไขข้อมูลเครื่อง" />
       </div>
     </div>
   );
@@ -7218,6 +7327,7 @@ function CertificateApprovalCard({ instrument, points, isLatest, canApprove = tr
         <SignOffCard g={g} field={dlg.field} clear={!!dlg.clear} canApprove={canApprove} currentDisplayName={currentDisplayName}
           onCancel={() => setDlg(null)} onConfirm={(name) => { onSign(dlg.field, name, !!dlg.clear); setDlg(null); }} />
       )}
+      <EditLogPanel records={points} title="ประวัติการแก้ไขใบรับรองนี้" />
     </div>
   );
 }
@@ -7267,14 +7377,527 @@ function CertificateRoundPanel({ instrument, range, certificates, dailyChecks, i
   );
 }
 
+// ---------- Post-calibration verification (MPIR-LF-068 Rev.01) ----------
+// ISO/IEC 17025 ข้อ 6.4.4 / MPIR-LP-002 ข้อ 6.3.3: before an instrument goes
+// back into use after calibration/repair, the certificate is reviewed against
+// the acceptance criteria (section 3) and the lab measures a reference
+// standard itself (section 4). Decision rule: |Error| + U(k=2) ≤ Tolerance.
+// Certificates dated on/after this day need an approved verification before
+// the usage status can be confirmed; older rounds are not held back.
+const VERIFICATION_REQUIRED_FROM = "2026-10-09";
+const VERIFY_REASONS = [["cal", "หลังสอบเทียบ"], ["rep", "หลังซ่อม"], ["new", "เครื่องมือใหม่"], ["out", "นำออกนอกการควบคุม (อื่นๆ)"]];
+const VERIFY_MAX_READS = 10, VERIFY_MIN_READS = 5;
+function verificationOf(verifications, instrumentId, certNo, calDate) {
+  return (verifications || []).find(v => v.instrumentId === instrumentId && (v.certificateNo || "") === (certNo || "") && (v.calibrationDate || "") === (calDate || ""));
+}
+function calcVerifyPoint(p, v, tol) {
+  const reads = (p.readings || []).map(numOrNull).filter(x => x != null);
+  const ref = numOrNull(p.reference);
+  const n = reads.length;
+  if (ref == null || n < 2) return { n, ok: null, tol };
+  const mean = reads.reduce((a, b) => a + b, 0) / n;
+  const sd = Math.sqrt(reads.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1));
+  const uRep = sd / Math.sqrt(n), uStd = (numOrNull(v.stdU) || 0) / 2, uRes = (numOrNull(v.resolution) || 0) / (2 * Math.sqrt(3));
+  const uc = Math.sqrt(uRep ** 2 + uStd ** 2 + uRes ** 2), U = 2 * uc, err = mean - ref, tot = Math.abs(err) + U;
+  return { n, mean, sd, uRep, uStd, uRes, uc, U, err, tot, tol, ok: tol == null ? null : tot <= tol + 1e-9 * Math.max(1, Math.abs(tol)) };
+}
+function verificationResult(v, instrument, certPoints) {
+  const crit = criteriaFor(instrument, certPoints[0] || {});
+  const pts = (v?.points || []).filter(p => numOrNull(p.reference) != null)
+    .map(p => ({ p, r: calcVerifyPoint(p, v, resolveTolerance(crit, { referenceValue: p.reference, indication: p.reference })) }));
+  const rs = roundSummary(certPoints, instrument);
+  const certRows = [...rs.found, ...rs.current].map(x => ({ c: x.c, ev: x.ev, U: derivedUOf(x.c), err: derivedErrorOf(x.c) }));
+  const certOk = rs.current.length > 0 && rs.current.every(x => !isBadDecision(x.ev.decision) && x.ev.decision !== "INCOMPLETE DATA");
+  const measOk = pts.length > 0 && pts.every(x => x.r.ok === true);
+  const fewReads = pts.some(x => x.r.n < VERIFY_MAX_READS);
+  const tooFew = pts.some(x => x.r.n < VERIFY_MIN_READS);
+  const cmp = pts.map(x => {
+    const ref = numOrNull(x.p.reference);
+    const near = rs.current.slice().sort((a, b) => Math.abs((numOrNull(a.c.referenceValue) ?? numOrNull(a.c.calibrationPoint) ?? 0) - ref) - Math.abs((numOrNull(b.c.referenceValue) ?? numOrNull(b.c.calibrationPoint) ?? 0) - ref))[0];
+    const U = near ? derivedUOf(near.c) : null;
+    const certTot = near && near.ev.absError != null && U != null ? near.ev.absError + U : null;
+    return { ref, certTot, within: certTot == null || x.r.tot == null ? null : x.r.tot <= certTot + 1e-12 };
+  });
+  const reasonOk = !fewReads || !!(v?.fewReason || "").trim();
+  return { pts, rs, certRows, certOk, measOk, fewReads, tooFew, reasonOk, cmp, crit, pass: certOk && measOk && !tooFew && reasonOk };
+}
+const fmtN = (x, d = 4) => (x == null || isNaN(x) ? "-" : Number(x).toFixed(d));
+// Enough decimals to show results finer than the instrument's resolution
+// (a 4-place balance needs 6, not the default 4).
+const verifyDigits = (v) => Math.max(4, ((String(v?.resolution ?? "").split(".")[1] || "").length) + 2);
+
+function VerificationForm({ instrument, cert, row, onCancel, onSave }) {
+  const [f, setF] = useState(() => ({ ...row, points: (row.points && row.points.length ? row.points : [{ reference: "", readings: Array(VERIFY_MAX_READS).fill("") }]) }));
+  const set = (k) => (e) => setF(p => ({ ...p, [k]: e.target.value }));
+  const setRead = (i, j, val) => setF(p => ({ ...p, points: p.points.map((pt, k) => k !== i ? pt : { ...pt, readings: pt.readings.map((r, m) => m === j ? val : r) }) }));
+  const setRef = (i, val) => setF(p => ({ ...p, points: p.points.map((pt, k) => k !== i ? pt : { ...pt, reference: val }) }));
+  const res = verificationResult(f, instrument, cert.points);
+  const dg = verifyDigits(f);
+  const cell = { ...S.input, padding: "4px 5px", fontSize: 12.5, textAlign: "center", minWidth: 0 };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(18,37,59,0.45)", zIndex: 2000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onCancel}>
+      <div style={{ ...S.modalBox, maxWidth: 980, padding: 20, marginTop: 20 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 700 }}>ทวนสอบเครื่องมือก่อนนำกลับมาใช้งาน</div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 12 }}>{instrument.code} — {instrument.name} · ใบรับรอง {cert.certificateNo || "-"} ({fmtDate(cert.calibrationDate)}) · บันทึกตาม MPIR-LF-068 Rev.01</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "8px 14px" }}>
+          <Field label="เหตุที่ทวนสอบ"><select style={S.input} value={f.reason} onChange={set("reason")}>{VERIFY_REASONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
+          <Field label="วันที่รับเครื่องคืน"><input type="date" style={S.input} value={f.returnedDate || ""} onChange={set("returnedDate")} /></Field>
+          <Field label="ผลตรวจสภาพเครื่อง"><select style={S.input} value={f.condition} onChange={set("condition")}><option value="ok">สมบูรณ์</option><option value="abnormal">พบความผิดปกติ</option></select></Field>
+          {f.condition === "abnormal" && <Field label="ความผิดปกติที่พบ"><input style={S.input} value={f.conditionNote || ""} onChange={set("conditionNote")} /></Field>}
+          <Field label="วันที่ทวนสอบ"><input type="date" style={S.input} value={f.verifyDate || ""} onChange={set("verifyDate")} /></Field>
+          <Field label="สภาวะแวดล้อม"><input style={S.input} value={f.environment || ""} onChange={set("environment")} placeholder="เช่น 20.5 °C · 55 %RH" /></Field>
+          <Field label="มาตรฐานอ้างอิง (ชื่อ/รหัส)"><input style={S.input} value={f.stdName || ""} onChange={set("stdName")} placeholder="เช่น ตุ้มน้ำหนัก S/N 11119514 / สารละลาย 20 %Brix ล็อต ..." /></Field>
+          <Field label="เลขที่ใบรับรองของมาตรฐาน"><input style={S.input} value={f.stdCert || ""} onChange={set("stdCert")} /></Field>
+          <Field label="ครบกำหนดสอบเทียบของมาตรฐาน"><input style={S.input} value={f.stdDue || ""} onChange={set("stdDue")} /></Field>
+          <Field label={`U ของมาตรฐาน (k=2) ${instrument.calUnit || ""}`}><input style={S.input} value={f.stdU ?? ""} onChange={set("stdU")} inputMode="decimal" /></Field>
+          <Field label={`ความละเอียดของเครื่อง (d) ${instrument.calUnit || ""}`}><input style={S.input} value={f.resolution ?? ""} onChange={set("resolution")} inputMode="decimal" /></Field>
+          <Field label="วิธีปฏิบัติ (WI)"><input style={S.input} value={f.wi || ""} onChange={set("wi")} placeholder="เช่น MPIR-WI-002 ข้อ 7.1.2" /></Field>
+        </div>
+        <div style={{ marginTop: 14, fontWeight: 700, fontSize: 13.5 }}>ค่าที่อ่านได้ (สูงสุด {VERIFY_MAX_READS} ครั้งต่อจุด · อย่างน้อย {VERIFY_MIN_READS} ครั้ง)</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ ...S.table, minWidth: 820, marginTop: 6 }}>
+            <thead><tr><th style={S.th}>ค่าอ้างอิง</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i} style={S.th}>{i + 1}</th>)}<th style={S.th}>n</th><th style={S.th}>|Error|+U</th><th style={S.th}>ผล</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {f.points.map((pt, i) => {
+                const r = res.pts.find(x => x.p === pt)?.r || calcVerifyPoint(pt, f, null);
+                return (
+                  <tr key={i}>
+                    <td style={S.td}><input style={{ ...cell, width: 80 }} value={pt.reference} onChange={e => setRef(i, e.target.value)} inputMode="decimal" /></td>
+                    {pt.readings.map((rv, j) => <td key={j} style={{ ...S.td, padding: 3 }}><input style={{ ...cell, width: 62 }} value={rv} onChange={e => setRead(i, j, e.target.value)} inputMode="decimal" /></td>)}
+                    <td style={{ ...S.td, textAlign: "center" }}>{r.n}</td>
+                    <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{fmtN(r.tot, dg)}</td>
+                    <td style={{ ...S.td, fontWeight: 700, color: r.ok === true ? "var(--green)" : r.ok === false ? "var(--red)" : "var(--muted)" }}>{r.ok === true ? "ผ่าน" : r.ok === false ? "ไม่ผ่าน" : "-"}</td>
+                    <td style={S.td}>{f.points.length > 1 && <button type="button" style={S.smallBtn} onClick={() => setF(p => ({ ...p, points: p.points.filter((_, k) => k !== i) }))}>ลบ</button>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {f.points.length < 5 && <button type="button" style={{ ...S.ghostBtn, marginTop: 8 }} onClick={() => setF(p => ({ ...p, points: [...p.points, { reference: "", readings: Array(VERIFY_MAX_READS).fill("") }] }))}><Plus size={14} /> เพิ่มจุดทวนสอบ</button>}
+        {res.fewReads && (
+          <Field label="เหตุผลที่ทวนสอบน้อยกว่า 10 ครั้ง (จำเป็น)"><input style={S.input} value={f.fewReason || ""} onChange={set("fewReason")} placeholder="เช่น ใช้เวลาทดสอบนาน / ใช้สารมาก" /></Field>
+        )}
+        {res.tooFew && <div style={{ color: "var(--red)", fontSize: 12.5, marginTop: 6 }}>ต้องมีค่าที่อ่านได้อย่างน้อย {VERIFY_MIN_READS} ครั้งต่อจุด</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "8px 14px", marginTop: 10 }}>
+          <Field label="สถานะการใช้งานที่เสนอ"><select style={S.input} value={f.usage || LK_USAGE[0]} onChange={set("usage")}>{LK_USAGE.filter(u => u !== "รอประเมิน").map(u => <option key={u} value={u}>{u}</option>)}</select></Field>
+          <Field label="ทบทวน WI ที่เกี่ยวข้อง (ค่าที่ใช้เป็นค่าปัจจุบัน)"><input style={S.input} value={f.wiReview || ""} onChange={set("wiReview")} placeholder="เช่น MPIR-WI-002 (ไม่มีการใช้ Correction)" /></Field>
+          <Field label="เลขที่ NC (กรณีไม่ผ่าน)"><input style={S.input} value={f.ncNo || ""} onChange={set("ncNo")} /></Field>
+          <Field label="หมายเหตุ"><input style={S.input} value={f.remark || ""} onChange={set("remark")} /></Field>
+        </div>
+        <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 10, background: res.pass ? "#EEF8F2" : "#FDF3E3", fontSize: 13 }}>
+          ใบรับรอง (ข้อ 3): <b>{res.certOk ? "ผ่าน" : "ยังไม่ผ่าน/ข้อมูลไม่ครบ"}</b> · ทวนสอบการวัด (ข้อ 4): <b>{res.measOk ? "ผ่าน" : "ยังไม่ผ่าน/ข้อมูลไม่ครบ"}</b> · สรุป: <b style={{ color: res.pass ? "var(--green)" : "var(--amber)" }}>{res.pass ? "ผ่าน" : "ยังไม่ผ่าน"}</b>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+          <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+          <button style={S.primaryBtn} disabled={res.tooFew || !res.reasonOk} onClick={() => onSave(f)}>บันทึก</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function printVerificationReport(v, instrument, cert, res) {
+  const dg = verifyDigits(v);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const reason = VERIFY_REASONS.map(([k, l]) => `<span class="o">${k === v.reason ? "☑" : "☐"} ${l}</span>`).join("");
+  const unit = esc(instrument.calUnit || "");
+  const tolTxt = res.crit && numOrNull(res.crit.tolerance) != null ? `± ${esc(res.crit.tolerance)} ${unit}` : "-";
+  const certRows = res.certRows.map((x, i) => {
+    const ev = evaluateAcceptance(x.c, instrument);
+    const tot = ev.absError != null && x.U != null ? ev.absError + x.U : null;
+    return `<tr><td>${i + 1}</td><td>${esc(x.c.referenceValue ?? x.c.calibrationPoint)}</td><td>${esc(x.c.indication ?? "")}</td><td>${isBeforeAdj(x.c) ? "ก่อนปรับ" : isAfterAdj(x.c) ? "หลังปรับ" : "-"}</td><td>${x.err == null ? "-" : (x.err >= 0 ? "+" : "") + Number(x.err).toFixed(dg)}</td><td>${fmtN(x.U, dg)}</td><td>${fmtN(tot, dg)}</td><td class="${isBadDecision(ev.decision) ? "f" : "p"}">${isBadDecision(ev.decision) ? "ไม่ผ่าน" : ev.decision === "INCOMPLETE DATA" ? "ข้อมูลไม่ครบ" : "ผ่าน"}</td></tr>`;
+  }).join("");
+  const readRows = res.pts.map(({ p, r }) => `<tr><td>${esc(p.reference)}</td>${Array.from({ length: VERIFY_MAX_READS }, (_, j) => `<td>${esc(p.readings[j] ?? "")}</td>`).join("")}<td>${fmtN(r.mean, dg)}</td></tr>`).join("");
+  const legacy = !!v.legacy;
+  const calcRows = res.pts.map(({ p, r }) => `<tr><td>${esc(p.reference)}</td><td>${r.n}</td><td>${fmtN(r.sd, dg)}</td><td>${fmtN(r.uRep, dg)}</td><td>${fmtN(r.uStd, dg)}</td><td>${fmtN(r.uRes, dg)}</td><td>${fmtN(r.uc, dg)}</td><td>${fmtN(r.U, dg)}</td><td>${r.err == null ? "-" : (r.err >= 0 ? "+" : "") + r.err.toFixed(dg)}</td><td>${fmtN(r.tot, dg)}</td><td class="${r.ok ? "p" : "f"}">${r.ok ? "ผ่าน" : "ไม่ผ่าน"}</td></tr>`).join("");
+  const cmpOk = res.cmp.every(c => c.within !== false);
+  const sign = (name, date) => name ? `${esc(name)}<br>วันที่ ${esc(fmtDate(date))}` : "(..........................................)<br>วันที่ ........./........./.........";
+  const box = (on) => (on ? "☑" : "☐");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(v.reportNo || "MPIR-LF-068")}</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>@page{size:A4;margin:10mm 12mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#111;margin:0;line-height:1.35}
+table{border-collapse:collapse;width:100%}td,th{border:.6pt solid #222;padding:2.2pt 4pt}th{background:#E8EEF3;font-weight:600;font-size:8.8pt}
+.hd td{padding:3pt 6pt}.t{text-align:center;font-weight:700;font-size:13.5pt}.t small{display:block;font-weight:400;font-size:9pt}
+.brand{width:30mm;text-align:center;font-weight:700;color:#1F4E6E;font-size:9pt;line-height:1.15}.m{width:56mm;font-size:8.8pt}
+h3{margin:7pt 0 3pt;font-size:10.4pt}h3 b{background:#1F4E6E;color:#fff;border-radius:3pt;padding:0 5pt;margin-right:5pt;font-size:9pt}
+.l{background:#F4F7F9;font-weight:600;width:30mm;font-size:8.8pt}.n td{text-align:center}.o{margin-right:10pt;white-space:nowrap}
+.p{color:#1E7A4A;font-weight:700}.f{color:#B42318;font-weight:700}.note{font-size:8.2pt;color:#333}.sig td{height:40pt;vertical-align:bottom;text-align:center}
+.pb{page-break-before:always}.ft{margin-top:8pt;font-size:7.6pt;color:#444;border-top:.5pt solid #999;padding-top:2pt;display:flex;justify-content:space-between}</style></head><body>
+${[1, 2].map(pg => `<div class="${pg === 2 ? "pb" : ""}"><table class="hd"><tr><td class="brand" rowspan="2">MITR PHOL<br>Innovation &amp;<br>Research Center</td><td class="t" rowspan="2">รายงานผลการทวนสอบเครื่องมือ<small>${v.legacy ? "ข้อมูลจากรายงานเดิม RDI-LF-068 Rev.00 คำนวณผลใหม่โดย LabTrack" : "Equipment Verification Report — ก่อนนำเข้าใช้งาน / นำกลับมาใช้งาน"}</small></td><td class="m">รหัสเอกสาร: <b>MPIR-LF-068</b> Rev.: <b>01</b></td></tr><tr><td class="m">หน้า ${pg} / 2 · เลขที่รายงาน: <b>${esc(v.reportNo || "-")}</b></td></tr></table>
+${pg === 1 ? `<h3><b>1</b>ข้อมูลเครื่องมือ</h3><table><tr><td class="l">รหัสเครื่องมือ</td><td>${esc(instrument.code)}</td><td class="l">ชื่อเครื่องมือ</td><td>${esc(instrument.name)}</td></tr>
+<tr><td class="l">ยี่ห้อ / รุ่น</td><td>${esc([instrument.brand, instrument.model].filter(Boolean).join(" / "))}</td><td class="l">Serial No.</td><td>${esc(instrument.serialNo)}</td></tr>
+<tr><td class="l">ตำแหน่งที่ตั้ง</td><td>${esc(instrument.location)}</td><td class="l">ความละเอียด (d)</td><td>${esc(v.resolution)} ${unit}</td></tr>
+<tr><td class="l">เหตุที่ทวนสอบ</td><td colspan="3">${reason}</td></tr>
+<tr><td class="l">วันที่รับเครื่องคืน</td><td>${esc(fmtDate(v.returnedDate))}</td><td class="l">ตรวจสภาพเครื่อง</td><td>${v.condition === "abnormal" ? `☑ พบความผิดปกติ: ${esc(v.conditionNote)}` : "☑ สมบูรณ์"}</td></tr></table>
+<h3><b>2</b>เกณฑ์การยอมรับและกฎการตัดสิน</h3><table><tr><td class="l">เกณฑ์ (Tolerance)</td><td>${tolTxt}</td><td class="l">ชนิดของเกณฑ์</td><td>${esc(res.crit?.toleranceType || "absolute")}</td></tr>
+<tr><td class="l">ที่มาของเกณฑ์</td><td colspan="3">${esc(res.crit?.basisOfCriteria || res.crit?.criteriaBasis || "")}</td></tr>
+<tr><td class="l">Decision Rule</td><td colspan="3"><b>Conservative:</b> ผ่าน เมื่อ |Error| + U ≤ Tolerance · ไม่ผ่าน เมื่อ |Error| + U &gt; Tolerance <span class="note">(U = ความไม่แน่นอนขยาย k = 2)</span></td></tr></table>
+<h3><b>3</b>ทวนสอบผลการสอบเทียบเทียบกับเกณฑ์</h3><table><tr><td class="l">เลขที่ใบรับรอง</td><td>${esc(cert.certificateNo)}</td><td class="l">วันที่สอบเทียบ</td><td>${esc(fmtDate(cert.calibrationDate))}</td></tr>
+<tr><td class="l">หน่วยงานสอบเทียบ</td><td>${esc(cert.points[0]?.provider)}</td><td class="l">รับรอง ISO/IEC 17025</td><td>${esc(cert.points[0]?.providerAccreditationStatus || "-")}</td></tr></table>
+<table class="n" style="margin-top:4pt"><tr><th>ลำดับ</th><th>ค่าอ้างอิง (${unit})</th><th>ค่าที่อ่านได้</th><th>ก่อน/หลังปรับ</th><th>Error</th><th>U (k=2)</th><th>|Error| + U</th><th>ผล</th></tr>${certRows}</table>
+<table style="margin-top:4pt"><tr><td class="l">สรุปข้อ 3</td><td>${box(res.certOk)} ทุกจุด (หลังปรับ) ผ่านเกณฑ์ <span class="o"></span>${box(res.rs.asFoundDecision && isBadDecision(res.rs.asFoundDecision))} ค่าก่อนปรับไม่ผ่าน → ประเมินผลกระทบย้อนหลังตาม MPIR-LP-012 ข้อ 4.4</td></tr></table>
+<div class="note">Error = ค่าที่อ่านได้ − ค่าอ้างอิง · ตัดสินสถานะเครื่องจากค่าหลังปรับ · ค่าก่อนปรับใช้ประเมินผลกระทบย้อนหลัง</div>` : `
+<h3><b>4</b>ทวนสอบค่าการวัดกับมาตรฐานอ้างอิง</h3><table><tr><td class="l">มาตรฐานอ้างอิง</td><td colspan="3">${esc(v.stdName)}</td></tr>
+<tr><td class="l">เลขที่ใบรับรอง</td><td>${esc(v.stdCert)}</td><td class="l">ครบกำหนดสอบเทียบ</td><td>${esc(v.stdDue)}</td></tr>
+<tr><td class="l">U ของมาตรฐาน (k=2)</td><td>${esc(v.stdU)} ${unit}</td><td class="l">วิธีปฏิบัติ</td><td>${esc(v.wi)}</td></tr>
+<tr><td class="l">วันที่ทวนสอบ</td><td>${esc(fmtDate(v.verifyDate))}</td><td class="l">สภาวะแวดล้อม</td><td>${esc(v.environment)}</td></tr></table>
+<table class="n" style="margin-top:4pt;table-layout:fixed"><tr><th>ค่าอ้างอิง</th>${Array.from({ length: VERIFY_MAX_READS }, (_, i) => `<th>${i + 1}</th>`).join("")}<th style="width:13%">ค่าเฉลี่ย</th></tr>${readRows}</table>
+<table class="n" style="margin-top:4pt"><tr><th>ค่าอ้างอิง</th><th>n</th><th>SD</th><th>u<sub>rep</sub></th><th>u<sub>std</sub></th><th>u<sub>res</sub></th><th>u<sub>c</sub></th><th>U = 2u<sub>c</sub></th><th>Error</th><th>|Error| + U</th><th>ผล</th></tr>${calcRows}</table>
+<div class="note" style="margin-top:3pt">${legacy ? "ค่าที่อ่านได้จากรายงานเดิม · " : ""}${numOrNull(v.stdU) == null ? "<b>ยังไม่ได้ระบุ U ของมาตรฐาน (u<sub>std</sub> = 0)</b> · " : ""}${`u<sub>rep</sub> = SD/√n · u<sub>std</sub> = U<sub>std</sub>/2 · u<sub>res</sub> = d/(2√3) · u<sub>c</sub> = √(u<sub>rep</sub>² + u<sub>std</sub>² + u<sub>res</sub>²) · U = 2u<sub>c</sub>${res.fewReads ? ` · ทวนสอบน้อยกว่า 10 ครั้ง เนื่องจาก: ${esc(v.fewReason)}` : ""} · คำนวณโดยระบบ LabTrack`}</div>
+<table style="margin-top:4pt"><tr><td class="l">เทียบกับใบรับรอง</td><td>${box(cmpOk)} |Error| + U จากการทวนสอบ ≤ |Error| + U ของจุดใกล้เคียงในใบรับรอง <span class="o"></span>${box(!cmpOk)} มากกว่า</td></tr></table>
+<h3><b>5</b>สรุปผลและการตัดสินใจ</h3><table><tr><td class="l">ผลการทวนสอบ</td><td>${box(res.pass)} <b>ผ่าน</b> ทั้งข้อ 3 และข้อ 4 <span class="o"></span>${box(!res.pass)} <b>ไม่ผ่าน</b> → ห้ามใช้งาน ดำเนินการตาม MPIR-LP-012 (เลขที่ NC: ${esc(v.ncNo || "............")})</td></tr>
+<tr><td class="l">สถานะการใช้งาน</td><td>${esc(v.usage || LK_USAGE[0])}</td></tr><tr><td class="l">ทบทวน WI</td><td>${box(!!v.wiReview)} ${esc(v.wiReview || "")}</td></tr><tr><td class="l">หมายเหตุ</td><td>${esc(v.remark)}</td></tr></table>
+<h3><b>6</b>ลงชื่อ</h3><table class="sig"><tr><th>ผู้ทวนสอบ</th><th>ผู้ประเมินผล (TM/QM)</th><th>ผู้อนุมัติให้ใช้งาน (Lab manager)</th></tr>
+<tr><td>${sign(v.verifiedBy, v.verifyDate)}</td><td>${legacy && !v.evaluatedBy ? "— (แบบฟอร์มเดิมไม่มีช่องนี้)" : sign(v.evaluatedBy, v.evaluationDate)}</td><td>${sign(v.approvedBy, v.approvalDate)}</td></tr></table>
+<div class="note" style="margin-top:3pt">ชื่อผู้ลงชื่อจากบัญชีผู้ใช้ในระบบ LabTrack ถือเป็นการลงนามรับรองบันทึก (MPIR-LP-002 ข้อ 6.7.2) · พิมพ์จากระบบเมื่อ ${esc(new Date().toLocaleString("th-TH"))}</div>`}
+<div class="ft"><span>อ้างอิง MPIR-LP-002 ข้อ 6.3.3, 6.4.3 · ISO/IEC 17025:2017 ข้อ 6.4.4 · บันทึกฉบับจริงอยู่ในระบบ LabTrack</span><span>MPIR-LF-068 Rev.01</span></div></div>`).join("")}
+<script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
+  const w = window.open("", "_blank");
+  if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+
+function VerificationCard({ instrument, cert, verification, canApprove, currentDisplayName, onSave, notify }) {
+  const [editing, setEditing] = useState(null);
+  const required = (cert.calibrationDate || "") >= VERIFICATION_REQUIRED_FROM;
+  const v = verification;
+  const res = v ? verificationResult(v, instrument, cert.points) : null;
+  const blank = () => ({
+    id: uid(), instrumentId: instrument.id, certificateNo: cert.certificateNo || "", calibrationDate: cert.calibrationDate || "",
+    reportNo: `VR-${beYear(todayISO())}-${String(Date.now()).slice(-4)}`, reason: "cal", returnedDate: "", condition: "ok", conditionNote: "",
+    verifyDate: todayISO(), environment: "", stdName: "", stdCert: "", stdDue: "", stdU: "", resolution: (String(instrument.resolution ?? "").match(/\d*\.?\d+/) || [""])[0], wi: "",
+    points: [], fewReason: "", usage: LK_USAGE[0], wiReview: "", ncNo: "", remark: "", verifiedBy: currentDisplayName,
+  });
+  const status = !v ? { t: required ? "ยังไม่ได้ทวนสอบ — ต้องทวนสอบก่อนยืนยันสถานะการใช้งาน" : "ยังไม่ได้ทวนสอบ", c: required ? "var(--amber)" : "var(--muted)" }
+    : v.legacy && v.approvedBy ? { t: `นำเข้าจากรายงานเดิม (${v.reportNo}) · อนุมัติโดย ${v.approvedBy}`, c: "var(--green)" }
+    : v.approvedBy ? { t: `อนุมัติให้ใช้งานแล้ว · ${v.approvedBy}`, c: "var(--green)" }
+    : v.evaluatedBy ? { t: `ประเมินผลแล้ว · รอ Lab manager อนุมัติ`, c: "var(--amber)" }
+    : { t: `บันทึกแล้ว · รอ TM/QM ประเมินผล`, c: "var(--amber)" };
+  const signPatch = (field) => {
+    if (!v) return;
+    if (field === "approved") {
+      if (!canApprove) { notify("เฉพาะผู้มีสิทธิ์อนุมัติ (Lab manager)"); return; }
+      if (!v.evaluatedBy) { notify("ต้องลงชื่อผู้ประเมินผล (TM/QM) ก่อน"); return; }
+      if (!res.pass) { notify("ผลทวนสอบยังไม่ผ่าน — อนุมัติให้ใช้งานไม่ได้ ดำเนินการตาม MPIR-LP-012"); return; }
+    }
+    const name = currentDisplayName || "-";
+    if (!window.confirm(field === "approved" ? `อนุมัติให้ใช้งานในนาม ${name}?` : `ลงชื่อผู้ประเมินผลในนาม ${name}?`)) return;
+    onSave(field === "approved" ? { ...v, approvedBy: name, approvalDate: todayISO() } : { ...v, evaluatedBy: name, evaluationDate: todayISO() },
+      field === "approved" ? "อนุมัติผลการทวนสอบแล้ว" : "ลงชื่อผู้ประเมินผลการทวนสอบแล้ว");
+  };
+  return (
+    <div style={{ border: "1px solid var(--line)", borderRadius: 12, padding: "12px 14px", marginBottom: 12, background: "var(--panel)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>ทวนสอบก่อนนำกลับมาใช้งาน <span style={{ fontWeight: 400, fontSize: 11.5, color: "var(--muted)" }}>MPIR-LF-068</span></div>
+          <div style={{ fontSize: 12.5, color: status.c, marginTop: 2 }}>{status.t}{res ? ` · ผล: ${res.pass ? "ผ่าน" : "ยังไม่ผ่าน"}` : ""}</div>
+          {v && numOrNull(v.stdU) == null && <div style={{ fontSize: 11.5, color: "var(--amber)", marginTop: 2 }}>ยังไม่ได้ระบุ U ของมาตรฐานอ้างอิง — ผลยังไม่รวม u<sub>std</sub> (กด แก้ไขผลทวนสอบ เพื่อเพิ่ม)</div>}
+        </div>
+        {(!v || !v.approvedBy || v.legacy) && <button style={v ? S.ghostBtn : S.primaryBtn} onClick={() => setEditing(v || blank())}>{v ? "แก้ไขผลทวนสอบ" : "บันทึกผลทวนสอบ"}</button>}
+        {v && !v.approvedBy && !v.evaluatedBy && <button style={S.ghostBtn} onClick={() => signPatch("evaluated")}>ลงชื่อผู้ประเมิน (TM/QM)</button>}
+        {v && v.evaluatedBy && !v.approvedBy && <button style={{ ...S.primaryBtn, opacity: canApprove ? 1 : 0.5 }} onClick={() => signPatch("approved")}>อนุมัติให้ใช้งาน (Lab manager)</button>}
+        {v && <button style={S.ghostBtn} onClick={() => printVerificationReport(v, instrument, cert, res)}><FileDown size={14} /> พิมพ์รายงาน (PDF)</button>}
+      </div>
+      {v && <EditLogPanel records={[v]} title="ประวัติการแก้ไขผลทวนสอบ" />}
+      {editing && (
+        <VerificationForm instrument={instrument} cert={cert} row={editing} onCancel={() => setEditing(null)}
+          onSave={(row) => {
+            // a changed result withdraws earlier sign-offs (same rule as certificates)
+            const changed = v && JSON.stringify({ ...v, evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", editLog: null }) !== JSON.stringify({ ...row, evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "", editLog: null });
+            onSave(changed ? { ...row, evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "" } : row, changed && v?.evaluatedBy ? "บันทึกผลทวนสอบแล้ว · ข้อมูลเปลี่ยน ต้องลงชื่อประเมิน/อนุมัติใหม่" : "บันทึกผลทวนสอบแล้ว");
+            setEditing(null);
+          }} />
+      )}
+    </div>
+  );
+}
+
+
+// ---------- Historical verification reports RDI-LF-068 Rev.00 (2566–2568) ----------
+// Transcribed from the signed paper reports so the history lives in LabTrack.
+// Only the raw data are taken over (certificate reference/indication/U and the
+// verification readings); every Error, SD, u and Error + U is recalculated by
+// LabTrack, because several figures on the paper forms were miscalculated. Acceptance criteria are the
+// lab's TER criteria from the same reports: |Error| + U ≤ Tolerance; the
+// current year (2569) still uses the same criteria.
+const LF068_INSTRUMENTS = {
+  bal2: { label: "เครื่องชั่ง 2 ตำแหน่ง", make: "METTLER TOLEDO ML3002E", serials: ["1123321068"], unit: "g", tol: 0.02, param: "Mass", kw: /ML3002|ชั่ง\s*2/i },
+  refr: { label: "Refractometer", make: "Schmidt+Haensch ATR-P", serials: ["41977"], unit: "%Brix", tol: 0.2, param: "Brix", kw: /refrac/i },
+  pol: { label: "Polarimeter", make: "Schmidt+Haensch Polartronic Saccharomat V202", serials: ["53379"], unit: "°Z", tol: 0.03, param: "Optical rotation", kw: /polari/i },
+  bath: { label: "Cooling Bath", make: "LAUDA RA24", serials: ["LCK1909-13-0006"], unit: "°C", tol: 2, param: "Temperature", kw: /cooling|bath/i },
+  oven: { label: "Hot Air Oven 1", make: "MEMMERT UFE800", serials: ["G808.0181", "G880181"], unit: "°C", tol: 3, param: "Temperature", kw: /oven|ตู้อบ/i },
+  bal4: { label: "เครื่องชั่ง 4 ตำแหน่ง", make: "METTLER TOLEDO ML204/01", serials: ["B406270125"], unit: "g", tol: 0.0002, param: "Mass", kw: /ML204|ชั่ง\s*4/i },
+};
+const LF068_REPORTS = {
+  "2566": { date: "2023-10-06", label: "RDI-LF-068 Rev.00 ลงวันที่ 6 ต.ค. 2566", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์" },
+  "2567": { date: "2024-10-04", label: "RDI-LF-068 Rev.00 ลงวันที่ 4 ต.ค. 2567", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์" },
+  "2568": { date: "2025-09-24", label: "RDI-LF-068 Rev.00 ลงวันที่ 24 ก.ย. 2568", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางสาวรัตนา เมืองมนตรี" },
+};
+const LF068_STD_WEIGHT_LS = "ตุ้มน้ำหนักมาตรฐาน LS Model 1G-1000G";
+const LF068_STD_WEIGHT_MT = "ตุ้มน้ำหนักมาตรฐาน METTLER TOLEDO Serial no. 11119514";
+const LF068_STD_BRIX = "สารมาตรฐาน 20.00 %Brix เตรียมตาม RDI-WI-02";
+const LF068_STD_QUARTZ = "Quartz Control Plate No. 5578, Reference no. PTB 4.21-4090851 วัดที่ 882.60 nm (สอบเทียบ 16 ต.ค. 63)";
+const LF068_STD_THERMO = "Thermometer แบบกระเปาะ Serial Number 651";
+const LF068_OVEN_METHOD = "วัดอุณหภูมิ Silicone Oil (Lab grade) 50 mL ในบีกเกอร์ 100 mL วางในตู้อบที่ 105 °C 9 ตำแหน่งแบบสุ่ม 2 ชั่วโมง";
+const _w10 = ["10.00", "10.01", "10.01", "10.00", "10.00", "9.99", "10.00", "10.00", "9.99", "10.00"];
+const _w50 = ["50.00", "50.01", "49.99", "50.00", "50.00", "50.00", "50.00", "50.00", "50.00", "50.00"];
+// 2566 verification readings are not used (lab decision) — only its certificates are imported.
+const _w200 = ["200.00", "200.00", "200.00", "200.00", "200.00", "200.00", "200.00", "200.00", "200.01", "200.00"];
+const _q67 = ["100.11", "100.11", "100.12", "100.12", "100.11", "100.12", "100.12", "100.12", "100.11", "100.11"];
+const _oven = ["104.5", "105.3", "104.9", "104.9", "105.3", "105.6", "105.4", "104.8", "104.8"];
+const _bath = ["20.1", "20.1", "20.1", "20.0", "20.1"];
+const _rng = (from, step, n) => Array.from({ length: n }, (_, i) => from + i * step);
+// cert.pts: [reference, indication, reportedError, U(+), rangeLabel?]
+// ver.pts:  [reference, readings[], …paper-form results (kept for reference only)]
+// Bath/oven certificates: the lab measures the chamber with its own thermometer
+// ("Measured temp."), so reference = mean measured, indication = set/indicated.
+const LF068_LEGACY = [
+  // ---------------- 2566 ----------------
+  { inst: "bal2", report: "2566", reason: "out",
+    cert: { no: "23M9468", date: "2023-10-04", pts: _rng(0, 300, 11).map(v => [v, v, 0, 0.012]) },
+    ver: null },
+  { inst: "refr", report: "2566", reason: "out",
+    cert: { no: "23CH1188", date: "2023-09-26", pts: [[10.001, 10, 0.001, 0.082], [19.996, 20, 0.004, 0.084], [29.991, 30, 0.009, 0.098], [50.001, 50.02, 0.019, 0.110], [60.000, 60.02, 0.020, 0.110]] },
+    ver: null },
+  { inst: "pol", report: "2566", reason: "new",
+    cert: { no: "CB-007-23-0", date: "2023-04-28", pts: [
+      [27.03, 27.02, 0.01, 0.02, "589.44 nm"], [50.11, 50.1, 0.00, 0.02, "589.44 nm"], [75.00, 74.98, 0.00, 0.02, "589.44 nm"], [99.98, 99.98, 0.00, 0.02, "589.44 nm"],
+      [27.08, 27.07, 0.00, 0.02, "882.60 nm"], [50.20, 50.2, 0.00, 0.02, "882.60 nm"], [75.13, 75.12, 0.00, 0.02, "882.60 nm"], [100.16, 100.16, 0.00, 0.02, "882.60 nm"]] },
+    ver: null },
+  { inst: "bath", report: "2566", reason: "out",
+    cert: { no: "23T9488", date: "2023-10-04", note: "Measured temp. 20.03, 20.04, 20.02, 20.02, 20.04 °C", pts: [[20.0, 20.0, 0.18, 0.18]] },
+    ver: null },
+  { inst: "oven", report: "2566", reason: "out",
+    cert: { no: "23T9503", date: "2023-10-05", note: "Measured temp. 105.75, 105.41, 105.17, 105.25, 104.99, 104.76, 105.13, 104.74, 105.15 °C", pts: [[105, 105, 0.15, 0.86]] },
+    ver: null },
+  // ---------------- 2567 ----------------
+  { inst: "bal2", report: "2567", reason: "out",
+    cert: { no: "M24-4835A", date: "2024-10-04", pts: [[0, 0, 0, 0.0067], [300, 300, 0, 0.0067], [600, 600, 0, 0.0068], [900, 900.01, 0, 0.0071],
+      [1200, 1200.01, 0.01, 0.0074], [1500, 1500.01, 0.01, 0.0079], [1800, 1800.01, 0.01, 0.0083], [2100, 2100.02, 0.01, 0.0088]] },
+    ver: { date: "2024-10-03", std: LF068_STD_WEIGHT_LS, wi: "RDI-WI-002",
+      pts: [[10, _w10, 0.007, 0.010, 0.000, 0.010], [50, _w50, 0.005, 0.010, 0.000, 0.010], [200, _w200, 0.003, 0.010, 0.001, 0.011]] } },
+  { inst: "refr", report: "2567", reason: "out",
+    cert: { no: "CB-044-24", date: "2024-08-22", pts: [[10.001, 9.99, 0.010, 0.080], [19.996, 19.99, 0.010, 0.080], [29.998, 29.99, 0.010, 0.100], [50.002, 49.98, 0.020, 0.100], [60.000, 59.99, 0.010, 0.110]] },
+    ver: { date: "2023-09-26", dateNote: "ต้นฉบับระบุ “ดำเนินการ 26 กันยายน 2566”", std: LF068_STD_BRIX, wi: "RDI-WI-02",
+      pts: [[20.00, ["20.12", "20.06", "20.11", "20.05", "20.07", "20.07", "20.07", "20.07", "20.1", "20.08"], 0.023, 0.0071, 0.0080, 0.0151]] } },
+  { inst: "pol", report: "2567", reason: "new",
+    cert: { no: "CB-043-24", date: "2024-08-22", pts: [
+      [25.36, 25.36, 0.00, 0.02, "587.00 nm"], [50.50, 50.5, 0.00, 0.02, "587.00 nm"], [74.54, 74.54, 0.00, 0.02, "587.00 nm"], [100.80, 100.81, 0.01, 0.02, "587.00 nm"],
+      [25.41, 25.41, 0.00, 0.02, "882.60 nm"], [50.59, 50.59, 0.00, 0.02, "882.60 nm"], [74.68, 74.68, 0.00, 0.02, "882.60 nm"], [100.99, 100.99, 0.00, 0.02, "882.60 nm"]] },
+    ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: LF068_STD_QUARTZ, stdDue: "ต.ค. 2568", wi: "",
+      pts: [[100.12, _q67, 0.005, 0.0017, 0.0050, 0.0067]] } },
+  { inst: "bath", report: "2567", reason: "out",
+    cert: { no: "24T9418", date: "2024-09-18", note: "Measured temp. 19.98, 19.98, 19.98, 20.03, 19.98 °C", pts: [[20.0, 20.0, 0.06, 0.14]] },
+    ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: "Thermometer แบบกระเปาะ", stdCert: "24T9420", wi: "วัดอุณหภูมิน้ำที่ 20 °C",
+      pts: [[20.0, _bath, 0.04, 0.02, 0.08, 0.10]] } },
+  { inst: "oven", report: "2567", reason: "out",
+    cert: { no: "24T9366", date: "2024-09-18", note: "Measured temp. 105.62, 105.36, 105.04, 105.11, 104.8, 104.58, 105.02, 104.58, 104.94 °C", pts: [[105, 105, 0.01, 0.68]] },
+    ver: { date: "2024-09-23", std: LF068_STD_THERMO, wi: LF068_OVEN_METHOD, pts: [[105, _oven, 0.34, 0.11, 0.06, 0.16]] } },
+  // ---------------- 2568 ----------------
+  { inst: "bal2", report: "2568", reason: "out",
+    cert: { no: "25M9520", date: "2024-10-04", dateNote: "ต้นฉบับระบุวันที่สอบเทียบ 4 ต.ค. 2567", pts: _rng(0, 300, 9).map(v => [v, v, 0, 0.0012]) },
+    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, wi: "RDI-WI-002",
+      pts: [[10, ["9.99", "10.01", "10.01", "10.00", "10.00", "9.99", "10.00", "10.00", "9.99", "10.00"], 0.007, 0.010, 0.001, 0.011],
+        [50, ["50.00", "50.01", "49.99", "50.00", "50.00", "50.00", "50.01", "50.00", "50.00", "50.00"], 0.006, 0.010, 0.001, 0.011],
+        [200, _w200, 0.003, 0.010, 0.001, 0.011]] } },
+  { inst: "refr", report: "2568", reason: "out",
+    cert: { no: "AT071/25", date: "2025-07-20", pts: [[5.000, 4.990, 0.010, 0.077], [10.000, 10.000, 0.000, 0.083], [20.000, 19.970, 0.030, 0.083], [30.000, 29.980, 0.020, 0.093], [50.000, 50.010, -0.010, 0.110]] },
+    ver: { date: "2023-09-26", dateNote: "ต้นฉบับระบุ “ดำเนินการ 26 กันยายน 2566”", std: LF068_STD_BRIX, wi: "RDI-WI-02",
+      pts: [[20.00, ["20.02", "20.06", "19.98", "20.05", "20.07", "20.07", "20.06", "20.07", "20.1", "20.04"], 0.033, 0.0104, 0.0040, 0.0144]] } },
+  { inst: "pol", report: "2568", reason: "new",
+    cert: { no: "CB-048-25", date: "2025-08-13", pts: [
+      [25.36, 25.36, 0.00, 0.02, "587.00 nm"], [50.50, 50.5, 0.00, 0.02, "587.00 nm"], [74.54, 74.54, 0.00, 0.02, "587.00 nm"], [100.80, 100.79, 0.01, 0.02, "587.00 nm"],
+      [25.41, 25.41, 0.00, 0.02, "882.60 nm"], [50.59, 50.6, 0.01, 0.02, "882.60 nm"], [74.68, 74.68, 0.00, 0.02, "882.60 nm"], [100.99, 100.99, 0.01, 0.02, "882.60 nm"]] },
+    ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: LF068_STD_QUARTZ, stdDue: "ต.ค. 2569", wi: "",
+      pts: [[100.12, ["100.10", "100.11", "100.12", "100.09", "100.11", "100.12", "100.12", "100.11", "100.11", "100.11"], 0.009, 0.0030, 0.0100, 0.0130]] } },
+  { inst: "bath", report: "2568", reason: "out",
+    cert: { no: "24T9512", date: "2025-09-15", note: "Measured temp. 19.98, 19.96, 19.97, 19.94, 19.96 °C", pts: [[20.0, 20.0, 0.23, 0.15]] },
+    ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: "Thermometer แบบกระเปาะ", stdCert: "25T9513", wi: "วัดอุณหภูมิน้ำที่ 20 °C",
+      pts: [[20.0, ["19.98", "20.12", "19.97", "20.13", "20.11"], 0.08, 0.04, 0.06, 0.10]] } },
+  { inst: "oven", report: "2568", reason: "out",
+    cert: { no: "25T9366", date: "2025-09-15", note: "Measured temp. 105.62, 105.36, 105.04, 105.11, 104.8, 104.58, 105.02, 104.58, 104.94 °C", pts: [[105, 105, 0.01, 0.68]] },
+    ver: { date: "2025-09-24", std: LF068_STD_THERMO, wi: LF068_OVEN_METHOD, pts: [[105, _oven, 0.34, 0.11, 0.06, 0.16]] } },
+  { inst: "bal4", report: "2568", reason: "out",
+    cert: { no: "25M9517", date: "2025-09-15", pts: [[0, 0, 0, 0.000082], [0.1, 0.1, 0, 0.000083], [0.2, 0.2, 0, 0.000083], [0.5, 0.5, 0, 0.000083], [1, 1, 0, 0.000084],
+      [2, 2, 0, 0.000084], [5, 5, 0, 0.000086], [10, 10, 0, 0.000089], [20, 20, 0, 0.000094]] },
+    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, wi: "RDI-WI-002",
+      pts: [[10, ["10.0003", "10.0003", "10.0002", "10.0002", "9.9998", "10.0001", "10.0002", "9.9999", "10.0001", "10.0003"], 0.0002, 0.0000, 0.0001, 0.0001],
+        [50, ["50.0004", "50.0002", "49.9998", "50.0001", "50.0002", "50.0000", "49.9997", "50.0002", "49.9999", "50.0003"], 0.0002, 0.0000, 0.0001, 0.0001]] } },
+];
+const LF068_REASON_OF = { out: "นำออกนอกการควบคุม (อื่นๆ)", new: "เครื่องมือใหม่" };
+const normSerial = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const normCertNo = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+function guessLegacyInstrument(def, equipment) {
+  const bySerial = equipment.filter(e => def.serials.some(s => normSerial(s) && normSerial(e.serialNo) === normSerial(s)));
+  if (bySerial.length === 1) return { id: bySerial[0].id, how: "serial" };
+  const byName = equipment.filter(e => def.kw.test(`${e.name || ""} ${e.type || ""} ${e.model || ""}`));
+  if (byName.length === 1) return { id: byName[0].id, how: "name" };
+  return { id: "", how: "" };
+}
+function terCriteriaPatch(def) {
+  return { certTolerance: def.tol, certToleranceType: "absolute", certDecisionRule: "conservative", certGuardBandFactor: "",
+    certCriteriaBasis: "เกณฑ์ TER: ค่าความผิดพลาดรวม |Error| + U ≤ เกณฑ์การยอมรับ (ตาม RDI-LF-068)" };
+}
+// Builds what the import would write, from the user's instrument mapping and
+// (possibly corrected) dates. Pure — the preview and the import use the same.
+function planLegacyImport({ equipment, certificates, verifications, mapping, dates, currentDisplayName }) {
+  const newCerts = [], newVers = [], critIds = new Set(), notes = [];
+  const certDateOf = {}; // `${instId}|${normCertNo}` -> date used
+  for (const [i, row] of LF068_LEGACY.entries()) {
+    const def = LF068_INSTRUMENTS[row.inst];
+    const instId = mapping[row.inst];
+    if (!instId) continue;
+    const inst = equipment.find(e => e.id === instId);
+    const rep = LF068_REPORTS[row.report];
+    const calDate = dates[`c${i}`] ?? row.cert.date;
+    const verDate = dates[`v${i}`] ?? row.ver?.date;
+    const existing = certificates.filter(c => c.instrumentId === instId && normCertNo(c.certificateNo) === normCertNo(row.cert.no));
+    const useDate = existing.length ? existing[0].calibrationDate : calDate;
+    const useNo = existing.length ? existing[0].certificateNo : row.cert.no;
+    certDateOf[`${instId}|${normCertNo(row.cert.no)}`] = useDate;
+    if (!existing.length) {
+      const meas = /Measured temp/i.test(row.cert.note || "") ? (row.cert.note.match(/-?\d+(?:\.\d+)?/g) || []).map(Number) : null;
+      row.cert.pts.forEach(([nominal, ind, paperErr, U, range]) => {
+        const ref = meas && meas.length ? round4(meas.reduce((a, b) => a + b, 0) / meas.length) : nominal;
+        newCerts.push(normalizeCertRow({
+          ...blankCertificate(instId, row.cert.no), calibrationDate: calDate,
+          parameter: def.param, rangeId: range || "", calibrationPoint: nominal, unit: inst?.calUnit || def.unit,
+          referenceValue: ref, indication: ind, reportedError: "", reportedU: U, uReportedAs: "Absolute", coverageFactor: 2,
+          adjustmentStatus: "",
+          limitationsNotes: [row.cert.note && `${row.cert.note} (ค่าอ้างอิง = ค่าเฉลี่ย)`, row.cert.dateNote, `Error ในแบบฟอร์มเดิม ${paperErr} — LabTrack คำนวณจาก ค่าที่อ่านได้ − ค่าอ้างอิง`].filter(Boolean).join(" · "),
+          ...terCriteriaPatch(def),
+          evaluatedBy: rep.by, evaluationDate: rep.date, approvedBy: rep.approver, approvalDate: rep.date,
+          source: `import:${rep.label}`,
+        }));
+      });
+    }
+    const already = row.ver ? verificationOf(verifications, instId, useNo, useDate) : true;
+    if (!already) {
+      const dDec = Math.max(...row.ver.pts.flatMap(p => p[1].map(r => (String(r).split(".")[1] || "").length)));
+      const certPts = existing.length ? existing.map(c => ({ ...c, ...terCriteriaPatch(def) })) : newCerts.filter(c => c.instrumentId === instId && c.certificateNo === row.cert.no);
+      const vr = {
+        id: uid(), instrumentId: instId, certificateNo: useNo, calibrationDate: useDate,
+        reportNo: `${rep.label}`, reason: row.reason, returnedDate: "", condition: "ok", conditionNote: "",
+        verifyDate: verDate || rep.date, environment: "", stdName: row.ver.std, stdCert: row.ver.stdCert || "", stdDue: row.ver.stdDue || "",
+        stdU: "", resolution: (10 ** -dDec).toFixed(dDec), wi: row.ver.wi || "",
+        points: row.ver.pts.map(([reference, readings]) => ({ reference: String(reference), readings: [...readings, ...Array(Math.max(0, VERIFY_MAX_READS - readings.length)).fill("")].slice(0, VERIFY_MAX_READS) })),
+        fewReason: row.ver.pts.some(p => p[1].length < VERIFY_MAX_READS) ? "จำนวนซ้ำตามแบบฟอร์มเดิม" : "",
+        usage: LK_USAGE[0], wiReview: "", ncNo: "",
+        remark: [`นำเข้าค่าที่อ่านได้จาก ${rep.label} — LabTrack คำนวณผลใหม่ทั้งหมด`, `d = ${(10 ** -dDec).toFixed(dDec)} อนุมานจากทศนิยมของค่าที่อ่านได้`,
+          "ต้นฉบับไม่มี U ของมาตรฐานอ้างอิง", row.ver.dateNote, !verDate ? "ใช้วันที่ของรายงานเป็นวันที่ทวนสอบ" : ""].filter(Boolean).join(" · "),
+        legacy: true, legacyApprover: rep.approver, legacyApprovalDate: rep.date,
+        verifiedBy: rep.by, evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "",
+        importedBy: currentDisplayName || "", importedAt: todayISO(),
+      };
+      // The paper approval stands only if the recalculated result still passes.
+      const res = verificationResult(vr, inst, certPts);
+      if (res.pass) Object.assign(vr, { approvedBy: rep.approver, approvalDate: rep.date });
+      else vr.usage = "รอประเมิน";
+      if (!res.pass) notes.push(`${def.label} ${row.cert.no} (ปี ${row.report}): คำนวณใหม่แล้วไม่ผ่าน — ไม่ยกผลอนุมัติเดิมมา ต้องประเมินตาม MPIR-LP-012`);
+      newVers.push(vr);
+    }
+  }
+  // TER criteria for every certificate of the mapped instruments that is not
+  // already judged by them (this year's certificates use the same criteria).
+  for (const [key, instId] of Object.entries(mapping)) {
+    if (!instId) continue;
+    const def = LF068_INSTRUMENTS[key];
+    certificates.filter(c => c.instrumentId === instId).forEach(c => {
+      if (numOrNull(c.certTolerance) !== def.tol || c.certDecisionRule !== "conservative") critIds.add(c.id);
+    });
+  }
+  return { newCerts, newVers, critIds, certDateOf, notes };
+}
+
+function LegacyVerificationImport({ equipment, certificates, verifications, currentDisplayName, onCancel, onImport }) {
+  const [mapping, setMapping] = useState(() => Object.fromEntries(Object.entries(LF068_INSTRUMENTS).map(([k, def]) => [k, guessLegacyInstrument(def, equipment).id])));
+  const [dates, setDates] = useState({});
+  const plan = planLegacyImport({ equipment, certificates, verifications, mapping, dates, currentDisplayName });
+  const eqLabel = (e) => `${e.code || ""} — ${e.name || ""}${e.serialNo ? ` (S/N ${e.serialNo})` : ""}`;
+  const warnFor = (row, i) => {
+    const instId = mapping[row.inst];
+    const calDate = dates[`c${i}`] ?? row.cert.date, verDate = dates[`v${i}`] ?? row.ver?.date;
+    const w = [];
+    if (row.cert.dateNote) w.push(row.cert.dateNote);
+    if (row.ver?.dateNote) w.push(row.ver.dateNote);
+    if (verDate && calDate && verDate < calDate) w.push("วันที่ทวนสอบอยู่ก่อนวันที่สอบเทียบ");
+    const sameDate = LF068_LEGACY.some((r, j) => j !== i && r.inst === row.inst && (dates[`c${j}`] ?? r.cert.date) === calDate)
+      || certificates.some(c => c.instrumentId === instId && c.calibrationDate === calDate && normCertNo(c.certificateNo) !== normCertNo(row.cert.no));
+    if (sameDate) w.push("วันที่สอบเทียบซ้ำกับใบรับรองอื่นของเครื่องเดียวกัน");
+    return w;
+  };
+  const exists = (row) => certificates.some(c => c.instrumentId === mapping[row.inst] && normCertNo(c.certificateNo) === normCertNo(row.cert.no));
+  const cell = { ...S.td, padding: "6px 8px", fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(18,37,59,0.45)", zIndex: 2000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onCancel}>
+      <div style={{ ...S.modalBox, maxWidth: 1040, padding: 20, marginTop: 20 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 700 }}>นำเข้าผลทวนสอบย้อนหลัง (RDI-LF-068 ปี 2566–2568)</div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", margin: "2px 0 12px" }}>
+          ใบรับรองปี 2566–2568 และค่าที่อ่านได้จากการทวนสอบปี 2567–2568 (ไม่ใช้ค่าทวนสอบปี 2566) · LabTrack คำนวณ Error, U และผลตัดสินใหม่ทั้งหมด · ตั้งเกณฑ์ TER (|Error| + U ≤ เกณฑ์การยอมรับ, Conservative) ให้ใบรับรองทุกใบของเครื่องที่เลือก รวมใบปีปัจจุบัน
+        </div>
+        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>1. จับคู่เครื่องมือ</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "8px 14px" }}>
+          {Object.entries(LF068_INSTRUMENTS).map(([k, def]) => {
+            const g = guessLegacyInstrument(def, equipment);
+            return (
+              <Field key={k} label={`${def.label} · ${def.make} · S/N ${def.serials[0]} · เกณฑ์ ± ${def.tol} ${def.unit}`}>
+                <select style={S.input} value={mapping[k] || ""} onChange={e => setMapping(m => ({ ...m, [k]: e.target.value }))}>
+                  <option value="">— ไม่นำเข้า —</option>
+                  {equipment.map(e => <option key={e.id} value={e.id}>{eqLabel(e)}</option>)}
+                </select>
+                {mapping[k] && mapping[k] === g.id && <span style={{ fontSize: 11.5, color: g.how === "serial" ? "var(--green)" : "var(--amber)" }}>{g.how === "serial" ? "ตรงกับ Serial No." : "เดาจากชื่อเครื่อง — ตรวจให้แน่ใจ"}</span>}
+              </Field>
+            );
+          })}
+        </div>
+        <div style={{ fontWeight: 700, fontSize: 13.5, margin: "14px 0 6px" }}>2. ตรวจวันที่ (แก้ได้ถ้าต้นฉบับพิมพ์ผิด)</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ ...S.table, minWidth: 820 }}>
+            <thead><tr><th style={S.th}>รายงาน</th><th style={S.th}>เครื่องมือ</th><th style={S.th}>ใบรับรอง</th><th style={S.th}>วันที่สอบเทียบ</th><th style={S.th}>วันที่ทวนสอบ</th><th style={S.th}>หมายเหตุ</th></tr></thead>
+            <tbody>
+              {LF068_LEGACY.map((row, i) => {
+                const def = LF068_INSTRUMENTS[row.inst];
+                const off = !mapping[row.inst];
+                const w = off ? [] : warnFor(row, i);
+                const ex = !off && exists(row);
+                return (
+                  <tr key={i} style={{ opacity: off ? 0.4 : 1, borderTop: "1px solid var(--line)" }}>
+                    <td style={cell}>{row.report}</td>
+                    <td style={cell}>{def.label}</td>
+                    <td style={cell}>{row.cert.no}{ex && <div style={{ fontSize: 11, color: "var(--muted)" }}>มีในระบบแล้ว — ใช้ข้อมูลเดิม</div>}</td>
+                    <td style={cell}><input type="date" disabled={off || ex} style={{ ...S.input, padding: "4px 6px" }} value={dates[`c${i}`] ?? row.cert.date} onChange={e => setDates(d => ({ ...d, [`c${i}`]: e.target.value }))} /></td>
+                    <td style={cell}>{!row.ver ? <span style={{ color: "var(--muted)" }}>ไม่นำเข้า</span> : <input type="date" disabled={off} style={{ ...S.input, padding: "4px 6px" }} value={dates[`v${i}`] ?? row.ver.date} onChange={e => setDates(d => ({ ...d, [`v${i}`]: e.target.value }))} />}</td>
+                    <td style={{ ...cell, color: w.length ? "var(--amber)" : "var(--muted)", fontSize: 11.5 }}>{w.length ? w.join(" · ") : "-"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 10, background: "#EEF4FA", fontSize: 13 }}>
+          จะเพิ่มจุดสอบเทียบ <b>{plan.newCerts.length}</b> จุด · ผลทวนสอบ <b>{plan.newVers.length}</b> รายการ · ตั้งเกณฑ์ TER ให้ใบรับรองที่มีอยู่แล้ว <b>{plan.critIds.size}</b> จุด
+          {plan.notes.map((n, i) => <div key={i} style={{ fontSize: 12, color: "var(--red)", marginTop: 2 }}>{n}</div>)}
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>รายการที่นำเข้าแล้วจะไม่ซ้ำ — กดนำเข้าซ้ำได้อย่างปลอดภัย · ทุกการเปลี่ยนแปลงถูกเก็บในประวัติการแก้ไข</div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+          <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
+          <button style={S.primaryBtn} disabled={!plan.newCerts.length && !plan.newVers.length && !plan.critIds.size} onClick={() => onImport(plan, mapping)}>นำเข้า</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CalibrationRecordsHub({
   equipment, setEquipment,
   certificates, setCertificates,
   intermediateChecks, setIntermediateChecks,
-  dailyChecks = [],
+  dailyChecks = [], activities = [],
   uncertaintyBudgets, setUncertaintyBudgets,
   actionImpacts, setActionImpacts,
   approvalRecords, setApprovalRecords,
+  verifications = [], setVerifications = () => {},
   notify, currentDisplayName = "", onOpenChecks = null, canApprove = true,
 }) {
   const mem = calibHubMemory;
@@ -7295,6 +7918,7 @@ function CalibrationRecordsHub({
   }, [selectedInstrumentId, view, q, typeFilter, statusFilter, dueFilter, layout, sortBy]);
   const [showGrid, setShowGrid] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [showLegacyImport, setShowLegacyImport] = useState(false);
   const [editingIc, setEditingIc] = useState(null);
   const exportAll = (onlyId = null) => exportMPIRWorkbook(equipment, dailyChecks, {
     certificates, intermediateChecks, uncertaintyBudgets, actionImpacts, approvalRecords,
@@ -7375,10 +7999,29 @@ function CalibrationRecordsHub({
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button style={S.smallBtn} onClick={() => exportAll()}><FileDown size={13} /> ส่งออก Excel (MPIR)</button>
+            <button style={S.smallBtn} onClick={() => setShowLegacyImport(true)}><FileCheck2 size={13} /> นำเข้าผลทวนสอบเดิม (LF-068)</button>
             <button style={S.smallBtn} onClick={() => setShowGuide(true)}><BookOpen size={13} /> คู่มือ</button>
           </div>
         </div>
         {showGuide && <CalibrationGuideModal onClose={() => setShowGuide(false)} />}
+        {showLegacyImport && (
+          <LegacyVerificationImport equipment={equipment} certificates={certificates} verifications={verifications} currentDisplayName={currentDisplayName}
+            onCancel={() => setShowLegacyImport(false)}
+            onImport={(plan, mapping) => {
+              const patchOf = Object.fromEntries(Object.entries(mapping).filter(([, id]) => id).map(([k, id]) => [id, terCriteriaPatch(LF068_INSTRUMENTS[k])]));
+              if (plan.newCerts.length || plan.critIds.size) {
+                setCertificates([...certificates.map(c => plan.critIds.has(c.id) ? { ...c, ...patchOf[c.instrumentId] } : c), ...plan.newCerts]);
+              }
+              if (plan.newVers.length) setVerifications([...verifications, ...plan.newVers]);
+              const serialFix = equipment.filter(e => !e.serialNo && Object.entries(mapping).some(([, id]) => id === e.id));
+              if (serialFix.length) setEquipment(equipment.map(e => {
+                const k = Object.keys(mapping).find(key => mapping[key] === e.id);
+                return k && !e.serialNo ? { ...e, serialNo: LF068_INSTRUMENTS[k].serials[0] } : e;
+              }));
+              notify(`นำเข้าแล้ว: จุดสอบเทียบ ${plan.newCerts.length} · ผลทวนสอบ ${plan.newVers.length} · ตั้งเกณฑ์ TER ${plan.critIds.size} จุด`);
+              setShowLegacyImport(false);
+            }} />
+        )}
         {criteriaStats.missing > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "#FDF3E3", border: "1px solid var(--amber)", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, color: "var(--ink)" }}>
             <FileWarning size={15} color="var(--amber)" style={{ flexShrink: 0 }} />
@@ -7614,6 +8257,15 @@ function CalibrationRecordsHub({
   // first unfinished one is offered as the next thing to do.
   const latestPts = latestCert ? scopedCertificates.filter(c => c.calibrationDate === latestCert) : [];
   const statusConfirmed = !!usageStatusOf(instrument || {}) && !!authorizedByOf(instrument || {}) && (!latestCert || (instrument?.statusApprovalDate || "") >= latestCert);
+  // MPIR-LP-002 6.3.3: rounds from VERIFICATION_REQUIRED_FROM need an approved
+  // post-calibration verification (MPIR-LF-068) before the status is confirmed.
+  const latestVerification = latestPts.length ? verificationOf(verifications, selectedInstrumentId, latestPts[0].certificateNo, latestCert) : null;
+  const verifyNeeded = !!latestCert && latestCert >= VERIFICATION_REQUIRED_FROM;
+  const verifyDone = !verifyNeeded || !!latestVerification?.approvedBy;
+  const openStatusCard = () => {
+    if (!verifyDone) { setView("certificates"); notify("ต้องบันทึกและอนุมัติผลทวนสอบหลังสอบเทียบ (MPIR-LF-068) ก่อนยืนยันสถานะการใช้งาน"); return; }
+    setStepCard({ kind: "status" });
+  };
   const CYCLE_STEPS = [
     { key: "criteria", label: "ตั้งเกณฑ์", view: "instrument", done: gaps.length === 0, todo: gaps.length ? `ยังขาด ${gaps.join(", ")}` : "" },
     { key: "cert", label: "บันทึกใบรับรองรอบล่าสุด", view: "certificates",
@@ -7622,6 +8274,8 @@ function CalibrationRecordsHub({
     { key: "evaluate", label: "ลงชื่อประเมินผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.evaluatedBy), todo: "ผลรอบล่าสุดยังไม่ได้ลงชื่อผู้ประเมิน" },
     { key: "approve", label: "อนุมัติผล", view: "results", done: latestPts.length > 0 && latestPts.every(c => c.approvedBy),
       todo: canApprove ? "รออนุมัติโดย Lab manager" : "รอผู้มีสิทธิ์อนุมัติ (Lab manager)" },
+    ...(verifyNeeded ? [{ key: "verify", label: "ทวนสอบก่อนใช้งาน", view: "certificates", done: verifyDone,
+      todo: !latestVerification ? "ยังไม่ได้บันทึกผลทวนสอบ (MPIR-LF-068)" : !latestVerification.evaluatedBy ? "ผลทวนสอบรอ TM/QM ประเมิน" : "ผลทวนสอบรอ Lab manager อนุมัติ" }] : []),
     { key: "status", label: "ยืนยันสถานะการใช้งาน", view: "instrument", done: statusConfirmed,
       todo: !usageStatusOf(instrument || {}) || !authorizedByOf(instrument || {}) ? "ยังไม่ได้ระบุสถานะ/ผู้อนุมัติ" : "ยืนยันสถานะอีกครั้งหลังใบรับรองรอบล่าสุด" },
   ];
@@ -7630,7 +8284,7 @@ function CalibrationRecordsHub({
   function goStep(st) {
     setView(st.view);
     if ((st.key === "evaluate" || st.key === "approve") && latestGroup) setStepCard({ kind: "sign", field: st.key === "approve" ? "approved" : "evaluated" });
-    else if (st.key === "status" && instrument) setStepCard({ kind: "status" });
+    else if (st.key === "status" && instrument) openStatusCard();
   }
   const doneCount = CYCLE_STEPS.filter(st => st.done).length;
   const scopedCertSetter = makeScopedListSetter(certificates, setCertificates, selectedInstrumentId);
@@ -7702,10 +8356,10 @@ function CalibrationRecordsHub({
       )}
 
       {current === "instrument" && instrument && (<>
-        <EquipmentIdentityCard instrument={instrument} />
+        <EquipmentIdentityCard instrument={instrument} activities={activities} />
         <InstrumentStatusCard
           instrument={instrument} certificates={scopedCertificates} intermediateChecks={scopedChecks} dailyChecks={scopedDailyChecks}
-          onConfirmStatus={() => setStepCard({ kind: "status" })}
+          onConfirmStatus={openStatusCard}
         />
         <InstrumentMasterTab
           key={instrument.id}
@@ -7755,11 +8409,11 @@ function CalibrationRecordsHub({
           equipment={scopedEquipment} certificates={scopedCertificates} setCertificates={scopedCertSetter}
           notify={notify} currentDisplayName={currentDisplayName} presetInstrumentId={selectedInstrumentId}
           onSyncDates={syncDates}
-          groupTop={(g) => instrument && (
+          groupTop={(g) => instrument && (<>
             <CertificateApprovalCard
               instrument={instrument} points={g.points} canApprove={canApprove} currentDisplayName={currentDisplayName}
               isLatest={roundRangeOf(scopedCertificates, selectedInstrumentId, g.calibrationDate).isLatest}
-              onConfirmStatus={() => setStepCard({ kind: "status" })}
+              onConfirmStatus={openStatusCard}
               onSign={(field, name, clear) => {
                 const ids = new Set(g.points.map(c => c.id));
                 const patch = signoffPatch({ instrument, points: g.points.map(c => ({ c })) }, field, name, clear);
@@ -7767,7 +8421,17 @@ function CalibrationRecordsHub({
                 notify(clear ? "ยกเลิกการลงชื่อแล้ว" : field === "approved" ? `อนุมัติผลใบรับรอง ${g.certificateNo || "-"} แล้ว` : `ลงชื่อผู้ประเมินใบรับรอง ${g.certificateNo || "-"} แล้ว`);
               }}
             />
-          )}
+            <VerificationCard
+              key={`${g.certificateNo}|${g.calibrationDate}`}
+              instrument={instrument} cert={g} canApprove={canApprove} currentDisplayName={currentDisplayName} notify={notify}
+              verification={verificationOf(verifications, selectedInstrumentId, g.certificateNo, g.calibrationDate)}
+              onSave={(row, msg) => {
+                const exists = verifications.some(v => v.id === row.id);
+                setVerifications(exists ? verifications.map(v => v.id === row.id ? row : v) : [...verifications, row]);
+                notify(msg);
+              }}
+            />
+          </>)}
         />
       )}
       {current === "trend" && (
@@ -8220,7 +8884,12 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
     notify(message);
     setEditing(null);
   }
-  function remove(id) { setDailyChecks(dailyChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+  function remove(id) {
+    const rec = dailyChecks.find(c => c.id === id);
+    if (rec?.approved === true) { notify("ลบไม่ได้: Daily check ที่อนุมัติแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) ให้แก้ไขพร้อมระบุเหตุผลแทน", 6000); return; }
+    if (!window.confirm("ลบบันทึก Daily check นี้หรือไม่?")) return;
+    setDailyChecks(dailyChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว");
+  }
   const canIc = !guestMode && !!setIntermediateChecks;
   const icForEquip = intermediateChecks.filter(c => c.instrumentId === equipId);
   const byIdAll = Object.fromEntries(equipment.map(e => [e.id, e]));
@@ -8229,7 +8898,12 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
     notify("บันทึก Intermediate check แล้ว");
     setEditingIc(null);
   }
-  function removeIc(id) { setIntermediateChecks(intermediateChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว"); }
+  function removeIc(id) {
+    const rec = intermediateChecks.find(c => c.id === id);
+    if (rec?.reviewedBy) { notify("ลบไม่ได้: Intermediate check ที่ทบทวนแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) ให้แก้ไขพร้อมระบุเหตุผลแทน", 6000); return; }
+    if (!window.confirm("ลบบันทึก Intermediate check นี้หรือไม่?")) return;
+    setIntermediateChecks(intermediateChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว");
+  }
   const unlockedIc = icForEquip.filter(c => !c.criteriaAt);
   function lockLegacyIc() {
     if (!equip || !snapshotCriteria(equip)) return;
@@ -9028,7 +9702,7 @@ function ItemsTab({ items, setItems, bookings, setBookings, equipment, notify })
           onEdit={() => { setEditing(selectedItem); setSelected(null); }}
           onDelete={() => { remove(selectedItem.id); setSelected(null); }}
           onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
-          onSetAvailability={(disabled, reason) => setAvailability(selectedItem.id, disabled, reason)}
+          onSetAvailability={(disabled, reason, approver) => setAvailability(selectedItem.id, disabled, reason, approver)}
         />
       )}
       {editing && <ItemForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
@@ -13417,13 +14091,17 @@ function ApprovalDialog({ booking, action, defaultName = "", onCancel, onConfirm
 // a reason, without going through the full edit form. Used from both
 // Equipment and Items so staff can mark something unbookable right when
 // they notice it's broken/in use/unavailable.
-function DisableAssetDialog({ asset, onCancel, onConfirm }) {
+function DisableAssetDialog({ asset, onCancel, onConfirm, askApprover = false }) {
   // "แลปใช้งานอยู่" is no longer a reason to disable — it is the separate
   // "ใช้ในแลป · ไม่เปิดให้จอง/ยืม" setting (instrument stays in normal use).
   const presets = ["ชำรุด", "ส่งซ่อม/สอบเทียบ", "อื่นๆ"];
   const initialPreset = presets.includes(asset.unavailableReason) ? asset.unavailableReason : (asset.unavailableReason ? "อื่นๆ" : presets[0]);
   const [reason, setReason] = useState(initialPreset);
   const [customReason, setCustomReason] = useState(initialPreset === "อื่นๆ" ? (asset.unavailableReason || "") : "");
+  // MPIR-LP-002 ข้อ 6.5.1: taking an instrument out needs TM/QM approval,
+  // recorded with the reason.
+  const [approver, setApprover] = useState(asset.unavailableApprovedBy || "");
+  const needApprover = askApprover && reason === "ส่งซ่อม/สอบเทียบ";
   return (
     <div
       onClick={(e) => { e.stopPropagation(); onCancel(); }}
@@ -13455,11 +14133,17 @@ function DisableAssetDialog({ asset, onCancel, onConfirm }) {
             placeholder="ระบุเหตุผล"
           />
         )}
+        {needApprover && (<>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", display: "block", marginTop: 12 }}>ผู้อนุมัตินำเครื่องออก (TM/QM)</label>
+          <input style={{ ...S.input, marginTop: 6 }} value={approver} onChange={(e) => setApprover(e.target.value)} placeholder="ชื่อผู้อนุมัติ" />
+        </>)}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
           <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
           <button
             style={{ ...S.primaryBtn, background: "var(--amber)", borderColor: "var(--amber)" }}
-            onClick={() => onConfirm(reason === "อื่นๆ" ? customReason.trim() : reason)}
+            disabled={needApprover && !approver.trim()}
+            title={needApprover && !approver.trim() ? "ระบุผู้อนุมัตินำเครื่องออกก่อน" : ""}
+            onClick={() => onConfirm(reason === "อื่นๆ" ? customReason.trim() : reason, needApprover ? approver.trim() : "")}
           >
             ปิดใช้งาน
           </button>
