@@ -1,7 +1,11 @@
 // Printable MPIR-LF-068 Rev.01 (verification report). Opens a print window;
 // the browser's "Save as PDF" produces the file. Signature boxes are left
 // blank — the report is signed on paper and filed (lab decision).
+import { LOGO_DATA_URI } from "./logo.js";
 import { num, fmt, fmtSigned, fmtDate, digitsFor, certSummary, verifySummary, isBefore, isAfter, refOf, VERIFY_MAX_READS } from "./calc.js";
+
+// Registered document codes of the printed forms.
+export const DAILY_DOC = { code: "MPIR-LF-058", rev: "02" };
 
 export const VERIFY_REASONS = [["cal", "หลังสอบเทียบ"], ["rep", "หลังซ่อม"], ["new", "เครื่องมือใหม่"], ["out", "นำออกนอกการควบคุม (อื่นๆ)"]];
 
@@ -26,7 +30,7 @@ export function lf068Html(round, instrument) {
     : esc(v.stdU || "–");
   const pass = cs.pass && (!round.verification || (vs && vs.measOk && !vs.tooFew));
   const sign = (title, name) => `<td><div class="line"></div>(${name ? esc(name) : "&nbsp;".repeat(40)})<br>${title}<br>วันที่ ........./........./.........</td>`;
-  const hdr = (pg) => `<table class="hd"><tr><td class="brand" rowspan="2">MITR PHOL<br>Innovation &amp;<br>Research Center</td><td class="t" rowspan="2">รายงานผลการทวนสอบเครื่องมือ<small>Equipment Verification Report</small></td><td class="m">รหัสเอกสาร: <b>MPIR-LF-068</b> Rev.: <b>01</b></td></tr><tr><td class="m">หน้า ${pg} / 2</td></tr></table>`;
+  const hdr = (pg) => `<table class="hd"><tr><td class="brand" rowspan="2"><img src="${LOGO_DATA_URI}" alt="MITR PHOL Innovation &amp; Research Center"></td><td class="t" rowspan="2">รายงานผลการทวนสอบเครื่องมือ<small>Equipment Verification Report</small></td><td class="m">รหัสเอกสาร: <b>MPIR-LF-068</b> Rev.: <b>01</b></td></tr><tr><td class="m">หน้า ${pg} / 2</td></tr></table>`;
   const p1 = `${hdr(1)}
 <h3><b>1</b>ข้อมูลเครื่องมือ</h3><table><tr><td class="l">รหัสเครื่องมือ</td><td>${esc(instrument.code)}</td><td class="l">ชื่อเครื่องมือ</td><td>${esc(instrument.name)}</td></tr>
 <tr><td class="l">ยี่ห้อ / รุ่น</td><td>${esc([instrument.brand, instrument.model].filter(Boolean).join(" / "))}</td><td class="l">Serial No.</td><td>${esc(instrument.serialNo)}</td></tr>
@@ -59,7 +63,7 @@ export function lf068Html(round, instrument) {
 <style>@page{size:A4;margin:10mm 12mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#111;margin:0;line-height:1.35}
 table{border-collapse:collapse;width:100%}td,th{border:.6pt solid #222;padding:2.2pt 4pt}th{background:#E8EEF3;font-weight:600;font-size:8.8pt}
 .hd td{padding:3pt 6pt}.t{text-align:center;font-weight:700;font-size:13.5pt}.t small{display:block;font-weight:400;font-size:9pt}
-.brand{width:30mm;text-align:center;font-weight:700;color:#1F4E6E;font-size:9pt;line-height:1.15}.m{width:52mm;font-size:8.8pt}
+.brand{width:30mm;text-align:center;font-weight:700;color:#1F4E6E;font-size:9pt;line-height:1.15}.brand img{height:15mm;display:block;margin:0 auto}.m{width:52mm;font-size:8.8pt}
 h3{margin:7pt 0 3pt;font-size:10.4pt}h3 b{background:#1F4E6E;color:#fff;border-radius:3pt;padding:0 5pt;margin-right:5pt;font-size:9pt}
 .l{background:#F4F7F9;font-weight:600;width:30mm;font-size:8.8pt}.n td{text-align:center}.o{margin-right:10pt;white-space:nowrap}
 .p{color:#1E7A4A;font-weight:700}.f{color:#B42318;font-weight:700}.note{font-size:8.2pt;color:#333}
@@ -95,10 +99,10 @@ export function checkLogHtml({ instrument, monthLabel, kind, rows }) {
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
 <style>@page{size:A4;margin:10mm 12mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#111;margin:0}
 table{border-collapse:collapse;width:100%}td,th{border:.6pt solid #222;padding:2.5pt 4pt;text-align:center}th{background:#E8EEF3;font-weight:600;font-size:8.8pt}
-.hd td{text-align:left}.t{text-align:center !important;font-weight:700;font-size:13pt}.l{background:#F4F7F9;font-weight:600;width:28mm}
+.hd td{text-align:left}.t{text-align:center !important;font-weight:700;font-size:13pt}.t small{display:block;font-weight:400;font-size:9pt}.lg{width:30mm;text-align:center !important}.lg img{height:14mm}.dc{width:58mm;font-size:8.8pt}.l{background:#F4F7F9;font-weight:600;width:28mm}
 .p{color:#1E7A4A;font-weight:700}.f{color:#B42318;font-weight:700}.sig{margin-top:14pt}.sig td{border:none;width:50%;height:56pt;vertical-align:bottom}
 .line{border-bottom:.6pt dotted #333;margin:0 24pt 4pt;height:26pt}.note{font-size:8.2pt;color:#333;margin-top:4pt}</style></head><body>
-<table class="hd"><tr><td class="t" colspan="4">${title}</td></tr>
+<table class="hd"><tr><td class="lg" rowspan="2"><img src="${LOGO_DATA_URI}" alt="MITR PHOL"></td><td class="t" colspan="2" rowspan="2">${title}<small>${daily ? "Daily Check Record" : "Intermediate Check Record"}</small></td><td class="dc">${daily ? `รหัสเอกสาร: <b>${DAILY_DOC.code}</b> แก้ไขครั้งที่ (Rev.): <b>${DAILY_DOC.rev}</b>` : ""}</td></tr><tr><td class="dc">ประจำเดือน ${esc(monthLabel)}</td></tr></table><table class="hd" style="margin-top:4pt">
 <tr><td class="l">เครื่องมือ</td><td>${esc([instrument.code, instrument.name].filter(Boolean).join(" — "))}</td><td class="l">ประจำเดือน</td><td>${esc(monthLabel)}</td></tr>
 <tr><td class="l">ยี่ห้อ / รุ่น / S/N</td><td>${esc([instrument.brand, instrument.model, instrument.serialNo && `S/N ${instrument.serialNo}`].filter(Boolean).join(" · "))}</td><td class="l">สรุป</td><td>${rows.length} รายการ · ไม่ผ่าน ${nFail}</td></tr></table>
 <table style="margin-top:6pt">${head}${body}</table>
