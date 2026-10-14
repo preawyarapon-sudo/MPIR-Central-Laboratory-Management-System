@@ -7395,9 +7395,13 @@ function calcVerifyPoint(p, v, tol) {
   const ref = numOrNull(p.reference);
   const n = reads.length;
   if (ref == null || n < 2) return { n, ok: null, tol };
-  const mean = reads.reduce((a, b) => a + b, 0) / n;
-  const sd = Math.sqrt(reads.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1));
-  const uRep = sd / Math.sqrt(n), uStd = (numOrNull(v.stdU) || 0) / 2, uRes = (numOrNull(v.resolution) || 0) / (2 * Math.sqrt(3));
+  // readingCorrection: the standard's certificate correction, added to the
+  // readings when they are taken on the standard itself (thermometer in a bath).
+  const raw = reads.reduce((a, b) => a + b, 0) / n, mean = raw + (numOrNull(v.readingCorrection) || 0);
+  const sd = Math.sqrt(reads.reduce((a, b) => a + (b - raw) ** 2, 0) / (n - 1));
+  // U of the standard: per point when the standard differs per point (weights), else one value
+  const uStdK2 = numOrNull(p.stdU) ?? numOrNull(v.stdU) ?? 0;
+  const uRep = sd / Math.sqrt(n), uStd = uStdK2 / 2, uRes = (numOrNull(v.resolution) || 0) / (2 * Math.sqrt(3));
   const uc = Math.sqrt(uRep ** 2 + uStd ** 2 + uRes ** 2), U = 2 * uc, err = mean - ref, tot = Math.abs(err) + U;
   return { n, mean, sd, uRep, uStd, uRes, uc, U, err, tot, tol, ok: tol == null ? null : tot <= tol + 1e-9 * Math.max(1, Math.abs(tol)) };
 }
@@ -7421,7 +7425,9 @@ function verificationResult(v, instrument, certPoints) {
   const reasonOk = !fewReads || !!(v?.fewReason || "").trim();
   return { pts, rs, certRows, certOk, measOk, fewReads, tooFew, reasonOk, cmp, crit, pass: certOk && measOk && !tooFew && reasonOk };
 }
-const fmtN = (x, d = 4) => (x == null || isNaN(x) ? "-" : Number(x).toFixed(d));
+// Fixed decimals, but a non-zero value too small to show at that precision
+// (u_std of a weight: 0.0000335 g) keeps 2 significant figures instead of "0.0000".
+const fmtN = (x, d = 4) => (x == null || isNaN(x) ? "-" : x !== 0 && Math.abs(x) < 0.5 * 10 ** -d ? Number(x).toPrecision(2) : Number(x).toFixed(d));
 // Enough decimals to show results finer than the instrument's resolution
 // (a 4-place balance needs 6, not the default 4).
 const verifyDigits = (v) => Math.max(4, ((String(v?.resolution ?? "").split(".")[1] || "").length) + 2);
@@ -7450,13 +7456,14 @@ function VerificationForm({ instrument, cert, row, onCancel, onSave }) {
           <Field label="เลขที่ใบรับรองของมาตรฐาน"><input style={S.input} value={f.stdCert || ""} onChange={set("stdCert")} /></Field>
           <Field label="ครบกำหนดสอบเทียบของมาตรฐาน"><input style={S.input} value={f.stdDue || ""} onChange={set("stdDue")} /></Field>
           <Field label={`U ของมาตรฐาน (k=2) ${instrument.calUnit || ""}`}><input style={S.input} value={f.stdU ?? ""} onChange={set("stdU")} inputMode="decimal" /></Field>
+          <Field label={`ค่าแก้ของมาตรฐาน บวกเข้าค่าที่อ่านได้ ${instrument.calUnit || ""}`}><input style={S.input} value={f.readingCorrection ?? ""} onChange={set("readingCorrection")} inputMode="decimal" placeholder="ใช้เมื่อค่าที่อ่านได้มาจากเครื่องมาตรฐาน เช่น เทอร์โมมิเตอร์" /></Field>
           <Field label={`ความละเอียดของเครื่อง (d) ${instrument.calUnit || ""}`}><input style={S.input} value={f.resolution ?? ""} onChange={set("resolution")} inputMode="decimal" /></Field>
           <Field label="วิธีปฏิบัติ (WI)"><input style={S.input} value={f.wi || ""} onChange={set("wi")} placeholder="เช่น MPIR-WI-002 ข้อ 7.1.2" /></Field>
         </div>
         <div style={{ marginTop: 14, fontWeight: 700, fontSize: 13.5 }}>ค่าที่อ่านได้ (สูงสุด {VERIFY_MAX_READS} ครั้งต่อจุด · อย่างน้อย {VERIFY_MIN_READS} ครั้ง)</div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ ...S.table, minWidth: 820, marginTop: 6 }}>
-            <thead><tr><th style={S.th}>ค่าอ้างอิง</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i} style={S.th}>{i + 1}</th>)}<th style={S.th}>n</th><th style={S.th}>|Error|+U</th><th style={S.th}>ผล</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>ค่าอ้างอิง</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i} style={S.th}>{i + 1}</th>)}<th style={S.th}>U มาตรฐาน (จุดนี้)</th><th style={S.th}>n</th><th style={S.th}>|Error|+U</th><th style={S.th}>ผล</th><th style={S.th}></th></tr></thead>
             <tbody>
               {f.points.map((pt, i) => {
                 const r = res.pts.find(x => x.p === pt)?.r || calcVerifyPoint(pt, f, null);
@@ -7464,6 +7471,7 @@ function VerificationForm({ instrument, cert, row, onCancel, onSave }) {
                   <tr key={i}>
                     <td style={S.td}><input style={{ ...cell, width: 80 }} value={pt.reference} onChange={e => setRef(i, e.target.value)} inputMode="decimal" /></td>
                     {pt.readings.map((rv, j) => <td key={j} style={{ ...S.td, padding: 3 }}><input style={{ ...cell, width: 62 }} value={rv} onChange={e => setRead(i, j, e.target.value)} inputMode="decimal" /></td>)}
+                    <td style={{ ...S.td, padding: 3 }}><input style={{ ...cell, width: 80 }} value={pt.stdU ?? ""} placeholder={f.stdU ? `${f.stdU}` : "-"} onChange={e => setF(p => ({ ...p, points: p.points.map((x, k) => k !== i ? x : { ...x, stdU: e.target.value }) }))} inputMode="decimal" /></td>
                     <td style={{ ...S.td, textAlign: "center" }}>{r.n}</td>
                     <td style={{ ...S.td, fontFamily: "var(--font-mono)" }}>{fmtN(r.tot, dg)}</td>
                     <td style={{ ...S.td, fontWeight: 700, color: r.ok === true ? "var(--green)" : r.ok === false ? "var(--red)" : "var(--muted)" }}>{r.ok === true ? "ผ่าน" : r.ok === false ? "ไม่ผ่าน" : "-"}</td>
@@ -7540,11 +7548,11 @@ ${pg === 1 ? `<h3><b>1</b>ข้อมูลเครื่องมือ</h3><
 <div class="note">Error = ค่าที่อ่านได้ − ค่าอ้างอิง · ตัดสินสถานะเครื่องจากค่าหลังปรับ · ค่าก่อนปรับใช้ประเมินผลกระทบย้อนหลัง</div>` : `
 <h3><b>4</b>ทวนสอบค่าการวัดกับมาตรฐานอ้างอิง</h3><table><tr><td class="l">มาตรฐานอ้างอิง</td><td colspan="3">${esc(v.stdName)}</td></tr>
 <tr><td class="l">เลขที่ใบรับรอง</td><td>${esc(v.stdCert)}</td><td class="l">ครบกำหนดสอบเทียบ</td><td>${esc(v.stdDue)}</td></tr>
-<tr><td class="l">U ของมาตรฐาน (k=2)</td><td>${esc(v.stdU)} ${unit}</td><td class="l">วิธีปฏิบัติ</td><td>${esc(v.wi)}</td></tr>
+<tr><td class="l">U ของมาตรฐาน (k=2)</td><td>${(v.points || []).some(p => numOrNull(p.stdU) != null) ? `ตามจุด: ${(v.points || []).filter(p => numOrNull(p.reference) != null).map(p => `${esc(p.reference)} → ${esc(p.stdU || v.stdU || "-")}`).join(", ")}` : esc(v.stdU)} ${unit}</td><td class="l">วิธีปฏิบัติ</td><td>${esc(v.wi)}</td></tr>
 <tr><td class="l">วันที่ทวนสอบ</td><td>${esc(fmtDate(v.verifyDate))}</td><td class="l">สภาวะแวดล้อม</td><td>${esc(v.environment)}</td></tr></table>
-<table class="n" style="margin-top:4pt;table-layout:fixed"><tr><th>ค่าอ้างอิง</th>${Array.from({ length: VERIFY_MAX_READS }, (_, i) => `<th>${i + 1}</th>`).join("")}<th style="width:13%">ค่าเฉลี่ย</th></tr>${readRows}</table>
+<table class="n" style="margin-top:4pt;table-layout:fixed"><tr><th style="width:13%">ค่าอ้างอิง</th>${Array.from({ length: VERIFY_MAX_READS }, (_, i) => `<th>${i + 1}</th>`).join("")}<th style="width:13%">ค่าเฉลี่ย</th></tr>${readRows}</table>
 <table class="n" style="margin-top:4pt"><tr><th>ค่าอ้างอิง</th><th>n</th><th>SD</th><th>u<sub>rep</sub></th><th>u<sub>std</sub></th><th>u<sub>res</sub></th><th>u<sub>c</sub></th><th>U = 2u<sub>c</sub></th><th>Error</th><th>|Error| + U</th><th>ผล</th></tr>${calcRows}</table>
-<div class="note" style="margin-top:3pt">${legacy ? "ค่าที่อ่านได้จากรายงานเดิม · " : ""}${numOrNull(v.stdU) == null ? "<b>ยังไม่ได้ระบุ U ของมาตรฐาน (u<sub>std</sub> = 0)</b> · " : ""}${`u<sub>rep</sub> = SD/√n · u<sub>std</sub> = U<sub>std</sub>/2 · u<sub>res</sub> = d/(2√3) · u<sub>c</sub> = √(u<sub>rep</sub>² + u<sub>std</sub>² + u<sub>res</sub>²) · U = 2u<sub>c</sub>${res.fewReads ? ` · ทวนสอบน้อยกว่า 10 ครั้ง เนื่องจาก: ${esc(v.fewReason)}` : ""} · คำนวณโดยระบบ LabTrack`}</div>
+<div class="note" style="margin-top:3pt">${legacy ? "ค่าที่อ่านได้จากรายงานเดิม · " : ""}${numOrNull(v.stdU) == null && !(v.points || []).some(p => numOrNull(p.stdU) != null) ? "<b>ยังไม่ได้ระบุ U ของมาตรฐาน (u<sub>std</sub> = 0)</b> · " : ""}${numOrNull(v.readingCorrection) ? `ค่าเฉลี่ยรวมค่าแก้ของมาตรฐาน ${esc(v.readingCorrection)} · ` : ""}${`u<sub>rep</sub> = SD/√n · u<sub>std</sub> = U<sub>std</sub>/2 · u<sub>res</sub> = d/(2√3) · u<sub>c</sub> = √(u<sub>rep</sub>² + u<sub>std</sub>² + u<sub>res</sub>²) · U = 2u<sub>c</sub>${res.fewReads ? ` · ทวนสอบน้อยกว่า 10 ครั้ง เนื่องจาก: ${esc(v.fewReason)}` : ""} · คำนวณโดยระบบ LabTrack`}</div>
 <table style="margin-top:4pt"><tr><td class="l">เทียบกับใบรับรอง</td><td>${box(cmpOk)} |Error| + U จากการทวนสอบ ≤ |Error| + U ของจุดใกล้เคียงในใบรับรอง <span class="o"></span>${box(!cmpOk)} มากกว่า</td></tr></table>
 <h3><b>5</b>สรุปผลและการตัดสินใจ</h3><table><tr><td class="l">ผลการทวนสอบ</td><td>${box(res.pass)} <b>ผ่าน</b> ทั้งข้อ 3 และข้อ 4 <span class="o"></span>${box(!res.pass)} <b>ไม่ผ่าน</b> → ห้ามใช้งาน ดำเนินการตาม MPIR-LP-012 (เลขที่ NC: ${esc(v.ncNo || "............")})</td></tr>
 <tr><td class="l">สถานะการใช้งาน</td><td>${esc(v.usage || LK_USAGE[0])}</td></tr><tr><td class="l">ทบทวน WI</td><td>${box(!!v.wiReview)} ${esc(v.wiReview || "")}</td></tr><tr><td class="l">หมายเหตุ</td><td>${esc(v.remark)}</td></tr></table>
@@ -7592,7 +7600,7 @@ function VerificationCard({ instrument, cert, verification, canApprove, currentD
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ fontWeight: 700, fontSize: 13.5 }}>ทวนสอบก่อนนำกลับมาใช้งาน <span style={{ fontWeight: 400, fontSize: 11.5, color: "var(--muted)" }}>MPIR-LF-068</span></div>
           <div style={{ fontSize: 12.5, color: status.c, marginTop: 2 }}>{status.t}{res ? ` · ผล: ${res.pass ? "ผ่าน" : "ยังไม่ผ่าน"}` : ""}</div>
-          {v && numOrNull(v.stdU) == null && <div style={{ fontSize: 11.5, color: "var(--amber)", marginTop: 2 }}>ยังไม่ได้ระบุ U ของมาตรฐานอ้างอิง — ผลยังไม่รวม u<sub>std</sub> (กด แก้ไขผลทวนสอบ เพื่อเพิ่ม)</div>}
+          {v && numOrNull(v.stdU) == null && !(v.points || []).some(p => numOrNull(p.stdU) != null) && <div style={{ fontSize: 11.5, color: "var(--amber)", marginTop: 2 }}>ยังไม่ได้ระบุ U ของมาตรฐานอ้างอิง — ผลยังไม่รวม u<sub>std</sub> (กด แก้ไขผลทวนสอบ เพื่อเพิ่ม)</div>}
         </div>
         {(!v || !v.approvedBy || v.legacy) && <button style={v ? S.ghostBtn : S.primaryBtn} onClick={() => setEditing(v || blank())}>{v ? "แก้ไขผลทวนสอบ" : "บันทึกผลทวนสอบ"}</button>}
         {v && !v.approvedBy && !v.evaluatedBy && <button style={S.ghostBtn} onClick={() => signPatch("evaluated")}>ลงชื่อผู้ประเมิน (TM/QM)</button>}
@@ -7618,112 +7626,180 @@ function VerificationCard({ instrument, cert, verification, canApprove, currentD
 // Transcribed from the signed paper reports so the history lives in LabTrack.
 // Only the raw data are taken over (certificate reference/indication/U and the
 // verification readings); every Error, SD, u and Error + U is recalculated by
-// LabTrack, because several figures on the paper forms were miscalculated. Acceptance criteria are the
-// lab's TER criteria from the same reports: |Error| + U ≤ Tolerance; the
-// current year (2569) still uses the same criteria.
+// LabTrack, because several figures on the paper forms were miscalculated.
+// 2568 certificates are taken from the providers' certificates themselves
+// (the 2568 paper report had wrong certificate numbers, dates and values).
+// Acceptance criteria are the lab's TER criteria from the same reports:
+// |Error| + U ≤ Tolerance; the current year (2569) still uses the same criteria.
+// tol: null = no TER criterion given (reference standards, second bath) — the
+// certificate is imported without criteria of its own.
 const LF068_INSTRUMENTS = {
-  bal2: { label: "เครื่องชั่ง 2 ตำแหน่ง", make: "METTLER TOLEDO ML3002E", serials: ["1123321068"], unit: "g", tol: 0.02, param: "Mass", kw: /ML3002|ชั่ง\s*2/i },
-  refr: { label: "Refractometer", make: "Schmidt+Haensch ATR-P", serials: ["41977"], unit: "%Brix", tol: 0.2, param: "Brix", kw: /refrac/i },
-  pol: { label: "Polarimeter", make: "Schmidt+Haensch Polartronic Saccharomat V202", serials: ["53379"], unit: "°Z", tol: 0.03, param: "Optical rotation", kw: /polari/i },
-  bath: { label: "Cooling Bath", make: "LAUDA RA24", serials: ["LCK1909-13-0006"], unit: "°C", tol: 2, param: "Temperature", kw: /cooling|bath/i },
-  oven: { label: "Hot Air Oven 1", make: "MEMMERT UFE800", serials: ["G808.0181", "G880181"], unit: "°C", tol: 3, param: "Temperature", kw: /oven|ตู้อบ/i },
-  bal4: { label: "เครื่องชั่ง 4 ตำแหน่ง", make: "METTLER TOLEDO ML204/01", serials: ["B406270125"], unit: "g", tol: 0.0002, param: "Mass", kw: /ML204|ชั่ง\s*4/i },
+  bal2: { label: "เครื่องชั่ง 2 ตำแหน่ง", make: "METTLER TOLEDO ML3002E/01", serials: ["1123321068"], codes: ["MPIR-091"], unit: "g", tol: 0.02, param: "Mass", kw: /ML3002|ชั่ง\s*2/i },
+  refr: { label: "Refractometer", make: "Schmidt+Haensch ATR-P", serials: ["41977"], codes: [], unit: "%Brix", tol: 0.2, param: "Brix", kw: /refrac/i },
+  pol: { label: "Polarimeter", make: "Schmidt+Haensch Saccharomat V202", serials: ["53379"], codes: [], unit: "°Z", tol: 0.03, param: "Optical rotation", kw: /polari/i },
+  bath: { label: "Cooling Bath", make: "LAUDA RA24", serials: ["LCK1909-13-0006"], codes: ["MPIR-019"], unit: "°C", tol: 2, param: "Temperature", kw: /cooling|bath/i },
+  oven: { label: "Hot Air Oven 1", make: "MEMMERT UFE800", serials: ["G808.0181", "G880181"], codes: ["MPIR-009"], unit: "°C", tol: 3, param: "Temperature", kw: /oven|ตู้อบ/i },
+  bal4: { label: "เครื่องชั่ง 4 ตำแหน่ง", make: "METTLER TOLEDO ML204/01", serials: ["B406270125"], codes: [], unit: "g", tol: 0.0002, param: "Mass", kw: /ML204|ชั่ง\s*4/i },
+  bath2: { label: "Cooling Bath (เครื่องที่ 2)", make: "LAUDA RA24", serials: ["CN24000736"], codes: ["MPIR-134"], unit: "°C", tol: null, param: "Temperature", kw: /^$/ },
+  wts: { label: "ชุดตุ้มน้ำหนักมาตรฐาน (F1)", make: "METTLER TOLEDO", serials: ["11119514"], codes: ["MPIR-023"], unit: "g", tol: null, param: "Mass", kw: /ตุ้ม|weight/i },
+  th100: { label: "เทอร์โมมิเตอร์ 0–100 °C", make: "SK (Liquid in glass, 1 °C)", serials: [], codes: ["MPIR-022"], unit: "°C", tol: null, param: "Temperature", kw: /^$/ },
+  th200: { label: "เทอร์โมมิเตอร์ 0–200 °C", make: "SK (Liquid in glass, 1 °C)", serials: [], codes: ["MPIR-090"], unit: "°C", tol: null, param: "Temperature", kw: /^$/ },
 };
 const LF068_REPORTS = {
   "2566": { date: "2023-10-06", label: "RDI-LF-068 Rev.00 ลงวันที่ 6 ต.ค. 2566", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์" },
   "2567": { date: "2024-10-04", label: "RDI-LF-068 Rev.00 ลงวันที่ 4 ต.ค. 2567", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์" },
   "2568": { date: "2025-09-24", label: "RDI-LF-068 Rev.00 ลงวันที่ 24 ก.ย. 2568", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางสาวรัตนา เมืองมนตรี" },
+  // certificates that no LF-068 report covered — imported without sign-offs
+  "2568c": { date: "", label: "ใบรับรองปี 2568 (ไม่อยู่ในรายงาน LF-068)", by: "", approver: "" },
+  "2566c": { date: "", label: "ใบรับรองปี 2566 (ไม่อยู่ในรายงาน LF-068)", by: "", approver: "" },
 };
 const LF068_STD_WEIGHT_LS = "ตุ้มน้ำหนักมาตรฐาน LS Model 1G-1000G";
-const LF068_STD_WEIGHT_MT = "ตุ้มน้ำหนักมาตรฐาน METTLER TOLEDO Serial no. 11119514";
+const LF068_STD_WEIGHT_MT = "ตุ้มน้ำหนักมาตรฐาน METTLER TOLEDO S/N 11119514 (MPIR-023, OIML F1)";
 const LF068_STD_BRIX = "สารมาตรฐาน 20.00 %Brix เตรียมตาม RDI-WI-02";
 const LF068_STD_QUARTZ = "Quartz Control Plate No. 5578, Reference no. PTB 4.21-4090851 วัดที่ 882.60 nm (สอบเทียบ 16 ต.ค. 63)";
 const LF068_STD_THERMO = "Thermometer แบบกระเปาะ Serial Number 651";
 const LF068_OVEN_METHOD = "วัดอุณหภูมิ Silicone Oil (Lab grade) 50 mL ในบีกเกอร์ 100 mL วางในตู้อบที่ 105 °C 9 ตำแหน่งแบบสุ่ม 2 ชั่วโมง";
-const _w10 = ["10.00", "10.01", "10.01", "10.00", "10.00", "9.99", "10.00", "10.00", "9.99", "10.00"];
-const _w50 = ["50.00", "50.01", "49.99", "50.00", "50.00", "50.00", "50.00", "50.00", "50.00", "50.00"];
-// 2566 verification readings are not used (lab decision) — only its certificates are imported.
+// Quality Calibration Co., Ltd. / Global Dynamics / Analytical Technology — 2568 certificates
+const QCC = { provider: "Quality Calibration Co., Ltd.", accred: LK_ACCRED[0], accredNo: "NSC-TISI-TIS 17025 Calibration 0049", trace: LK_TRACE[0] };
 const _w200 = ["200.00", "200.00", "200.00", "200.00", "200.00", "200.00", "200.00", "200.00", "200.01", "200.00"];
 const _q67 = ["100.11", "100.11", "100.12", "100.12", "100.11", "100.12", "100.12", "100.12", "100.11", "100.11"];
 const _oven = ["104.5", "105.3", "104.9", "104.9", "105.3", "105.6", "105.4", "104.8", "104.8"];
-const _bath = ["20.1", "20.1", "20.1", "20.0", "20.1"];
 const _rng = (from, step, n) => Array.from({ length: n }, (_, i) => from + i * step);
-// cert.pts: [reference, indication, reportedError, U(+), rangeLabel?]
-// ver.pts:  [reference, readings[], …paper-form results (kept for reference only)]
-// Bath/oven certificates: the lab measures the chamber with its own thermometer
-// ("Measured temp."), so reference = mean measured, indication = set/indicated.
+// Conventional mass and U(k=2) of the lab's weights from certificate 25M9514 (g)
+const WT25 = { 10: ["10.000000", "0.000067"], 50: ["50.000006", "0.00010"], 100: ["100.00004", "0.00017"], 200: ["200.00018", "0.00035"] };
+const NOTE_WT25 = "ใช้ค่ามวลจริง (Conventional mass) และ U ของตุ้มน้ำหนักจากใบรับรอง 25M9514 ซึ่งสอบเทียบ 24 ก.ย. 2568 — หลังวันทวนสอบ 23 ก.ย. 2568 (ใบรับรองที่มีผล ณ วันทวนสอบคือใบก่อนหน้า)";
+// cert.pts: [nominal, indication, paper-form Error (kept as a note only), U(+), range?, adj?, reference?]
+//   adj "b" = before adjustment, "a" = after adjustment; reference defaults to nominal.
+// cert.ref: reference temperature for bath/oven (reference location of the
+//   provider's certificate) — Error = indicating − reference.
+// ver.pts:  [reference, readings[], per-point U of the standard?]
+// ver.stdU / ver.corr / ver.d: U(k=2) of the standard, correction of the standard
+//   added to the readings (when the readings come from the standard itself),
+//   resolution; d defaults to the decimals of the readings.
 const LF068_LEGACY = [
-  // ---------------- 2566 ----------------
+  // ---------------- 2566 — certificates from the providers' originals (the 2566 verification readings are not used) ----------------
+  // The 2566 paper report gave issue dates as calibration dates, wrong polarimeter
+  // standard values/wavelength and a wrong bath Error — the originals are used here.
   { inst: "bal2", report: "2566", reason: "out",
-    cert: { no: "23M9468", date: "2023-10-04", pts: _rng(0, 300, 11).map(v => [v, v, 0, 0.012]) },
-    ver: null },
+    cert: { no: "23M9468", date: "2023-09-27", issueDate: "2023-10-04", ...QCC, method: "UKAS LAB 14 Edition 6:2019 (without adjustment)",
+      refStd: "Standard weight set S/N 0094-51 (23M1296), QK-I-009 (23M1297), QK-I-010 (M2302003S)",
+      pts: _rng(0, 300, 11).map(v => [v, v, 0, 0.012]) }, ver: null },
   { inst: "refr", report: "2566", reason: "out",
-    cert: { no: "23CH1188", date: "2023-09-26", pts: [[10.001, 10, 0.001, 0.082], [19.996, 20, 0.004, 0.084], [29.991, 30, 0.009, 0.098], [50.001, 50.02, 0.019, 0.110], [60.000, 60.02, 0.020, 0.110]] },
-    ver: null },
+    cert: { no: "23CH1188", date: "2023-09-22", issueDate: "2023-09-26", provider: "Technology Promotion Association (Thailand-Japan)", accred: LK_ACCRED[0],
+      accredNo: "NSC-TISI-TIS 17025 Calibration 0008", trace: LK_TRACE[1], method: "CP-CH4 direct measurement with CRM (in-house), adjustment at 0.0 %Brix",
+      refStd: "NIMT sucrose CRM TRM-S-5002…5006 lot 060923; Thermometer S/N 9549224 (23I435)",
+      pts: [[10.001, 10.08, null, 0.082, "", "b"], [19.996, 20.06, null, 0.084, "", "b"], [29.991, 30.02, null, 0.098, "", "b"], [50.001, 50.06, null, 0.11, "", "b"], [60.000, 60.05, null, 0.11, "", "b"],
+        [10.001, 10.00, 0.001, 0.082, "", "a"], [19.996, 20.00, 0.004, 0.084, "", "a"], [29.991, 30.00, 0.009, 0.098, "", "a"], [50.001, 50.02, 0.019, 0.11, "", "a"], [60.000, 60.02, 0.020, 0.11, "", "a"]] }, ver: null },
   { inst: "pol", report: "2566", reason: "new",
-    cert: { no: "CB-007-23-0", date: "2023-04-28", pts: [
-      [27.03, 27.02, 0.01, 0.02, "589.44 nm"], [50.11, 50.1, 0.00, 0.02, "589.44 nm"], [75.00, 74.98, 0.00, 0.02, "589.44 nm"], [99.98, 99.98, 0.00, 0.02, "589.44 nm"],
-      [27.08, 27.07, 0.00, 0.02, "882.60 nm"], [50.20, 50.2, 0.00, 0.02, "882.60 nm"], [75.13, 75.12, 0.00, 0.02, "882.60 nm"], [100.16, 100.16, 0.00, 0.02, "882.60 nm"]] },
-    ver: null },
+    cert: { no: "CB-007-23-0", date: "2023-04-25", issueDate: "2023-04-28", provider: "Global Dynamics (Thailand) Ltd.", method: "GDT-CB-02, without adjustment",
+      refStd: "Standard Quartz Control Plates S/N 3340, 3395, 4558, 5546 (due 04-Jul-2027)",
+      note: "รายงาน LF-068 เดิมระบุค่ามาตรฐาน 50.11, 75.00, 27.08, 75.13 และความยาวคลื่น 589.44 nm — ตามใบรับรองจริง: 50.10, 74.98, 27.07, 75.12 ที่ 587.00 nm · ใบรับรองฉบับนี้ไม่มีตราการรับรอง ISO/IEC 17025",
+      pts: [[27.03, 27.02, 0.01, 0.02, "587.00 nm"], [50.10, 50.10, 0.00, 0.02, "587.00 nm"], [74.98, 74.98, 0.00, 0.02, "587.00 nm"], [99.98, 99.98, 0.00, 0.02, "587.00 nm"],
+        [27.07, 27.07, 0.00, 0.02, "882.60 nm"], [50.20, 50.20, 0.00, 0.02, "882.60 nm"], [75.12, 75.12, 0.00, 0.02, "882.60 nm"], [100.16, 100.16, 0.00, 0.02, "882.60 nm"]] }, ver: null },
   { inst: "bath", report: "2566", reason: "out",
-    cert: { no: "23T9488", date: "2023-10-04", note: "Measured temp. 20.03, 20.04, 20.02, 20.02, 20.04 °C", pts: [[20.0, 20.0, 0.18, 0.18]] },
-    ver: null },
+    cert: { no: "23T9488", date: "2023-09-27", issueDate: "2023-10-04", ...QCC, method: "ASTM E715-80 (reapproved 2001), without adjustment",
+      refStd: "Data logger with RTD 2625A S/N 6603614, Cert. 23T6642 (due 19-Jul-24)", ref: 20.04,
+      note: "Measured #1–#4: 20.03, 20.04, 20.02, 20.02 °C · Ref.5 (reference location) 20.04 °C · Overall variation 0.19 °C",
+      pts: [[20.0, 20.0, 0.18, 0.18]] }, ver: null },
   { inst: "oven", report: "2566", reason: "out",
-    cert: { no: "23T9503", date: "2023-10-05", note: "Measured temp. 105.75, 105.41, 105.17, 105.25, 104.99, 104.76, 105.13, 104.74, 105.15 °C", pts: [[105, 105, 0.15, 0.86]] },
-    ver: null },
+    cert: { no: "23T9503", date: "2023-09-27", issueDate: "2023-10-05", ...QCC, method: "TLAS G-20, without adjustment",
+      refStd: "Data logger with TC type K HYDRA 2635A S/N 7301307, Cert. 23T6636 (due 10-Jul-24)", ref: 104.99,
+      note: "Measured #1–#9: 105.75, 105.41, 105.17, 105.25, Ref.5 104.99, 104.76, 105.13, 104.74, 105.15 °C · Uniformity 0.86 °C, overall variation 1.28 °C",
+      pts: [[105, 105, 0.15, 0.86]] }, ver: null },
+  { inst: "th100", report: "2566c", cert: { no: "23T9491", date: "2023-10-04", issueDate: "2023-10-04", ...QCC, method: "ASTM E77:1992 (SPRT in liquid bath), total immersion",
+      refStd: "Standard thermometer 1502 S/N 77964 + SPRT 5614 S/N 636626, Cert. 23T3927 (due 08-Mar-24)", note: "Resolution 1 °C",
+      pts: [[15, 15.0, null, 0.15, "", "", 15.523], [20, 20.0, null, 0.15, "", "", 20.513], [30, 30.0, null, 0.15, "", "", 30.502]] }, ver: null },
+  { inst: "wts", report: "2566c", cert: { no: "23M9492", date: "2023-10-04", issueDate: "2023-10-04", ...QCC, method: "Comparison with standard weights (E2 set YCS31-652-FI-00, Cert. M2301177S)",
+      refStd: "Standard weight set E2 S/N YCS31-652-FI-00, Cert. M2301177S (due 28-Jan-26)", note: "OIML class F1 · ค่าที่อ่านได้ = Conventional mass · 250 g: U ที่ k = 2.1",
+      pts: [[10, 10.000000, null, 0.000067], [100, 100.00004, null, 0.00017], [250, 250.0007, null, 0.00084]] }, ver: null },
   // ---------------- 2567 ----------------
   { inst: "bal2", report: "2567", reason: "out",
     cert: { no: "M24-4835A", date: "2024-10-04", pts: [[0, 0, 0, 0.0067], [300, 300, 0, 0.0067], [600, 600, 0, 0.0068], [900, 900.01, 0, 0.0071],
       [1200, 1200.01, 0.01, 0.0074], [1500, 1500.01, 0.01, 0.0079], [1800, 1800.01, 0.01, 0.0083], [2100, 2100.02, 0.01, 0.0088]] },
     ver: { date: "2024-10-03", std: LF068_STD_WEIGHT_LS, wi: "RDI-WI-002",
-      pts: [[10, _w10, 0.007, 0.010, 0.000, 0.010], [50, _w50, 0.005, 0.010, 0.000, 0.010], [200, _w200, 0.003, 0.010, 0.001, 0.011]] } },
+      pts: [[10, ["10.00", "10.01", "10.01", "10.00", "10.00", "9.99", "10.00", "10.00", "9.99", "10.00"]],
+        [50, ["50.00", "50.01", "49.99", "50.00", "50.00", "50.00", "50.00", "50.00", "50.00", "50.00"]], [200, _w200]] } },
   { inst: "refr", report: "2567", reason: "out",
     cert: { no: "CB-044-24", date: "2024-08-22", pts: [[10.001, 9.99, 0.010, 0.080], [19.996, 19.99, 0.010, 0.080], [29.998, 29.99, 0.010, 0.100], [50.002, 49.98, 0.020, 0.100], [60.000, 59.99, 0.010, 0.110]] },
     ver: { date: "2023-09-26", dateNote: "ต้นฉบับระบุ “ดำเนินการ 26 กันยายน 2566”", std: LF068_STD_BRIX, wi: "RDI-WI-02",
-      pts: [[20.00, ["20.12", "20.06", "20.11", "20.05", "20.07", "20.07", "20.07", "20.07", "20.1", "20.08"], 0.023, 0.0071, 0.0080, 0.0151]] } },
+      pts: [[20.00, ["20.12", "20.06", "20.11", "20.05", "20.07", "20.07", "20.07", "20.07", "20.1", "20.08"]]] } },
   { inst: "pol", report: "2567", reason: "new",
     cert: { no: "CB-043-24", date: "2024-08-22", pts: [
       [25.36, 25.36, 0.00, 0.02, "587.00 nm"], [50.50, 50.5, 0.00, 0.02, "587.00 nm"], [74.54, 74.54, 0.00, 0.02, "587.00 nm"], [100.80, 100.81, 0.01, 0.02, "587.00 nm"],
       [25.41, 25.41, 0.00, 0.02, "882.60 nm"], [50.59, 50.59, 0.00, 0.02, "882.60 nm"], [74.68, 74.68, 0.00, 0.02, "882.60 nm"], [100.99, 100.99, 0.00, 0.02, "882.60 nm"]] },
-    ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: LF068_STD_QUARTZ, stdDue: "ต.ค. 2568", wi: "",
-      pts: [[100.12, _q67, 0.005, 0.0017, 0.0050, 0.0067]] } },
+    ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: LF068_STD_QUARTZ, stdDue: "ต.ค. 2568", wi: "", pts: [[100.12, _q67]] } },
   { inst: "bath", report: "2567", reason: "out",
     cert: { no: "24T9418", date: "2024-09-18", note: "Measured temp. 19.98, 19.98, 19.98, 20.03, 19.98 °C", pts: [[20.0, 20.0, 0.06, 0.14]] },
     ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: "Thermometer แบบกระเปาะ", stdCert: "24T9420", wi: "วัดอุณหภูมิน้ำที่ 20 °C",
-      pts: [[20.0, _bath, 0.04, 0.02, 0.08, 0.10]] } },
+      pts: [[20.0, ["20.1", "20.1", "20.1", "20.0", "20.1"]]] } },
   { inst: "oven", report: "2567", reason: "out",
     cert: { no: "24T9366", date: "2024-09-18", note: "Measured temp. 105.62, 105.36, 105.04, 105.11, 104.8, 104.58, 105.02, 104.58, 104.94 °C", pts: [[105, 105, 0.01, 0.68]] },
-    ver: { date: "2024-09-23", std: LF068_STD_THERMO, wi: LF068_OVEN_METHOD, pts: [[105, _oven, 0.34, 0.11, 0.06, 0.16]] } },
-  // ---------------- 2568 ----------------
+    ver: { date: "2024-09-23", std: LF068_STD_THERMO, wi: LF068_OVEN_METHOD, pts: [[105, _oven]] } },
+  // ---------------- 2568 — certificates from the providers' originals ----------------
   { inst: "bal2", report: "2568", reason: "out",
-    cert: { no: "25M9520", date: "2024-10-04", dateNote: "ต้นฉบับระบุวันที่สอบเทียบ 4 ต.ค. 2567", pts: _rng(0, 300, 9).map(v => [v, v, 0, 0.0012]) },
-    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, wi: "RDI-WI-002",
-      pts: [[10, ["9.99", "10.01", "10.01", "10.00", "10.00", "9.99", "10.00", "10.00", "9.99", "10.00"], 0.007, 0.010, 0.001, 0.011],
-        [50, ["50.00", "50.01", "49.99", "50.00", "50.00", "50.00", "50.01", "50.00", "50.00", "50.00"], 0.006, 0.010, 0.001, 0.011],
-        [200, _w200, 0.003, 0.010, 0.001, 0.011]] } },
+    cert: { no: "25M9520", date: "2025-09-15", issueDate: "2025-09-22", ...QCC, method: "UKAS LAB 14 Edition 6:2019 (without adjustment)",
+      refStd: "Standard weight set S/N 0094-51, Cert. 25M0531 (due 15-Jan-26)",
+      note: "รายงาน LF-068 เดิมระบุวันที่ 4 ต.ค. 2567 และ U 0.0012 g — ตามใบรับรองจริง: 15 ก.ย. 2568, U 0.012 g, 11 จุดถึง 3000 g",
+      pts: _rng(0, 300, 11).map(v => [v, v, 0, 0.012]) },
+    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, stdCert: "25M9514", wi: "RDI-WI-002", note: NOTE_WT25,
+      pts: [[WT25[10][0], ["9.99", "10.01", "10.01", "10.00", "10.00", "9.99", "10.00", "10.00", "9.99", "10.00"], WT25[10][1]],
+        [WT25[50][0], ["50.00", "50.01", "49.99", "50.00", "50.00", "50.00", "50.01", "50.00", "50.00", "50.00"], WT25[50][1]],
+        [WT25[200][0], _w200, WT25[200][1]]] } },
   { inst: "refr", report: "2568", reason: "out",
-    cert: { no: "AT071/25", date: "2025-07-20", pts: [[5.000, 4.990, 0.010, 0.077], [10.000, 10.000, 0.000, 0.083], [20.000, 19.970, 0.030, 0.083], [30.000, 29.980, 0.020, 0.093], [50.000, 50.010, -0.010, 0.110]] },
+    cert: { no: "AT071/25", date: "2025-07-16", issueDate: "2025-07-20", provider: "Analytical Technology Co., Ltd.", accred: LK_ACCRED[0],
+      accredNo: "NSC-TISI-TIS 17025 Calibration 0359", trace: LK_TRACE[1], method: "Direct measurement with CRM (NIMT TRM-S-5001…5006), adjustment at 0.00 %Brix",
+      refStd: "NIMT sucrose CRM 5–60 %Brix; Thermometer 51E06D (T24-4294A)",
+      note: "จุด 20 %Brix ไม่อยู่ในขอบข่ายการรับรอง NSC-ONSC (หมายเหตุในใบรับรอง)",
+      pts: [[5, 5.10, null, 0.077, "", "b"], [10, 10.09, null, 0.083, "", "b"], [20, 20.05, null, 0.083, "", "b"], [30, 30.06, null, 0.093, "", "b"], [50, 50.02, null, 0.11, "", "b"], [60, 60.11, null, 0.11, "", "b"],
+        [5, 4.99, 0.010, 0.077, "", "a"], [10, 10.00, 0.000, 0.083, "", "a"], [20, 19.97, 0.030, 0.083, "", "a"], [30, 29.98, 0.020, 0.093, "", "a"], [50, 50.01, -0.010, 0.11, "", "a"], [60, 59.97, null, 0.11, "", "a"]] },
     ver: { date: "2023-09-26", dateNote: "ต้นฉบับระบุ “ดำเนินการ 26 กันยายน 2566”", std: LF068_STD_BRIX, wi: "RDI-WI-02",
-      pts: [[20.00, ["20.02", "20.06", "19.98", "20.05", "20.07", "20.07", "20.06", "20.07", "20.1", "20.04"], 0.033, 0.0104, 0.0040, 0.0144]] } },
+      pts: [[20.00, ["20.02", "20.06", "19.98", "20.05", "20.07", "20.07", "20.06", "20.07", "20.1", "20.04"]]] } },
   { inst: "pol", report: "2568", reason: "new",
-    cert: { no: "CB-048-25", date: "2025-08-13", pts: [
-      [25.36, 25.36, 0.00, 0.02, "587.00 nm"], [50.50, 50.5, 0.00, 0.02, "587.00 nm"], [74.54, 74.54, 0.00, 0.02, "587.00 nm"], [100.80, 100.79, 0.01, 0.02, "587.00 nm"],
-      [25.41, 25.41, 0.00, 0.02, "882.60 nm"], [50.59, 50.6, 0.01, 0.02, "882.60 nm"], [74.68, 74.68, 0.00, 0.02, "882.60 nm"], [100.99, 100.99, 0.01, 0.02, "882.60 nm"]] },
+    cert: { no: "CB-048-25", date: "2025-08-07", issueDate: "2025-08-13", provider: "Global Dynamics (Thailand) Ltd.", accred: LK_ACCRED[0],
+      accredNo: "NSC-TISI-TIS 17025 Calibration 0471", trace: LK_TRACE[0], method: "ICUMSA SPS-1 (2017), without adjustment",
+      refStd: "Standard Quartz Control Plates S/N 53874–53877 (PTB 23)",
+      pts: [[25.36, 25.36, 0.00, 0.02, "587.00 nm"], [50.50, 50.50, 0.00, 0.02, "587.00 nm"], [74.54, 74.54, 0.00, 0.02, "587.00 nm"], [100.80, 100.79, 0.01, 0.02, "587.00 nm"],
+        [25.41, 25.41, 0.00, 0.02, "882.60 nm"], [50.59, 50.60, 0.01, 0.02, "882.60 nm"], [74.68, 74.68, 0.00, 0.02, "882.60 nm"], [100.99, 100.99, 0.01, 0.02, "882.60 nm"]] },
     ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: LF068_STD_QUARTZ, stdDue: "ต.ค. 2569", wi: "",
-      pts: [[100.12, ["100.10", "100.11", "100.12", "100.09", "100.11", "100.12", "100.12", "100.11", "100.11", "100.11"], 0.009, 0.0030, 0.0100, 0.0130]] } },
+      pts: [[100.12, ["100.10", "100.11", "100.12", "100.09", "100.11", "100.12", "100.12", "100.11", "100.11", "100.11"]]] } },
   { inst: "bath", report: "2568", reason: "out",
-    cert: { no: "24T9512", date: "2025-09-15", note: "Measured temp. 19.98, 19.96, 19.97, 19.94, 19.96 °C", pts: [[20.0, 20.0, 0.23, 0.15]] },
-    ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: "Thermometer แบบกระเปาะ", stdCert: "25T9513", wi: "วัดอุณหภูมิน้ำที่ 20 °C",
-      pts: [[20.0, ["19.98", "20.12", "19.97", "20.13", "20.11"], 0.08, 0.04, 0.06, 0.10]] } },
+    cert: { no: "25T9512", date: "2025-09-15", issueDate: "2025-09-22", ...QCC, method: "ASTM E715-80 (reapproved 2001), without adjustment",
+      refStd: "Data logger with RTD 2625A S/N 6603614, Cert. 25T5341 (due 04-Jun-26)", ref: 19.96,
+      note: "Measured #1–#4: 19.98, 19.96, 19.97, 19.94 °C · Ref.5 (reference location) 19.96 °C · Overall variation 0.10 °C · รายงาน LF-068 เดิมระบุเลขที่ 24T9512",
+      pts: [[20.0, 20.0, 0.23, 0.15]] },
+    ver: { date: "", dateNote: "ต้นฉบับไม่ระบุวันที่ทวนสอบ", std: "เทอร์โมมิเตอร์ 0–100 °C (MPIR-022)", stdCert: "25T9513", stdU: "0.15", corr: "0.012", d: "1",
+      wi: "วัดอุณหภูมิน้ำที่ 20 °C",
+      note: "ค่าแก้ +0.012 °C ที่ 20 °C และ U 0.15 °C จากใบรับรอง 25T9513 · ความละเอียดเทอร์โมมิเตอร์ 1 °C ตามใบรับรอง แต่ค่าที่บันทึกมีทศนิยม 2 ตำแหน่ง",
+      pts: [[20.0, ["19.98", "20.12", "19.97", "20.13", "20.11"]]] } },
   { inst: "oven", report: "2568", reason: "out",
-    cert: { no: "25T9366", date: "2025-09-15", note: "Measured temp. 105.62, 105.36, 105.04, 105.11, 104.8, 104.58, 105.02, 104.58, 104.94 °C", pts: [[105, 105, 0.01, 0.68]] },
-    ver: { date: "2025-09-24", std: LF068_STD_THERMO, wi: LF068_OVEN_METHOD, pts: [[105, _oven, 0.34, 0.11, 0.06, 0.16]] } },
+    cert: { no: "25T12260", date: "2025-09-15", issueDate: "2025-09-16", ...QCC, method: "TLAS G-20, without adjustment",
+      refStd: "Data logger with TC type K HYDRA 2635A S/N 6635300, Cert. 25T5343 (due 27-Jun-26)", ref: 104.70,
+      note: "Measured #1–#9: 104.87, 104.67, 104.64, 104.47, Ref.5 104.70, 104.40, 104.84, 104.62, 104.49 °C · Uniformity 0.37 °C, overall variation 0.81 °C · รายงาน LF-068 เดิมระบุเลขที่ 25T9366 และใช้ค่าของปี 2567",
+      pts: [[105.0, 105.0, 0.01, 0.58]] },
+    ver: { date: "2025-09-24", std: LF068_STD_THERMO, wi: LF068_OVEN_METHOD,
+      note: "ยังไม่มีใบรับรองของเทอร์โมมิเตอร์ที่ใช้ — ใบรับรอง 25T9534 (MPIR-090, 0–200 °C) สอบเทียบเฉพาะจุด 20 °C ไม่ครอบคลุม 105 °C",
+      pts: [[105, _oven]] } },
   { inst: "bal4", report: "2568", reason: "out",
     cert: { no: "25M9517", date: "2025-09-15", pts: [[0, 0, 0, 0.000082], [0.1, 0.1, 0, 0.000083], [0.2, 0.2, 0, 0.000083], [0.5, 0.5, 0, 0.000083], [1, 1, 0, 0.000084],
       [2, 2, 0, 0.000084], [5, 5, 0, 0.000086], [10, 10, 0, 0.000089], [20, 20, 0, 0.000094]] },
-    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, wi: "RDI-WI-002",
-      pts: [[10, ["10.0003", "10.0003", "10.0002", "10.0002", "9.9998", "10.0001", "10.0002", "9.9999", "10.0001", "10.0003"], 0.0002, 0.0000, 0.0001, 0.0001],
-        [50, ["50.0004", "50.0002", "49.9998", "50.0001", "50.0002", "50.0000", "49.9997", "50.0002", "49.9999", "50.0003"], 0.0002, 0.0000, 0.0001, 0.0001]] } },
+    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, stdCert: "25M9514", wi: "RDI-WI-002", note: NOTE_WT25,
+      pts: [[WT25[10][0], ["10.0003", "10.0003", "10.0002", "10.0002", "9.9998", "10.0001", "10.0002", "9.9999", "10.0001", "10.0003"], WT25[10][1]],
+        [WT25[50][0], ["50.0004", "50.0002", "49.9998", "50.0001", "50.0002", "50.0000", "49.9997", "50.0002", "49.9999", "50.0003"], WT25[50][1]]] } },
+  // ---------------- 2568 certificates outside the LF-068 reports ----------------
+  { inst: "bath2", report: "2568c", cert: { no: "25T12322", date: "2025-09-15", issueDate: "2025-09-16", ...QCC, method: "ASTM E715-80 (reapproved 2001), without adjustment",
+      refStd: "Data logger with RTD 2625A S/N 6603614, Cert. 25T5341 (due 04-Jun-26)", ref: 19.96,
+      note: "Measured #1–#4: 19.97, 20.01, 19.96, 19.96 °C · Ref.5 (reference location) 19.96 °C · Overall variation 0.18 °C",
+      pts: [[20.0, 20.0, null, 0.15]] }, ver: null },
+  { inst: "wts", report: "2568c", cert: { no: "25M9514", date: "2025-09-24", issueDate: "2025-09-24", ...QCC, method: "Comparison with standard weights (E2 set YCS31-652-FI-00, Cert. M2301177S)",
+      refStd: "Standard weight set E2 S/N YCS31-652-FI-00, Cert. M2301177S (due 28-Jan-26)", note: "OIML class F1 · ค่าที่อ่านได้ = Conventional mass",
+      pts: [10, 50, 100, 200].map(v => [v, Number(WT25[v][0]), null, Number(WT25[v][1])]) }, ver: null },
+  { inst: "th100", report: "2568c", cert: { no: "25T9513", date: "2025-09-22", issueDate: "2025-09-22", ...QCC, method: "ASTM E77:1992 (SPRT in liquid bath), total immersion",
+      refStd: "Standard thermometer 1502 S/N 77964 + SPRT 5614 S/N 636626, Cert. 25T2395 (due 06-Mar-26)", note: "Resolution 1 °C",
+      pts: [[15, 15.0, null, 0.15, "", "", 15.005], [20, 20.0, null, 0.15, "", "", 20.012], [30, 30.0, null, 0.15, "", "", 30.015]] }, ver: null },
+  { inst: "th200", report: "2568c", cert: { no: "25T9534", date: "2025-09-22", issueDate: "2025-09-22", ...QCC, method: "ASTM E77:1992 (SPRT in liquid bath), total immersion",
+      refStd: "Standard thermometer 1502 S/N 77964 + SPRT 5614 S/N 636626, Cert. 25T2395 (due 06-Mar-26)",
+      note: "Resolution 1 °C · สอบเทียบเฉพาะจุด 20 °C (ค่าแก้ −0.986 °C)",
+      pts: [[20, 20.0, null, 0.15, "", "", 19.014]] }, ver: null },
 ];
 const LF068_REASON_OF = { out: "นำออกนอกการควบคุม (อื่นๆ)", new: "เครื่องมือใหม่" };
 const normSerial = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -7731,11 +7807,14 @@ const normCertNo = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""
 function guessLegacyInstrument(def, equipment) {
   const bySerial = equipment.filter(e => def.serials.some(s => normSerial(s) && normSerial(e.serialNo) === normSerial(s)));
   if (bySerial.length === 1) return { id: bySerial[0].id, how: "serial" };
+  const byCode = equipment.filter(e => (def.codes || []).some(c => normSerial(c) === normSerial(e.code)));
+  if (byCode.length === 1) return { id: byCode[0].id, how: "code" };
   const byName = equipment.filter(e => def.kw.test(`${e.name || ""} ${e.type || ""} ${e.model || ""}`));
   if (byName.length === 1) return { id: byName[0].id, how: "name" };
   return { id: "", how: "" };
 }
 function terCriteriaPatch(def) {
+  if (def.tol == null) return {};
   return { certTolerance: def.tol, certToleranceType: "absolute", certDecisionRule: "conservative", certGuardBandFactor: "",
     certCriteriaBasis: "เกณฑ์ TER: ค่าความผิดพลาดรวม |Error| + U ≤ เกณฑ์การยอมรับ (ตาม RDI-LF-068)" };
 }
@@ -7743,7 +7822,6 @@ function terCriteriaPatch(def) {
 // (possibly corrected) dates. Pure — the preview and the import use the same.
 function planLegacyImport({ equipment, certificates, verifications, mapping, dates, currentDisplayName }) {
   const newCerts = [], newVers = [], critIds = new Set(), notes = [];
-  const certDateOf = {}; // `${instId}|${normCertNo}` -> date used
   for (const [i, row] of LF068_LEGACY.entries()) {
     const def = LF068_INSTRUMENTS[row.inst];
     const instId = mapping[row.inst];
@@ -7755,37 +7833,50 @@ function planLegacyImport({ equipment, certificates, verifications, mapping, dat
     const existing = certificates.filter(c => c.instrumentId === instId && normCertNo(c.certificateNo) === normCertNo(row.cert.no));
     const useDate = existing.length ? existing[0].calibrationDate : calDate;
     const useNo = existing.length ? existing[0].certificateNo : row.cert.no;
-    certDateOf[`${instId}|${normCertNo(row.cert.no)}`] = useDate;
     if (!existing.length) {
-      const meas = /Measured temp/i.test(row.cert.note || "") ? (row.cert.note.match(/-?\d+(?:\.\d+)?/g) || []).map(Number) : null;
-      row.cert.pts.forEach(([nominal, ind, paperErr, U, range]) => {
-        const ref = meas && meas.length ? round4(meas.reduce((a, b) => a + b, 0) / meas.length) : nominal;
-        newCerts.push(normalizeCertRow({
-          ...blankCertificate(instId, row.cert.no), calibrationDate: calDate,
+      const c = row.cert;
+      const meas = c.ref == null && /Measured temp/i.test(c.note || "") ? (c.note.match(/-?\d+(?:\.\d+)?/g) || []).map(Number) : null;
+      const group = c.pts.map(([nominal, ind, paperErr, U, range, adj, refPt]) => {
+        const ref = refPt ?? c.ref ?? (meas && meas.length ? round4(meas.reduce((a, b) => a + b, 0) / meas.length) : nominal);
+        return normalizeCertRow({
+          ...blankCertificate(instId, c.no), calibrationDate: calDate, issueDate: c.issueDate || "",
+          provider: c.provider || "", providerAccreditationStatus: c.accred || "", providerAccreditationNo: c.accredNo || "",
+          calibrationMethod: c.method || "", referenceStandardUsed: c.refStd || "", traceability: c.trace || "",
           parameter: def.param, rangeId: range || "", calibrationPoint: nominal, unit: inst?.calUnit || def.unit,
-          referenceValue: ref, indication: ind, reportedError: "", reportedU: U, uReportedAs: "Absolute", coverageFactor: 2,
-          adjustmentStatus: "",
-          limitationsNotes: [row.cert.note && `${row.cert.note} (ค่าอ้างอิง = ค่าเฉลี่ย)`, row.cert.dateNote, `Error ในแบบฟอร์มเดิม ${paperErr} — LabTrack คำนวณจาก ค่าที่อ่านได้ − ค่าอ้างอิง`].filter(Boolean).join(" · "),
+          referenceValue: ref, indication: ind, reportedError: "", reportedU: U, uReportedAs: "Absolute", coverageFactor: row.inst === "wts" && nominal === 250 ? 2.1 : 2,
+          adjustmentStatus: adj === "b" ? LK_ADJ[0] : adj === "a" ? LK_ADJ[1] : "",
+          limitationsNotes: [c.note, meas && "ค่าอ้างอิง = ค่าเฉลี่ยอุณหภูมิที่วัดได้",
+            paperErr != null && rep.date ? `Error ในแบบฟอร์มเดิม ${paperErr} — LabTrack คำนวณจาก ค่าที่อ่านได้ − ค่าอ้างอิง` : ""].filter(Boolean).join(" · "),
           ...terCriteriaPatch(def),
-          evaluatedBy: rep.by, evaluationDate: rep.date, approvedBy: rep.approver, approvalDate: rep.date,
           source: `import:${rep.label}`,
-        }));
+        });
       });
+      // The paper sign-off is carried over only when every current point
+      // still passes the TER criteria after recalculation.
+      const rs = def.tol == null ? null : roundSummary(group, inst);
+      const ok = rs && rs.current.every(x => !isBadDecision(x.ev.decision) && x.ev.decision !== "INCOMPLETE DATA");
+      if (rep.approver && ok) group.forEach(g => Object.assign(g, { evaluatedBy: rep.by, evaluationDate: rep.date, approvedBy: rep.approver, approvalDate: rep.date }));
+      else if (rep.approver) notes.push(`ใบรับรอง ${def.label} ${c.no} (ปี ${row.report.replace("c", "")}): คำนวณใหม่แล้วไม่ผ่านเกณฑ์ TER — ไม่ยกผลอนุมัติเดิมมา`);
+      if (rs && rs.asFoundDecision && isBadDecision(rs.asFoundDecision)) notes.push(`ใบรับรอง ${def.label} ${c.no}: ค่าก่อนปรับไม่ผ่านเกณฑ์ — ประเมินผลกระทบย้อนหลังตาม MPIR-LP-012`);
+      newCerts.push(...group);
     }
     const already = row.ver ? verificationOf(verifications, instId, useNo, useDate) : true;
     if (!already) {
-      const dDec = Math.max(...row.ver.pts.flatMap(p => p[1].map(r => (String(r).split(".")[1] || "").length)));
+      const vd = row.ver;
+      const dDec = Math.max(...vd.pts.flatMap(p => p[1].map(r => (String(r).split(".")[1] || "").length)));
+      const d = vd.d ?? (10 ** -dDec).toFixed(dDec);
       const certPts = existing.length ? existing.map(c => ({ ...c, ...terCriteriaPatch(def) })) : newCerts.filter(c => c.instrumentId === instId && c.certificateNo === row.cert.no);
       const vr = {
         id: uid(), instrumentId: instId, certificateNo: useNo, calibrationDate: useDate,
         reportNo: `${rep.label}`, reason: row.reason, returnedDate: "", condition: "ok", conditionNote: "",
-        verifyDate: verDate || rep.date, environment: "", stdName: row.ver.std, stdCert: row.ver.stdCert || "", stdDue: row.ver.stdDue || "",
-        stdU: "", resolution: (10 ** -dDec).toFixed(dDec), wi: row.ver.wi || "",
-        points: row.ver.pts.map(([reference, readings]) => ({ reference: String(reference), readings: [...readings, ...Array(Math.max(0, VERIFY_MAX_READS - readings.length)).fill("")].slice(0, VERIFY_MAX_READS) })),
-        fewReason: row.ver.pts.some(p => p[1].length < VERIFY_MAX_READS) ? "จำนวนซ้ำตามแบบฟอร์มเดิม" : "",
+        verifyDate: verDate || rep.date, environment: "", stdName: vd.std, stdCert: vd.stdCert || "", stdDue: vd.stdDue || "",
+        stdU: vd.stdU || "", readingCorrection: vd.corr || "", resolution: d, wi: vd.wi || "",
+        points: vd.pts.map(([reference, readings, stdU]) => ({ reference: String(reference), stdU: stdU || "",
+          readings: [...readings, ...Array(Math.max(0, VERIFY_MAX_READS - readings.length)).fill("")].slice(0, VERIFY_MAX_READS) })),
+        fewReason: vd.pts.some(p => p[1].length < VERIFY_MAX_READS) ? "จำนวนซ้ำตามแบบฟอร์มเดิม" : "",
         usage: LK_USAGE[0], wiReview: "", ncNo: "",
-        remark: [`นำเข้าค่าที่อ่านได้จาก ${rep.label} — LabTrack คำนวณผลใหม่ทั้งหมด`, `d = ${(10 ** -dDec).toFixed(dDec)} อนุมานจากทศนิยมของค่าที่อ่านได้`,
-          "ต้นฉบับไม่มี U ของมาตรฐานอ้างอิง", row.ver.dateNote, !verDate ? "ใช้วันที่ของรายงานเป็นวันที่ทวนสอบ" : ""].filter(Boolean).join(" · "),
+        remark: [`นำเข้าค่าที่อ่านได้จาก ${rep.label} — LabTrack คำนวณผลใหม่ทั้งหมด`, vd.d ? "" : `d = ${d} อนุมานจากทศนิยมของค่าที่อ่านได้`,
+          vd.stdU || vd.pts.some(p => p[2]) ? "" : "ยังไม่มี U ของมาตรฐานอ้างอิง", vd.note, vd.dateNote, !verDate ? "ใช้วันที่ของรายงานเป็นวันที่ทวนสอบ" : ""].filter(Boolean).join(" · "),
         legacy: true, legacyApprover: rep.approver, legacyApprovalDate: rep.date,
         verifiedBy: rep.by, evaluatedBy: "", evaluationDate: "", approvedBy: "", approvalDate: "",
         importedBy: currentDisplayName || "", importedAt: todayISO(),
@@ -7793,21 +7884,23 @@ function planLegacyImport({ equipment, certificates, verifications, mapping, dat
       // The paper approval stands only if the recalculated result still passes.
       const res = verificationResult(vr, inst, certPts);
       if (res.pass) Object.assign(vr, { approvedBy: rep.approver, approvalDate: rep.date });
-      else vr.usage = "รอประเมิน";
-      if (!res.pass) notes.push(`${def.label} ${row.cert.no} (ปี ${row.report}): คำนวณใหม่แล้วไม่ผ่าน — ไม่ยกผลอนุมัติเดิมมา ต้องประเมินตาม MPIR-LP-012`);
+      else {
+        vr.usage = "รอประเมิน";
+        notes.push(`ผลทวนสอบ ${def.label} ${row.cert.no} (ปี ${row.report}): คำนวณใหม่แล้วไม่ผ่าน — ไม่ยกผลอนุมัติเดิมมา ต้องประเมินตาม MPIR-LP-012`);
+      }
       newVers.push(vr);
     }
   }
   // TER criteria for every certificate of the mapped instruments that is not
   // already judged by them (this year's certificates use the same criteria).
   for (const [key, instId] of Object.entries(mapping)) {
-    if (!instId) continue;
     const def = LF068_INSTRUMENTS[key];
+    if (!instId || def.tol == null) continue;
     certificates.filter(c => c.instrumentId === instId).forEach(c => {
       if (numOrNull(c.certTolerance) !== def.tol || c.certDecisionRule !== "conservative") critIds.add(c.id);
     });
   }
-  return { newCerts, newVers, critIds, certDateOf, notes };
+  return { newCerts, newVers, critIds, notes };
 }
 
 function LegacyVerificationImport({ equipment, certificates, verifications, currentDisplayName, onCancel, onImport }) {
@@ -7832,21 +7925,21 @@ function LegacyVerificationImport({ equipment, certificates, verifications, curr
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(18,37,59,0.45)", zIndex: 2000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onCancel}>
       <div style={{ ...S.modalBox, maxWidth: 1040, padding: 20, marginTop: 20 }} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 16, fontWeight: 700 }}>นำเข้าผลทวนสอบย้อนหลัง (RDI-LF-068 ปี 2566–2568)</div>
+        <div style={{ fontSize: 16, fontWeight: 700 }}>นำเข้าใบรับรองและผลทวนสอบย้อนหลัง (ปี 2566–2568)</div>
         <div style={{ fontSize: 12.5, color: "var(--muted)", margin: "2px 0 12px" }}>
-          ใบรับรองปี 2566–2568 และค่าที่อ่านได้จากการทวนสอบปี 2567–2568 (ไม่ใช้ค่าทวนสอบปี 2566) · LabTrack คำนวณ Error, U และผลตัดสินใหม่ทั้งหมด · ตั้งเกณฑ์ TER (|Error| + U ≤ เกณฑ์การยอมรับ, Conservative) ให้ใบรับรองทุกใบของเครื่องที่เลือก รวมใบปีปัจจุบัน
+          ใบรับรองปี 2566–2567 จากรายงาน RDI-LF-068 · ใบรับรองปี 2568 จากใบรับรองต้นฉบับของผู้สอบเทียบ · ค่าที่อ่านได้จากการทวนสอบปี 2567–2568 (ไม่ใช้ค่าทวนสอบปี 2566) · LabTrack คำนวณ Error, U และผลตัดสินใหม่ทั้งหมด · ตั้งเกณฑ์ TER (|Error| + U ≤ เกณฑ์การยอมรับ, Conservative) ให้ใบรับรองทุกใบของเครื่องที่เลือก รวมใบปีปัจจุบัน
         </div>
         <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>1. จับคู่เครื่องมือ</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "8px 14px" }}>
           {Object.entries(LF068_INSTRUMENTS).map(([k, def]) => {
             const g = guessLegacyInstrument(def, equipment);
             return (
-              <Field key={k} label={`${def.label} · ${def.make} · S/N ${def.serials[0]} · เกณฑ์ ± ${def.tol} ${def.unit}`}>
+              <Field key={k} label={`${def.label} · ${def.make}${def.serials[0] ? ` · S/N ${def.serials[0]}` : ""}${def.codes?.[0] ? ` · ${def.codes[0]}` : ""} · ${def.tol != null ? `เกณฑ์ ± ${def.tol} ${def.unit}` : "ไม่มีเกณฑ์ TER (นำเข้าใบรับรองเท่านั้น)"}`}>
                 <select style={S.input} value={mapping[k] || ""} onChange={e => setMapping(m => ({ ...m, [k]: e.target.value }))}>
                   <option value="">— ไม่นำเข้า —</option>
                   {equipment.map(e => <option key={e.id} value={e.id}>{eqLabel(e)}</option>)}
                 </select>
-                {mapping[k] && mapping[k] === g.id && <span style={{ fontSize: 11.5, color: g.how === "serial" ? "var(--green)" : "var(--amber)" }}>{g.how === "serial" ? "ตรงกับ Serial No." : "เดาจากชื่อเครื่อง — ตรวจให้แน่ใจ"}</span>}
+                {mapping[k] && mapping[k] === g.id && <span style={{ fontSize: 11.5, color: g.how === "name" ? "var(--amber)" : "var(--green)" }}>{g.how === "serial" ? "ตรงกับ Serial No." : g.how === "code" ? "ตรงกับรหัสเครื่อง (ID No ในใบรับรอง)" : "เดาจากชื่อเครื่อง — ตรวจให้แน่ใจ"}</span>}
               </Field>
             );
           })}
@@ -7863,7 +7956,7 @@ function LegacyVerificationImport({ equipment, certificates, verifications, curr
                 const ex = !off && exists(row);
                 return (
                   <tr key={i} style={{ opacity: off ? 0.4 : 1, borderTop: "1px solid var(--line)" }}>
-                    <td style={cell}>{row.report}</td>
+                    <td style={cell}>{row.report.replace("c", "")}</td>
                     <td style={cell}>{def.label}</td>
                     <td style={cell}>{row.cert.no}{ex && <div style={{ fontSize: 11, color: "var(--muted)" }}>มีในระบบแล้ว — ใช้ข้อมูลเดิม</div>}</td>
                     <td style={cell}><input type="date" disabled={off || ex} style={{ ...S.input, padding: "4px 6px" }} value={dates[`c${i}`] ?? row.cert.date} onChange={e => setDates(d => ({ ...d, [`c${i}`]: e.target.value }))} /></td>
