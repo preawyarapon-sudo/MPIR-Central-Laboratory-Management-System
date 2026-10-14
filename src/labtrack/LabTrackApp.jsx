@@ -1738,12 +1738,26 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   const [tab, setTabState] = useState(() => {
     if (typeof window === "undefined") return defaultTab;
     const fromUrl = new URLSearchParams(window.location.search).get("tab");
+    // Old bookmarks of the former calibration / Daily check pages open
+    // Instrument Assurance System instead.
+    if (MOVED_TABS.includes(fromUrl) && !restrictToBooking && !restrictToDailyCheck) {
+      const equip = new URLSearchParams(window.location.search).get("equip");
+      window.location.replace(calibrationAppUrl(equip));
+      return defaultTab;
+    }
     return fromUrl && allowedTabKeys.includes(fromUrl) ? fromUrl : defaultTab;
   });
   // Wraps the raw state setter so every tab change also updates the URL
   // (via replaceState — doesn't add browser-history entries or reload the
   // page), keeping `tab` and the address bar in sync at all times.
   function setTab(key) {
+    if (MOVED_TABS.includes(key)) {
+      // The former calibration and Daily check pages now live in Instrument
+      // Assurance System (same data); open it in its own tab instead.
+      window.open(calibrationAppUrl(calibHubMemory.instrumentId), "_blank");
+      calibHubMemory.instrumentId = null;
+      return;
+    }
     setTabState(key);
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
@@ -7211,6 +7225,8 @@ function CalibrationGuideModal({ onClose }) {
 // Survives the hub unmounting (e.g. a trip to "ตรวจเช็คเครื่องมือ" and
 // back), so returning lands on the same instrument and page instead of the
 // picker. Also keeps the picker's filters.
+const MOVED_TABS = ["calibrationRecords", "dailyCheck"];
+const calibrationAppUrl = (equip) => `/?app=calibration${equip ? `&equip=${encodeURIComponent(equip)}` : ""}`;
 const calibHubMemory = { instrumentId: null, view: null, q: "", typeFilter: "", statusFilter: "", dueFilter: "", layout: "cards", sortBy: "code" };
 /* ---------- Calibration records: one certificate = one calibration round ----------
    A round runs from a certificate's calibration date until the next
