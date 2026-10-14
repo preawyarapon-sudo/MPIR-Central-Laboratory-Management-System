@@ -16,8 +16,9 @@ import {
 import { printLf068, printCheckLog, VERIFY_REASONS } from "./report.js";
 import {
   LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable, newIntermediateCheckFor,
-  saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm, dailyCheckPoints,
+  saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm, dailyCheckPoints, LF069_REPORTS,
 } from "../labtrack/LabTrackApp.jsx";
+import { UncertaintyList, UncertaintyEditor, newReport, legacyReports, printLf069 } from "./UncertaintyPage.jsx";
 
 /* ---------- storage (same keys as LabTrack) ---------- */
 async function loadKey(key) {
@@ -44,11 +45,11 @@ const TONE = {
 const isCalibrated = (e, rounds) => e.type !== "เครื่องปรับอากาศ" && (rounds.length > 0 || num(e.intervalMonths) != null || !!e.nextDue || num(e.tolerance) != null);
 
 /* =================================================================== */
-const KEYS = ["equipment", "certificates", "verifications", "dailyChecks", "intermediateChecks"];
+const KEYS = ["equipment", "certificates", "verifications", "dailyChecks", "intermediateChecks", "uncertaintyReports"];
 // guest: opened from a scanned QR code without a staff login — Daily check
 // form and read-only instrument info only (same as the former QR pages).
 export default function CalibrationApp({ currentUsername = "", currentDisplayName = "", guest = false, initial = null, onLogin = null }) {
-  const [data, setData] = useState({ equipment: [], certificates: [], verifications: [], dailyChecks: [], intermediateChecks: [] });
+  const [data, setData] = useState({ equipment: [], certificates: [], verifications: [], dailyChecks: [], intermediateChecks: [], uncertaintyReports: [] });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(initial || { name: "overview" });
   const [toast, setToastState] = useState({ text: "", ms: 3500 });
@@ -119,8 +120,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
         </>) : (<>
           <button className={`ca-nav ${["overview", "instrument", "edit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "overview" })}><LayoutGrid size={17} /> ภาพรวมและทะเบียน</button>
           <button className={`ca-nav ${page.name === "dailyAll" ? "on" : ""}`} onClick={() => go({ name: "dailyAll" })}><ClipboardCheck size={17} /> Daily check (ทุกเครื่อง)</button>
-          <div className="ca-nav-group">ยังอยู่ในหน้า LabTrack เดิม</div>
-          <a className="ca-nav" href="/?tab=calibrationRecords" target="_blank" rel="noreferrer"><Calculator size={17} /> ความไม่แน่นอน <ExternalLink size={13} className="ca-ext" /></a>
+          <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน (LF-069)</button>
           <div className="ca-side-foot">{me ? `ผู้ใช้: ${me}` : ""}<br />ข้อมูลชุดเดียวกับ LabTrack</div>
         </>)}
       </nav>
@@ -159,6 +159,50 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                 const isLatest = (roundsById[instrument.id] || [])[0]?.key === round.key;
                 if (isLatest) await mutate("equipment", list => list.map(e => e.id === instrument.id ? { ...e, currentStatus: usage, statusApprovalDate: todayISO() } : e));
                 setToast("ดาวน์โหลดรายงานแล้ว · นำไปลงนามและเก็บตามระบบเอกสาร");
+              }} />
+          )}
+          {page.name === "uncList" && (
+            <UncertaintyList reports={data.uncertaintyReports} certificates={data.certificates} equipment={data.equipment}
+              legacyCount={legacyReports(LF069_REPORTS, data.uncertaintyReports, data.equipment, data.certificates, me).length}
+              onImportLegacy={async () => {
+                const add = legacyReports(LF069_REPORTS, data.uncertaintyReports, data.equipment, data.certificates, me);
+                await mutate("uncertaintyReports", list => [...list, ...add.filter(a => !list.some(x => x.legacyKey === a.legacyKey))]);
+                setToast(`นำเข้ารายงานเดิม ${add.length} ฉบับ · คำนวณใหม่แล้ว`);
+              }}
+              onNew={() => {
+                const prev = [...data.uncertaintyReports].sort((a, b) => (b.reportDate || "").localeCompare(a.reportDate || ""))[0];
+                go({ name: "uncEdit", draft: newReport(prev, data.equipment, data.certificates, me) });
+              }}
+              onOpen={(id) => go({ name: "uncEdit", draft: data.uncertaintyReports.find(r => r.id === id) })}
+              onDelete={async (rep) => {
+                if (!window.confirm(`ลบรายงาน LF-069 ประจำปี ${rep.year || ""}?`)) return;
+                await mutate("uncertaintyReports", list => list.filter(r => r.id !== rep.id));
+                setToast("ลบรายงานแล้ว");
+              }}
+              onDownload={async (rep) => {
+                if (!printLf069(rep, data.certificates, data.equipment)) return;
+                const at = new Date().toISOString();
+                await mutate("uncertaintyReports", list => list.map(r => r.id === rep.id ? { ...r, downloadedAt: at, downloadedBy: me, reprintNeeded: false } : r));
+                setToast("ดาวน์โหลดรายงานแล้ว · นำไปลงนามและเก็บตามระบบเอกสาร");
+              }} />
+          )}
+          {page.name === "uncEdit" && page.draft && (
+            <UncertaintyEditor key={page.draft.id} report={page.draft} certificates={data.certificates} equipment={data.equipment}
+              onCancel={() => go({ name: "uncList" })}
+              onSave={async (rep, download) => {
+                const at = new Date().toISOString();
+                let saved = rep;
+                await mutate("uncertaintyReports", list => {
+                  const prev = list.find(r => r.id === rep.id);
+                  saved = { ...rep, updatedAt: at, updatedBy: me, reprintNeeded: !!prev?.downloadedAt && !download,
+                    editLog: [...(prev?.editLog || []), { at, by: me, note: prev ? "แก้ไขรายงาน" : "สร้างรายงาน" }] };
+                  if (download) Object.assign(saved, { downloadedAt: at, downloadedBy: me });
+                  return prev ? list.map(r => r.id === rep.id ? saved : r) : [...list, saved];
+                });
+                if (download) printLf069(saved, data.certificates, data.equipment);
+                setToast(download ? "บันทึกและดาวน์โหลดแล้ว · นำไปลงนามและเก็บตามระบบเอกสาร" : "บันทึกรายงานแล้ว");
+                go({ name: "uncList" });
+                return true;
               }} />
           )}
           {page.name === "edit" && instrument && (
