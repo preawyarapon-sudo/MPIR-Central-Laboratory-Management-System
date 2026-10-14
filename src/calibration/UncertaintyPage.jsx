@@ -5,11 +5,11 @@
 import { useState, useMemo } from "react";
 import { ChevronLeft, Plus, FileDown, Check, X, Pencil, Trash2, AlertTriangle } from "lucide-react";
 import { num, fmt, fmtDate, todayISO, beYear, mpirCodes } from "./calc.js";
-import { TESTS, calcReport, roundsFor, printLf069, DEFAULT_REPEATS, MAX_REPEATS, resolutionOf } from "./uncertainty.js";
+import { TESTS, calcReport, roundsFor, printLf069, DEFAULT_REPEATS, MAX_REPEATS, resolutionOf, DEFAULT_REPORT_REPEATS } from "./uncertainty.js";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const DEFAULT_OBJECTIVE = "ประเมินค่าความไม่แน่นอนของการตรวจทดสอบค่าบริกซ์และโพล ในน้ำอ้อย และไฟเบอร์ในชานอ้อยย่อย";
-const DEFAULT_REFS = ["MPIR-WI-002-06 วิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย",
+const DEFAULT_REFS = ["MPIR-WI-002 วิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย",
   "MPIR-WI-003 การวิเคราะห์ค่าเส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย", "MPIR-WI-008 การประเมินค่าความไม่แน่นอนของการวัด",
   "รายงานผลการทวนสอบเครื่องมือ (LF-068) ของ Refractometer, Polarimeter และเครื่องชั่ง 2 ตำแหน่ง"].join("\n");
 const normNo = (s) => String(s || "").toUpperCase().replace(/\s+/g, "");
@@ -32,7 +32,7 @@ export function newReport(prev, equipment, certificates, me) {
   for (const T of TESTS) {
     const instrumentId = prev?.[T.key]?.instrumentId || guessInstrument(T, equipment);
     rep[T.key] = { instrumentId, source: "cert", certKey: latestRoundKey(certificates, instrumentId, date),
-      readings: Array(DEFAULT_REPEATS).fill(""), ...(T.key === "fiber" ? { m1: prev?.fiber?.m1 || "100" } : {}) };
+      readings: Array(DEFAULT_REPEATS).fill(""), ...(T.key === "fiber" ? { m1: prev?.fiber?.m1 || "200" } : {}) };
   }
   return rep;
 }
@@ -59,7 +59,7 @@ export function legacyReports(LEGACY, existing, equipment, certificates, me) {
         ? { ...hit, source: "cert", readings: reads.map(String) }
         : { instrumentId: guessInstrument(T, equipment), source: "manual", manualCertNo: ref.no || "", manualU: ref.U != null ? String(ref.U) : "", manualK: "2",
           manualNote: ref.note || (ref.no ? `ใบรับรอง ${ref.no} ไม่อยู่ในระบบ` : "ค่าจากรายงานเดิม"), readings: reads.map(String) };
-      if (T.key === "fiber") rep.fiber.m1 = "100";
+      if (T.key === "fiber") rep.fiber.m1 = "200";
     }
     out.push(rep);
   }
@@ -109,7 +109,7 @@ export function UncertaintyList({ reports, certificates, equipment, onNew, onOpe
           </section>
         );
       })}
-      <p className="ca-small ca-muted">วิธีคำนวณ: u_A = SD/√n · u_B = √(Calibration² + Resolution² [+ Pol factor²]) โดย Calibration = U ของใบรับรอง ÷ k, Resolution = d/(2√3) (Pol แปลง °Z → %Pol ด้วย 26/(100ρ) · Fibre รวมการชั่ง M0, M1, M2) · U = 2√(u_A² + u_B²) · ค่ารายงานปัดขึ้นตามความละเอียดของผล</p>
+      <p className="ca-small ca-muted">วิธีคำนวณ: u_A = SD/√m (SD จากผลทดสอบซ้ำ, m = จำนวนครั้งที่เฉลี่ยเป็นผลที่รายงาน ปกติ 2) · u_B = √(Calibration² + Resolution² [+ Pol factor²]) โดย Calibration = U ของใบรับรอง ÷ k, Resolution = d/(2√3) (Pol แปลง °Z → %Pol ด้วย 26/(100ρ) · Fibre รวมการชั่ง M0, M1, M2) · U = 2√(u_A² + u_B²) · ค่ารายงานปัดขึ้นตามความละเอียดของผล</p>
     </div>
   );
 }
@@ -205,8 +205,9 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
                   <label className="ca-field ca-span2"><span>หมายเหตุที่มา</span><input value={t.manualNote || ""} onChange={ev => setT(T.key, { manualNote: ev.target.value })} /></label>
                 </div>
               )}
+              <label className="ca-field"><span>จำนวนครั้งที่เฉลี่ยเป็นผลที่รายงาน (m)</span><input value={t.mRep ?? ""} onChange={ev => setT(T.key, { mRep: ev.target.value })} inputMode="numeric" placeholder={`${DEFAULT_REPORT_REPEATS} (ค่าปกติ)`} /></label>
               <label className="ca-field"><span>ความละเอียด d ({T.instUnit})</span><input value={t.res ?? ""} onChange={ev => setT(T.key, { res: ev.target.value })} inputMode="decimal" placeholder={`${resolutionOf(t, T, equipment)} (จากทะเบียน)`} /></label>
-              {T.key === "fiber" && <label className="ca-field"><span>น้ำหนักชานก่อนอบ M1 (g)</span><input value={t.m1 || ""} onChange={ev => setT(T.key, { m1: ev.target.value })} inputMode="decimal" /></label>}
+              {T.key === "fiber" && <label className="ca-field"><span>น้ำหนักชานก่อนอบ m = M1 − M0 (g) · WI: 200 ± 10</span><input value={t.m1 || ""} onChange={ev => setT(T.key, { m1: ev.target.value })} inputMode="decimal" /></label>}
             </div>
             {t.source === "cert" && t.instrumentId && !rounds.length && <p className="ca-warn">เครื่องนี้ยังไม่มีใบรับรองในระบบ — บันทึกรอบสอบเทียบก่อน หรือเลือก “กรอกเอง”</p>}
 
@@ -227,7 +228,7 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
             </div>
             <div className="ca-scroll">
               <table className="ca-table ca-num ca-calcbox">
-                <thead><tr><th>n</th><th>ค่าเฉลี่ย</th><th>SD</th><th>u_A = SD/√n</th><th>u Calibration</th><th>u Resolution</th>{T.key === "pol" && <th>u Pol factor</th>}<th>u_c</th><th>U = 2u_c</th><th>รายงาน ±</th></tr></thead>
+                <thead><tr><th>n</th><th>ค่าเฉลี่ย</th><th>SD</th><th>u_A = SD/√m</th><th>u Calibration</th><th>u Resolution</th>{T.key === "pol" && <th>u Pol factor</th>}<th>u_c</th><th>U = 2u_c</th><th>รายงาน ±</th></tr></thead>
                 <tbody><tr><td>{r.A.n}</td><td>{fmt(r.A.mean, r.dec)}</td><td>{fmt(r.A.sd, 4)}</td><td>{fmt(r.A.uA, 4)}</td><td>{fmt(r.uCal, 4)}</td><td>{fmt(r.uRes, 4)}</td>{T.key === "pol" && <td>{fmt(r.uPF, 4)}</td>}<td>{fmt(r.uc, 4)}</td><td>{fmt(r.U, 4)}</td>
                   <td className="ca-strong">{r.complete ? `${fmt(r.Ur, r.dec)} ${T.unit}` : "–"}</td></tr></tbody>
               </table>
@@ -235,7 +236,7 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
             <p className="ca-small ca-muted">
               {r.B ? <>Calibration: {r.B.text} → U/k = {fmt(r.B.u, 4)} {T.instUnit}</> : "Calibration: ยังไม่ได้เลือกใบรับรอง"}
               {T.key === "pol" && r.B && <> · × c = 26/(100 × {fmt(r.rho, 5)}) = {fmt(r.c, 4)} (ρ ที่ {fmt(r.brixUsed, 2)} %Brix)</>}
-              {T.key === "fiber" && <> · ชั่ง 3 ครั้ง (M0, M1, M2): √[2(100/M1 · u)² + (%F/M1 · u)²]</>}
+              {T.key === "fiber" && <> · ชั่ง 3 ครั้ง (ถุงผ้า M0, ก่อนอบ M1, หลังอบ M2): u·√[(100/m)² + (%F/m)² + ((100−%F)/m)²]</>}
               <> · Resolution: d/(2√3) = {r.d}/3.4641 = {fmt(r.uR, 4)} {T.instUnit}</>
               {T.key === "pol" && <> · Pol factor: %Pol × (dρ/dBrix)/ρ × u_c[Brix]</>}
             </p>
