@@ -14,6 +14,7 @@ import {
   VERIFICATION_REQUIRED_FROM, criteriaOf,
 } from "./calc.js";
 import { printLf068, printCheckLog, VERIFY_REASONS } from "./report.js";
+import TrendChart from "./TrendChart.jsx";
 import {
   LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable, newIntermediateCheckFor,
   saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm, dailyCheckPoints, LF069_REPORTS,
@@ -120,7 +121,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
         </>) : (<>
           <button className={`ca-nav ${["overview", "instrument", "edit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "overview" })}><LayoutGrid size={17} /> ภาพรวมและทะเบียน</button>
           <button className={`ca-nav ${page.name === "dailyAll" ? "on" : ""}`} onClick={() => go({ name: "dailyAll" })}><ClipboardCheck size={17} /> Daily check (ทุกเครื่อง)</button>
-          <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน (LF-069)</button>
+          <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน</button>
           <div className="ca-side-foot">{me ? `ผู้ใช้: ${me}` : ""}<br />ข้อมูลชุดเดียวกับ LabTrack</div>
         </>)}
       </nav>
@@ -393,6 +394,7 @@ function InstrumentPage({ instrument: e, rounds, selectedKey, onBack, onSelect, 
             </ol>
           ) : <p className="ca-muted">ยังไม่มีใบรับรองของเครื่องนี้{guest ? "" : ' — กด "บันทึกรอบสอบเทียบใหม่"'}</p>}
         </section>
+        {rounds.length > 0 && <TrendChart rounds={rounds} instrument={e} />}
         {sel && <RoundView key={sel.key} round={sel} instrument={e} isLatest={rounds[0]?.key === sel.key} readOnly={guest} onEdit={() => onEdit(sel.key)} onDownload={onDownload} />}
       </>)}
 
@@ -893,6 +895,10 @@ div.ca-tl{cursor:default}.ca-tl.on{background:#E3EFFA}
 .ca-tabs button.on{border-bottom-color:var(--teal);color:var(--teal-dark);font-weight:700}
 .ca-lt{min-width:0}
 .ca-toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#0B2A4A;color:#fff;border-radius:12px;padding:12px 18px;font-size:14px;display:flex;gap:8px;align-items:center;z-index:50}
+.ca-tip{position:absolute;width:220px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12.5px;line-height:1.5;box-shadow:0 6px 18px rgba(11,42,74,.12);pointer-events:none}
+.ca-legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12.5px;color:var(--muted);padding:2px 0 0 74px}
+.ca-legend span{display:inline-flex;align-items:center;gap:6px}.ca-legend i{display:inline-block;width:12px;height:12px;border-radius:50%}
+.ca-legend i.dash{width:18px;height:0;border-radius:0;border-top:2px dashed}
 .ca-hide-sm{}
 @media (max-width:640px){.ca-hide-sm{display:none}.ca-pill{white-space:normal}}
 @media (max-width:760px){.ca-side{border-right:none;border-bottom:1px solid var(--line);flex-direction:row;flex-wrap:wrap;padding:10px}.ca-brand{padding:0 8px 0 0}.ca-nav-group,.ca-side-foot{display:none}.ca-main{padding:16px 12px 64px}.ca-steps{grid-template-columns:1fr}.ca-span2{grid-column:auto}}

@@ -72,7 +72,7 @@ export function UncertaintyList({ reports, certificates, equipment, onNew, onOpe
   return (
     <div className="ca-stack">
       <header className="ca-head">
-        <div><h1>ความไม่แน่นอนของการวัด (LF-069)</h1><p className="ca-muted">รายงานประจำปีของวิธีทดสอบ Brix, Pol และ Fibre · กรอกผลทดสอบซ้ำและเลือกใบรับรอง ระบบคำนวณให้ทั้งหมด</p></div>
+        <div><h1>ความไม่แน่นอนของการวัด</h1><p className="ca-muted">รายงานประจำปีของวิธีทดสอบ Brix, Pol และ Fibre · กรอกผลทดสอบซ้ำและเลือกใบรับรอง ระบบคำนวณให้ทั้งหมด</p></div>
         <button className="ca-btn ca-btn-primary" onClick={onNew}><Plus size={16} /> สร้างรายงานปีใหม่</button>
       </header>
       {legacyCount > 0 && (
