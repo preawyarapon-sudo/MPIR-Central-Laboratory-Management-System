@@ -15032,5 +15032,5 @@ const S = {
 export {
   CSS as LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable,
   newIntermediateCheckFor, saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm,
-  mpirDailyCheckPoints as dailyCheckPoints,
+  mpirDailyCheckPoints as dailyCheckPoints, LF069_REPORTS,
 };
