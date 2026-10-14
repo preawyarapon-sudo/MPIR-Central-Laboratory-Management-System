@@ -75,3 +75,41 @@ export function printLf068(round, instrument) {
   w.document.open(); w.document.write(lf068Html(round, instrument)); w.document.close();
   return true;
 }
+
+/* ---------- monthly Daily / Intermediate check log (signed on paper) ---------- */
+// rows: [{ date, time, item, standard, unit, reading, pass, by, note }] for daily;
+// IC rows: [{ date, item, standard, mean, bias, range, result, by, note }].
+export function checkLogHtml({ instrument, monthLabel, kind, rows }) {
+  const daily = kind === "daily";
+  const title = daily ? "บันทึกการตรวจสอบเครื่องมือประจำวัน (Daily check)" : "บันทึกการตรวจสอบระหว่างใช้งาน (Intermediate check)";
+  const head = daily
+    ? "<tr><th>วันที่</th><th>เวลา</th><th>รายการ</th><th>ค่ามาตรฐาน</th><th>ค่าที่อ่านได้</th><th>ผล</th><th>ผู้ตรวจ</th><th>หมายเหตุ</th></tr>"
+    : "<tr><th>วันที่</th><th>รายการ</th><th>ค่าอ้างอิง</th><th>ค่าเฉลี่ย (หลังแก้)</th><th>Bias</th><th>ช่วงยอมรับ</th><th>ผล</th><th>ผู้ตรวจ</th><th>หมายเหตุ</th></tr>";
+  const res = (ok, txt) => `<td class="${ok === false || txt === "FAIL" ? "f" : ok === true || txt === "PASS" ? "p" : ""}">${txt === "WARNING" ? "เฝ้าระวัง" : ok === true || txt === "PASS" ? "ผ่าน" : ok === false || txt === "FAIL" ? "ไม่ผ่าน" : "–"}</td>`;
+  const body = rows.length ? rows.map(r => daily
+    ? `<tr><td>${esc(fmtDate(r.date))}</td><td>${esc(r.time)}</td><td>${esc(r.item)}</td><td>${esc(r.standard ?? "")} ${esc(r.unit || "")}</td><td>${esc(r.reading ?? "")}</td>${res(r.pass)}<td>${esc(r.by)}</td><td>${esc(r.note)}</td></tr>`
+    : `<tr><td>${esc(fmtDate(r.date))}</td><td>${esc(r.item)}</td><td>${esc(r.standard ?? "")}</td><td>${esc(r.mean ?? "")}</td><td>${esc(r.bias ?? "")}</td><td>${esc(r.range ?? "")}</td>${res(null, r.result)}<td>${esc(r.by)}</td><td>${esc(r.note)}</td></tr>`).join("")
+    : `<tr><td colspan="9">ไม่มีบันทึกในเดือนนี้</td></tr>`;
+  const nFail = rows.filter(r => r.pass === false || r.result === "FAIL").length;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(instrument.code || instrument.name)} ${esc(monthLabel)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>@page{size:A4;margin:10mm 12mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#111;margin:0}
+table{border-collapse:collapse;width:100%}td,th{border:.6pt solid #222;padding:2.5pt 4pt;text-align:center}th{background:#E8EEF3;font-weight:600;font-size:8.8pt}
+.hd td{text-align:left}.t{text-align:center !important;font-weight:700;font-size:13pt}.l{background:#F4F7F9;font-weight:600;width:28mm}
+.p{color:#1E7A4A;font-weight:700}.f{color:#B42318;font-weight:700}.sig{margin-top:14pt}.sig td{border:none;width:50%;height:56pt;vertical-align:bottom}
+.line{border-bottom:.6pt dotted #333;margin:0 24pt 4pt;height:26pt}.note{font-size:8.2pt;color:#333;margin-top:4pt}</style></head><body>
+<table class="hd"><tr><td class="t" colspan="4">${title}</td></tr>
+<tr><td class="l">เครื่องมือ</td><td>${esc([instrument.code, instrument.name].filter(Boolean).join(" — "))}</td><td class="l">ประจำเดือน</td><td>${esc(monthLabel)}</td></tr>
+<tr><td class="l">ยี่ห้อ / รุ่น / S/N</td><td>${esc([instrument.brand, instrument.model, instrument.serialNo && `S/N ${instrument.serialNo}`].filter(Boolean).join(" · "))}</td><td class="l">สรุป</td><td>${rows.length} รายการ · ไม่ผ่าน ${nFail}</td></tr></table>
+<table style="margin-top:6pt">${head}${body}</table>
+${nFail ? `<div class="note">มีรายการไม่ผ่าน — ดำเนินการตาม MPIR-LP-012 และบันทึกเลขที่ NC ในหมายเหตุ</div>` : ""}
+<table class="sig"><tr><td><div class="line"></div>ผู้ทบทวน (TM/QM)<br>วันที่ ........./........./.........</td><td><div class="line"></div>ผู้อนุมัติ (Lab manager)<br>วันที่ ........./........./.........</td></tr></table>
+<div class="note">พิมพ์จากระบบ LabTrack เมื่อ ${esc(new Date().toLocaleString("th-TH"))} · ฉบับที่ลงนามเก็บตามระบบเอกสาร</div>
+<script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
+}
+export function printCheckLog(args) {
+  const w = window.open("", "_blank");
+  if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return false; }
+  w.document.open(); w.document.write(checkLogHtml(args)); w.document.close();
+  return true;
+}
