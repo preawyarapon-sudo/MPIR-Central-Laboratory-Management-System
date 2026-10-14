@@ -276,54 +276,26 @@ export default function App() {
   // skip the login wall entirely and drop straight into a single-page view
   // of LabTrack (Daily check, or read-only equipment info/history) — no
   // other tab, no other page, and no account created.
-  const guestTab = !session ? guestLinkTab() : null;
-  if (guestTab) {
-    const isView = guestTab === "equipmentView";
+  // Scanned equipment QR code (?tab=dailyCheck&equip=<id> or
+  // ?tab=equipmentView&equip=<id>) — the printed codes stay the same, they
+  // now open the calibration app. No staff login (or a booking-only login):
+  // guest mode = Daily check form / read-only instrument info, as before.
+  const qrTab = guestLinkTab();
+  if (qrTab) {
+    const params = new URLSearchParams(window.location.search);
+    const equip = params.get("equip") || "";
+    const asGuest = !session || session.role === "booking";
+    const initial = qrTab === "dailyCheck"
+      ? (asGuest ? { name: "guestDaily", instrumentId: equip } : { name: "instrument", instrumentId: equip, tab: "daily", openDaily: true })
+      : { name: "instrument", instrumentId: equip, tab: "rounds" };
     return (
-      <div style={styles.page} className="appPage">
-        <style>{`
-          @media (max-width: 640px) {
-            .appPage { padding: 10px 10px 18px !important; }
-            .appTopbar { padding: 8px 10px !important; }
-          }
-        `}</style>
-        <div style={styles.topbar} className="appTopbar">
-          <div style={styles.brand}>
-            <img src="/logo.png" alt="MPIR Central Lab" style={styles.logo} />
-            <div>
-              <div style={styles.brandName}>MPIR Central Lab</div>
-              <div style={styles.brandSub}>
-                {isView ? "ข้อมูลเครื่องมือ · โหมดผู้เยี่ยมชม (ไม่ต้องเข้าสู่ระบบ)" : "Daily check · โหมดผู้เยี่ยมชม (ไม่ต้องเข้าสู่ระบบ)"}
-              </div>
-            </div>
-          </div>
-          <div style={styles.userBox}>
-            <button
-              onClick={() => {
-                const url = new URL(window.location.href);
-                url.searchParams.delete("tab");
-                url.searchParams.delete("equip");
-                url.searchParams.delete("scale");
-                url.searchParams.delete("meter");
-                window.location.href = url.toString();
-              }}
-              style={{ ...styles.logoutBtn, width: "auto", padding: "7px 12px", gap: 6 }}
-              title="เข้าสู่ระบบด้วยบัญชีของคุณ"
-            >
-              เข้าสู่ระบบ
-            </button>
-          </div>
-        </div>
-        <div style={styles.content}>
-          <LabTrackApp
-            restrictToDailyCheck={!isView}
-            restrictToEquipmentView={isView}
-            currentUsername=""
-            currentDisplayName="ผู้เยี่ยมชม (สแกน QR)"
-            canApprove={false}
-          />
-        </div>
-      </div>
+      <CalibrationApp guest={asGuest} initial={equip || qrTab === "dailyCheck" ? initial : null}
+        currentUsername={session?.username || ""} currentDisplayName={session?.name || ""}
+        onLogin={asGuest ? () => {
+          const url = new URL(window.location.href);
+          ["tab", "equip", "scale", "meter"].forEach(k => url.searchParams.delete(k));
+          window.location.href = url.toString();
+        } : null} />
     );
   }
 
