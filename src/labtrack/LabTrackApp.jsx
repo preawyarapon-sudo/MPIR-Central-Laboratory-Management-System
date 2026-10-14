@@ -1603,7 +1603,7 @@ const REQUEST_ANALYSIS_LINK = { key: "requestAnalysis", label: "ขอรับ�
 // Short labels for the phone bottom bar (the sidebar keeps the full names).
 const BOTTOM_NAV_SHORT = {
   analysisTracking: "งานวิเคราะห์", requestAnalysis: "ขอรับบริการ", bookings: "จอง/ยืม", usageCalendar: "ปฏิทิน",
-  catalog: "เครื่องมือ", dailyCheck: "ตรวจเช็ค", calibrationApp: "แอพสอบเทียบ", calibrationRecords: "สอบเทียบเดิม", consumables: "พัสดุ", purchase: "ใบขอซื้อ",
+  catalog: "เครื่องมือ", dailyCheck: "ตรวจเช็ค", calibrationApp: "Instrument Assurance", calibrationRecords: "สอบเทียบเดิม", consumables: "พัสดุ", purchase: "ใบขอซื้อ",
 };
 const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
@@ -1626,7 +1626,7 @@ const NAV = [
   // The calibration app opens in its own browser tab (/?app=calibration, see
   // src/calibration). The former hub stays reachable while Intermediate
   // check and Uncertainty move over.
-  { key: "calibrationApp", label: "แอพสอบเทียบ", icon: FileCheck2, parent: "equipment", external: "/?app=calibration" },
+  { key: "calibrationApp", label: "Instrument Assurance System", icon: FileCheck2, parent: "equipment", external: "/?app=calibration" },
   // Hidden from the menu (hidden: true) but still reachable by URL
   // (/?tab=calibrationRecords) from the calibration app's links, for
   // Intermediate check, Uncertainty and the one-time import of old data.
@@ -4067,7 +4067,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
             <Field label="%Brix วัดได้จริง"><input type="number" step="any" style={S.input} value={f.brixReading} onChange={set("brixReading")} /></Field>
             <Field label="เกณฑ์ที่ยอมรับ (%Brix)" plain>
               <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
-                {refractometerResult.min !== null ? `${refractometerResult.min} – ${refractometerResult.max} °Brix` : "ยังไม่ได้ตั้งค่า — ตั้งเกณฑ์ที่แอพสอบเทียบ › แท็บ Daily check"}
+                {refractometerResult.min !== null ? `${refractometerResult.min} – ${refractometerResult.max} °Brix` : "ยังไม่ได้ตั้งค่า — ตั้งเกณฑ์ที่ Instrument Assurance System › แท็บ Daily check"}
                 {refractometerResult.source === "sheet01" && (
                   <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix (จาก Tolerance ในบันทึกการสอบเทียบ)</div>
                 )}
