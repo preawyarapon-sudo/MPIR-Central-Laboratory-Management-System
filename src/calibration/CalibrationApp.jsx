@@ -1,4 +1,4 @@
-// LabTrack · แอพสอบเทียบเครื่องมือ
+// LabTrack · Instrument Assurance System
 // Opens in its own browser tab (/?app=calibration) with its own menu, on the
 // same Firebase data and login as LabTrack. One calibration round =
 // certificate table + verification (LF-068) + download the report; signing
@@ -59,6 +59,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
     const lists = await Promise.all(KEYS.map(loadKey));
     setData(Object.fromEntries(KEYS.map((k, i) => [k, lists[i]])));
   }
+  useEffect(() => { const prev = document.title; document.title = "Instrument Assurance System"; return () => { document.title = prev; }; }, []);
   useEffect(() => { reload().finally(() => setLoading(false)); }, []);
   useEffect(() => { if (!toast.text) return; const t = setTimeout(() => setToastState({ text: "", ms: 3500 }), toast.ms); return () => clearTimeout(t); }, [toast]);
 
@@ -107,10 +108,10 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
     <div className="ca-root">
       <style>{LABTRACK_CSS}</style>
       <style>{CSS}</style>
-      <nav className="ca-side" aria-label="เมนูแอพสอบเทียบ">
+      <nav className="ca-side" aria-label="เมนู Instrument Assurance System">
         <div className="ca-brand">
           <img src="/logo.png" alt="" width="36" height="36" />
-          <div><div className="ca-brand-name">LabTrack</div><div className="ca-brand-sub">สอบเทียบเครื่องมือ</div></div>
+          <div><div className="ca-brand-name">Instrument Assurance System</div><div className="ca-brand-sub">MPIR Central Lab</div></div>
         </div>
         {guest ? (<>
           <div className="ca-side-foot" style={{ marginTop: 0 }}>โหมดผู้เยี่ยมชม (สแกน QR) · ไม่ต้องเข้าสู่ระบบ</div>
@@ -172,7 +173,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                   const byId = Object.fromEntries(old.map(c => [c.id, c]));
                   const logged = points.map(p => {
                     const prev = byId[p.id];
-                    if (!prev) return { ...p, editLog: [{ at, by: me, changes: [{ field: "สร้าง", from: "", to: "บันทึกจากแอพสอบเทียบ" }] }] };
+                    if (!prev) return { ...p, editLog: [{ at, by: me, changes: [{ field: "สร้าง", from: "", to: "บันทึกจาก Instrument Assurance System" }] }] };
                     const changes = ["referenceValue", "indication", "reportedU", "adjustmentStatus", "rangeId", "certificateNo", "calibrationDate", "provider", "certTolerance"]
                       .filter(f => String(prev[f] ?? "") !== String(p[f] ?? "")).map(f => ({ field: f, from: prev[f] ?? "", to: p[f] ?? "" }));
                     return changes.length ? { ...p, editLog: [...(prev.editLog || []), { at, by: me, changes }] } : { ...p, editLog: prev.editLog };
