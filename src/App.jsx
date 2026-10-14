@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Wrench, FlaskConical, Lock, LogOut } from "lucide-react";
 import LabTrackApp from "./labtrack/LabTrackApp.jsx";
 import AnalysisApp from "./analysis/AnalysisApp.jsx";
+import CalibrationApp from "./calibration/CalibrationApp.jsx";
 
 const TABS = [
   { key: "labtrack", label: "จัดการห้องแล็บ", sub: "LabTrack", Icon: Wrench },
@@ -338,6 +339,12 @@ export default function App() {
   function logout() {
     localStorage.removeItem(SESSION_KEY);
     setSession(null);
+  }
+
+  // The calibration app runs in its own tab: /?app=calibration (opened from
+  // LabTrack's menu). Same login (session in localStorage) and same data.
+  if (!isBookingOnly && new URLSearchParams(window.location.search).get("app") === "calibration") {
+    return <CalibrationApp currentUsername={session.username} currentDisplayName={session.name} />;
   }
 
   return (
