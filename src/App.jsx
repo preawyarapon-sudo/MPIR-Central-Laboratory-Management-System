@@ -316,7 +316,9 @@ export default function App() {
   // The calibration app runs in its own tab: /?app=calibration (opened from
   // LabTrack's menu). Same login (session in localStorage) and same data.
   if (!isBookingOnly && new URLSearchParams(window.location.search).get("app") === "calibration") {
-    return <CalibrationApp currentUsername={session.username} currentDisplayName={session.name} />;
+    const equip = new URLSearchParams(window.location.search).get("equip");
+    return <CalibrationApp currentUsername={session.username} currentDisplayName={session.name}
+      initial={equip ? { name: "instrument", instrumentId: equip } : null} />;
   }
 
   return (
