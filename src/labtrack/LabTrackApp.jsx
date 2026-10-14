@@ -2512,10 +2512,10 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], onOpenCalibr
           <option value="warn">ใกล้ถึงรอบสอบเทียบ</option>
           <option value="danger">เลยกำหนดสอบเทียบ</option>
         </select>
-        <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
+        <button style={S.ghostBtn} onClick={() => setShowImport(true)} hidden>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), code: "", name: "", brand: "", model: "", serialNo: "", type: "", group: "", location: "", status: "active", lastCalibration: "", nextDue: "", intervalMonths: "", notes: "", imageUrl: "" })}>
+        <button style={S.primaryBtn} title="เพิ่มเครื่องมือที่ Instrument Assurance System" onClick={() => window.open(calibrationAppUrl() + "&new=1", "_blank")}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
@@ -2625,8 +2625,8 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], onOpenCalibr
           dailyChecks={dailyChecks.filter(c => c.equipmentId === selectedItem.id)}
           bookings={bookings.filter(b => b.equipmentId === selectedItem.id).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""))}
           onClose={() => setSelected(null)}
-          onEdit={() => { setEditing(selectedItem); setSelected(null); }}
-          onDelete={() => remove(selectedItem.id)}
+          onEdit={() => window.open(calibrationAppUrl(selectedItem.id) + "&edit=1", "_blank")}
+          onDelete={null}
           onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
           onSetAvailability={(disabled, reason, approver) => setAvailability(selectedItem.id, disabled, reason, approver)}
           onSetLabOnly={(on) => setLabOnly(selectedItem.id, on)}
@@ -3303,7 +3303,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
           {onSetLabOnly && item.status === "active" && (item.labOnly
             ? menuItem(CalendarCheck, "เปิดให้จอง/ยืม", () => onSetLabOnly(false))
             : menuItem(FlaskConical, "ใช้ในแลป · ไม่เปิดให้จอง/ยืม", () => onSetLabOnly(true)))}
-          {menuItem(Trash2, "ลบเครื่องมือ", () => setConfirmDelete(true), true)}
+          {onDelete && menuItem(Trash2, "ลบเครื่องมือ", () => setConfirmDelete(true), true)}
         </div>
       </>)}
     </div>
@@ -15049,4 +15049,5 @@ export {
   CSS as LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable,
   newIntermediateCheckFor, saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm,
   mpirDailyCheckPoints as dailyCheckPoints, LF069_REPORTS,
+  toDisplayImageUrl, driveFileId, isDriveFolderUrl, resolveEquipGroup, EQUIP_GROUP_LABEL, printAllEquipQR,
 };
