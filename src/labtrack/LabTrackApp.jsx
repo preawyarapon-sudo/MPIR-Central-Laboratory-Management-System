@@ -3564,7 +3564,7 @@ function ActivityForm({ initial, onCancel, onSave, onDelete = null }) {
 // and pass/fail are always computed at save time (never hand-typed), mirroring
 // how EquipmentTab auto-derives nextDue from lastCalibration + interval above.
 //
-// Standard weight groups + acceptance range, per form RDI-LF-041-03
+// Standard weight groups + acceptance range, per form MPIR-LF-041-03
 // (บันทึกตรวจสอบเครื่องชั่งประจำวัน / DAILY CHECK): น้ำหนัก 10/50/200 กรัม,
 // each accepted within ±0.01 g of its nominal value. A reading is "ผ่าน"
 // only when it falls inside [min, max] — computed automatically, never
@@ -5642,18 +5642,18 @@ function blankUncertaintyRow(instrumentId, budgetId = "") {
 // used to be stored per row with "the top row wins", so editing them on any
 // other row silently did nothing — now a save writes them to the whole budget.
 const BUDGET_LEVEL_KEYS = ["instrumentId", "testMethod", "parameter", "combinedK", "measuredValue", "reviewDate", "approvedBy", "preparedBy", "wiProcedure"];
-/* ---------- RDI-WI-08: การประเมินค่าความไม่แน่นอนของการวัด ----------
+/* ---------- MPIR-WI-008: การประเมินค่าความไม่แน่นอนของการวัด ----------
    The lab's own procedure: Type A = s/√n from repeated measurements,
    Type B = uncertainty from the calibration certificates of the instruments
    the test method uses, uc = √Σu², U = 2·uc (95 %). Reviewed once a year or
    whenever a calibration result changes (WI step 4). A budget built here is
    ordinary Sheet 05 rows (wiSource "A"/"B"), so the table and the Excel
    export keep working unchanged. */
-const WI08 = { code: "RDI-WI-08", k: 2 };
+const WI08 = { code: "MPIR-WI-008", k: 2 };
 const WI08_PARAMS = [
-  { key: "Brix", label: "บริกซ์ (Brix) ในน้ำอ้อย", unit: "%Brix", method: "RDI-WI-02" },
-  { key: "Pol", label: "โพล (Pol) ในน้ำอ้อย", unit: "%Pol", method: "RDI-WI-02" },
-  { key: "Fiber", label: "ไฟเบอร์ (Fiber) ในชานอ้อยย่อย", unit: "%Fiber", method: "RDI-WI-03" },
+  { key: "Brix", label: "บริกซ์ (Brix) ในน้ำอ้อย", unit: "%Brix", method: "MPIR-WI-002-06" },
+  { key: "Pol", label: "โพล (Pol) ในน้ำอ้อย", unit: "%Pol", method: "MPIR-WI-002-06" },
+  { key: "Fiber", label: "ไฟเบอร์ (Fiber) ในชานอ้อยย่อย", unit: "%Fiber", method: "MPIR-WI-003" },
 ];
 function parseReadings(text) {
   return String(text || "").split(/[\s,;]+/).map(x => x.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n));
@@ -5801,7 +5801,7 @@ function WiBudgetWizard({ instrument, allEquipment, allCertificates, existing = 
         </Field>
         {f.paramKey === "other" && <Field label="ชื่อพารามิเตอร์"><input style={S.input} value={f.parameter} onChange={set("parameter")} placeholder="เช่น Moisture" /></Field>}
         <Field label="หน่วย"><input style={S.input} value={f.unit} onChange={set("unit")} placeholder="เช่น %Brix" /></Field>
-        <Field label="วิธีทดสอบ"><input style={S.input} value={f.testMethod} onChange={set("testMethod")} placeholder="เช่น RDI-WI-02" /></Field>
+        <Field label="วิธีทดสอบ"><input style={S.input} value={f.testMethod} onChange={set("testMethod")} placeholder="เช่น MPIR-WI-002-06" /></Field>
       </>),
     },
     {
@@ -5878,7 +5878,7 @@ function WiBudgetWizard({ instrument, allEquipment, allCertificates, existing = 
         <Field label="วันที่ประเมิน"><input type="date" style={S.input} value={f.reviewDate} onChange={set("reviewDate")} /></Field>
         <Field label="ผู้อนุมัติ (Lab Manager)">
           <input style={S.input} value={f.approvedBy} onChange={set("approvedBy")} placeholder="เว้นว่างได้ ถ้ายังไม่อนุมัติ" />
-          <span style={WIZ_HINT}>ผลอนุมัติบันทึกในแบบฟอร์ม RDI-LF-069</span>
+          <span style={WIZ_HINT}>ผลอนุมัติบันทึกในแบบฟอร์ม MPIR-LF-069</span>
         </Field>
       </>),
     },
@@ -7216,7 +7216,7 @@ function CalibrationGuideModal({ onClose }) {
         );
       })}
       <div style={{ marginTop: 4, fontSize: 11, color: "var(--muted)" }}>
-        อ้างอิงโครงสร้างจากแบบฟอร์ม MPIR Calibration Record (RDI-LF-070) — ค่า Tolerance และ Decision Rule ที่ตั้งไว้เป็นข้อเสนอตั้งต้น ต้องได้รับอนุมัติจาก Lab manager ก่อนใช้ตัดสินผลจริง
+        อ้างอิงโครงสร้างจากแบบฟอร์ม MPIR Calibration Record (MPIR-LF-070) — ค่า Tolerance และ Decision Rule ที่ตั้งไว้เป็นข้อเสนอตั้งต้น ต้องได้รับอนุมัติจาก Lab manager ก่อนใช้ตัดสินผลจริง
       </div>
     </Modal>
   );
@@ -7563,7 +7563,7 @@ h3{margin:7pt 0 3pt;font-size:10.4pt}h3 b{background:#1F4E6E;color:#fff;border-r
 .l{background:#F4F7F9;font-weight:600;width:30mm;font-size:8.8pt}.n td{text-align:center}.o{margin-right:10pt;white-space:nowrap}
 .p{color:#1E7A4A;font-weight:700}.f{color:#B42318;font-weight:700}.note{font-size:8.2pt;color:#333}.sig td{height:40pt;vertical-align:bottom;text-align:center}
 .pb{page-break-before:always}.ft{margin-top:8pt;font-size:7.6pt;color:#444;border-top:.5pt solid #999;padding-top:2pt;display:flex;justify-content:space-between}</style></head><body>
-${[1, 2].map(pg => `<div class="${pg === 2 ? "pb" : ""}"><table class="hd"><tr><td class="brand" rowspan="2">MITR PHOL<br>Innovation &amp;<br>Research Center</td><td class="t" rowspan="2">รายงานผลการทวนสอบเครื่องมือ<small>${v.legacy ? "ข้อมูลจากรายงานเดิม RDI-LF-068 Rev.00 คำนวณผลใหม่โดย LabTrack" : "Equipment Verification Report — ก่อนนำเข้าใช้งาน / นำกลับมาใช้งาน"}</small></td><td class="m">รหัสเอกสาร: <b>MPIR-LF-068</b> Rev.: <b>01</b></td></tr><tr><td class="m">หน้า ${pg} / 2 · เลขที่รายงาน: <b>${esc(v.reportNo || "-")}</b></td></tr></table>
+${[1, 2].map(pg => `<div class="${pg === 2 ? "pb" : ""}"><table class="hd"><tr><td class="brand" rowspan="2">MITR PHOL<br>Innovation &amp;<br>Research Center</td><td class="t" rowspan="2">รายงานผลการทวนสอบเครื่องมือ<small>${v.legacy ? "ข้อมูลจากรายงานเดิม MPIR-LF-068 Rev.00 คำนวณผลใหม่โดย LabTrack" : "Equipment Verification Report — ก่อนนำเข้าใช้งาน / นำกลับมาใช้งาน"}</small></td><td class="m">รหัสเอกสาร: <b>MPIR-LF-068</b> Rev.: <b>01</b></td></tr><tr><td class="m">หน้า ${pg} / 2 · เลขที่รายงาน: <b>${esc(v.reportNo || "-")}</b></td></tr></table>
 ${pg === 1 ? `<h3><b>1</b>ข้อมูลเครื่องมือ</h3><table><tr><td class="l">รหัสเครื่องมือ</td><td>${esc(instrument.code)}</td><td class="l">ชื่อเครื่องมือ</td><td>${esc(instrument.name)}</td></tr>
 <tr><td class="l">ยี่ห้อ / รุ่น</td><td>${esc([instrument.brand, instrument.model].filter(Boolean).join(" / "))}</td><td class="l">Serial No.</td><td>${esc(instrument.serialNo)}</td></tr>
 <tr><td class="l">ตำแหน่งที่ตั้ง</td><td>${esc(instrument.location)}</td><td class="l">ความละเอียด (d)</td><td>${esc(v.resolution)} ${unit}</td></tr>
@@ -7653,7 +7653,7 @@ function VerificationCard({ instrument, cert, verification, canApprove, currentD
 }
 
 
-// ---------- Historical verification reports RDI-LF-068 Rev.00 (2566–2568) ----------
+// ---------- Historical verification reports MPIR-LF-068 Rev.00 (2566–2568) ----------
 // Transcribed from the signed paper reports so the history lives in LabTrack.
 // Only the raw data are taken over (certificate reference/indication/U and the
 // verification readings); every Error, SD, u and Error + U is recalculated by
@@ -7677,16 +7677,16 @@ const LF068_INSTRUMENTS = {
   th200: { label: "เทอร์โมมิเตอร์ 0–200 °C", make: "SK (Liquid in glass, 1 °C)", serials: [], codes: ["MPIR-090"], unit: "°C", tol: null, param: "Temperature", kw: /^$/ },
 };
 const LF068_REPORTS = {
-  "2566": { date: "2023-10-06", label: "RDI-LF-068 Rev.00 ลงวันที่ 6 ต.ค. 2566", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์" },
-  "2567": { date: "2024-10-04", label: "RDI-LF-068 Rev.00 ลงวันที่ 4 ต.ค. 2567", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์" },
-  "2568": { date: "2025-09-24", label: "RDI-LF-068 Rev.00 ลงวันที่ 24 ก.ย. 2568", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางสาวรัตนา เมืองมนตรี" },
+  "2566": { date: "2023-10-06", label: "MPIR-LF-068 Rev.00 ลงวันที่ 6 ต.ค. 2566", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์" },
+  "2567": { date: "2024-10-04", label: "MPIR-LF-068 Rev.00 ลงวันที่ 4 ต.ค. 2567", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์" },
+  "2568": { date: "2025-09-24", label: "MPIR-LF-068 Rev.00 ลงวันที่ 24 ก.ย. 2568", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางสาวรัตนา เมืองมนตรี" },
   // certificates that no LF-068 report covered — imported without sign-offs
   "2568c": { date: "", label: "ใบรับรองปี 2568 (ไม่อยู่ในรายงาน LF-068)", by: "", approver: "" },
   "2566c": { date: "", label: "ใบรับรองปี 2566 (ไม่อยู่ในรายงาน LF-068)", by: "", approver: "" },
 };
 const LF068_STD_WEIGHT_LS = "ตุ้มน้ำหนักมาตรฐาน LS Model 1G-1000G";
 const LF068_STD_WEIGHT_MT = "ตุ้มน้ำหนักมาตรฐาน METTLER TOLEDO S/N 11119514 (MPIR-023, OIML F1)";
-const LF068_STD_BRIX = "สารมาตรฐาน 20.00 %Brix เตรียมตาม RDI-WI-02";
+const LF068_STD_BRIX = "สารมาตรฐาน 20.00 %Brix เตรียมตาม MPIR-WI-002-06";
 const LF068_STD_QUARTZ = "Quartz Control Plate No. 5578, Reference no. PTB 4.21-4090851 วัดที่ 882.60 nm (สอบเทียบ 16 ต.ค. 63)";
 const LF068_STD_THERMO = "Thermometer แบบกระเปาะ Serial Number 651";
 const LF068_OVEN_METHOD = "วัดอุณหภูมิ Silicone Oil (Lab grade) 50 mL ในบีกเกอร์ 100 mL วางในตู้อบที่ 105 °C 9 ตำแหน่งแบบสุ่ม 2 ชั่วโมง";
@@ -7747,12 +7747,12 @@ const LF068_LEGACY = [
   { inst: "bal2", report: "2567", reason: "out",
     cert: { no: "M24-4835A", date: "2024-10-04", pts: [[0, 0, 0, 0.0067], [300, 300, 0, 0.0067], [600, 600, 0, 0.0068], [900, 900.01, 0, 0.0071],
       [1200, 1200.01, 0.01, 0.0074], [1500, 1500.01, 0.01, 0.0079], [1800, 1800.01, 0.01, 0.0083], [2100, 2100.02, 0.01, 0.0088]] },
-    ver: { date: "2024-10-03", std: LF068_STD_WEIGHT_LS, wi: "RDI-WI-002",
+    ver: { date: "2024-10-03", std: LF068_STD_WEIGHT_LS, wi: "MPIR-WI-002",
       pts: [[10, ["10.00", "10.01", "10.01", "10.00", "10.00", "9.99", "10.00", "10.00", "9.99", "10.00"]],
         [50, ["50.00", "50.01", "49.99", "50.00", "50.00", "50.00", "50.00", "50.00", "50.00", "50.00"]], [200, _w200]] } },
   { inst: "refr", report: "2567", reason: "out",
     cert: { no: "CB-044-24", date: "2024-08-22", pts: [[10.001, 9.99, 0.010, 0.080], [19.996, 19.99, 0.010, 0.080], [29.998, 29.99, 0.010, 0.100], [50.002, 49.98, 0.020, 0.100], [60.000, 59.99, 0.010, 0.110]] },
-    ver: { date: "2023-09-26", dateNote: "ต้นฉบับระบุ “ดำเนินการ 26 กันยายน 2566”", std: LF068_STD_BRIX, wi: "RDI-WI-02",
+    ver: { date: "2023-09-26", dateNote: "ต้นฉบับระบุ “ดำเนินการ 26 กันยายน 2566”", std: LF068_STD_BRIX, wi: "MPIR-WI-002-06",
       pts: [[20.00, ["20.12", "20.06", "20.11", "20.05", "20.07", "20.07", "20.07", "20.07", "20.1", "20.08"]]] } },
   { inst: "pol", report: "2567", reason: "new",
     cert: { no: "CB-043-24", date: "2024-08-22", pts: [
@@ -7772,7 +7772,7 @@ const LF068_LEGACY = [
       refStd: "Standard weight set S/N 0094-51, Cert. 25M0531 (due 15-Jan-26)",
       note: "รายงาน LF-068 เดิมระบุวันที่ 4 ต.ค. 2567 และ U 0.0012 g — ตามใบรับรองจริง: 15 ก.ย. 2568, U 0.012 g, 11 จุดถึง 3000 g",
       pts: _rng(0, 300, 11).map(v => [v, v, 0, 0.012]) },
-    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, stdCert: "25M9514", wi: "RDI-WI-002", note: NOTE_WT25,
+    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, stdCert: "25M9514", wi: "MPIR-WI-002", note: NOTE_WT25,
       pts: [[WT25[10][0], ["9.99", "10.01", "10.01", "10.00", "10.00", "9.99", "10.00", "10.00", "9.99", "10.00"], WT25[10][1]],
         [WT25[50][0], ["50.00", "50.01", "49.99", "50.00", "50.00", "50.00", "50.01", "50.00", "50.00", "50.00"], WT25[50][1]],
         [WT25[200][0], _w200, WT25[200][1]]] } },
@@ -7783,7 +7783,7 @@ const LF068_LEGACY = [
       note: "จุด 20 %Brix ไม่อยู่ในขอบข่ายการรับรอง NSC-ONSC (หมายเหตุในใบรับรอง)",
       pts: [[5, 5.10, null, 0.077, "", "b"], [10, 10.09, null, 0.083, "", "b"], [20, 20.05, null, 0.083, "", "b"], [30, 30.06, null, 0.093, "", "b"], [50, 50.02, null, 0.11, "", "b"], [60, 60.11, null, 0.11, "", "b"],
         [5, 4.99, 0.010, 0.077, "", "a"], [10, 10.00, 0.000, 0.083, "", "a"], [20, 19.97, 0.030, 0.083, "", "a"], [30, 29.98, 0.020, 0.093, "", "a"], [50, 50.01, -0.010, 0.11, "", "a"], [60, 59.97, null, 0.11, "", "a"]] },
-    ver: { date: "2023-09-26", dateNote: "ต้นฉบับระบุ “ดำเนินการ 26 กันยายน 2566”", std: LF068_STD_BRIX, wi: "RDI-WI-02",
+    ver: { date: "2023-09-26", dateNote: "ต้นฉบับระบุ “ดำเนินการ 26 กันยายน 2566”", std: LF068_STD_BRIX, wi: "MPIR-WI-002-06",
       pts: [[20.00, ["20.02", "20.06", "19.98", "20.05", "20.07", "20.07", "20.06", "20.07", "20.1", "20.04"]]] } },
   { inst: "pol", report: "2568", reason: "new",
     cert: { no: "CB-048-25", date: "2025-08-07", issueDate: "2025-08-13", provider: "Global Dynamics (Thailand) Ltd.", accred: LK_ACCRED[0],
@@ -7813,7 +7813,7 @@ const LF068_LEGACY = [
   { inst: "bal4", report: "2568", reason: "out",
     cert: { no: "25M9517", date: "2025-09-15", pts: [[0, 0, 0, 0.000082], [0.1, 0.1, 0, 0.000083], [0.2, 0.2, 0, 0.000083], [0.5, 0.5, 0, 0.000083], [1, 1, 0, 0.000084],
       [2, 2, 0, 0.000084], [5, 5, 0, 0.000086], [10, 10, 0, 0.000089], [20, 20, 0, 0.000094]] },
-    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, stdCert: "25M9514", wi: "RDI-WI-002", note: NOTE_WT25,
+    ver: { date: "2025-09-23", std: LF068_STD_WEIGHT_MT, stdCert: "25M9514", wi: "MPIR-WI-002", note: NOTE_WT25,
       pts: [[WT25[10][0], ["10.0003", "10.0003", "10.0002", "10.0002", "9.9998", "10.0001", "10.0002", "9.9999", "10.0001", "10.0003"], WT25[10][1]],
         [WT25[50][0], ["50.0004", "50.0002", "49.9998", "50.0001", "50.0002", "50.0000", "49.9997", "50.0002", "49.9999", "50.0003"], WT25[50][1]]] } },
   // ---------------- 2568 certificates outside the LF-068 reports ----------------
@@ -7847,7 +7847,7 @@ function guessLegacyInstrument(def, equipment) {
 function terCriteriaPatch(def) {
   if (def.tol == null) return {};
   return { certTolerance: def.tol, certToleranceType: "absolute", certDecisionRule: "conservative", certGuardBandFactor: "",
-    certCriteriaBasis: "เกณฑ์ TER: ค่าความผิดพลาดรวม |Error| + U ≤ เกณฑ์การยอมรับ (ตาม RDI-LF-068)" };
+    certCriteriaBasis: "เกณฑ์ TER: ค่าความผิดพลาดรวม |Error| + U ≤ เกณฑ์การยอมรับ (ตาม MPIR-LF-068)" };
 }
 // Builds what the import would write, from the user's instrument mapping and
 // (possibly corrected) dates. Pure — the preview and the import use the same.
@@ -7934,15 +7934,15 @@ function planLegacyImport({ equipment, certificates, verifications, mapping, dat
   return { newCerts, newVers, critIds, notes };
 }
 
-// ---------- Historical uncertainty reports RDI-LF-069 Rev.00 (2566–2568) ----------
+// ---------- Historical uncertainty reports MPIR-LF-069 Rev.00 (2566–2568) ----------
 // Only the raw data are taken over (the 7 repeat results of each test and which
-// calibration certificate applied); LabTrack rebuilds every budget per RDI-WI-08:
+// calibration certificate applied); LabTrack rebuilds every budget per MPIR-WI-008:
 // u_A = s/√n in the result's own unit, u_B = U/k from the certificate, converted
 // to the result's unit with a sensitivity coefficient, uc = √Σ(c·u)², U = 2·uc.
 // The paper forms used RSD/√n (a ratio) next to absolute values, took the
 // certificates' expanded U as a standard uncertainty, and added °Z / g directly
 // to %Pol / %Fiber — so the paper U values are kept only for comparison.
-const LF069_FIBER_M1 = 100; // g of bagasse per test — assumed (RDI-WI-03); edit c if different
+const LF069_FIBER_M1 = 100; // g of bagasse per test — assumed (MPIR-WI-003); edit c if different
 // Apparent density of sucrose solution at 20 °C (g/mL) for the Pol factor
 const SUCROSE_DENSITY_20C = [[10, 1.03814], [15, 1.06104], [20, 1.08096], [25, 1.10356]];
 function sucroseDensity20(brix) {
@@ -7951,22 +7951,22 @@ function sucroseDensity20(brix) {
   return t[t.length - 1][1];
 }
 const LF069_REPORTS = [
-  { key: "2566a", date: "2023-04-28", label: "RDI-LF-069 Rev.00 ลงวันที่ 28 เม.ย. 2566 (Polarimeter ใหม่)", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
+  { key: "2566a", date: "2023-04-28", label: "MPIR-LF-069 Rev.00 ลงวันที่ 28 เม.ย. 2566 (Polarimeter ใหม่)", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
     note: "ใช้น้ำอ้อย/ชานอ้อยแช่แข็ง (ไม่มีอ้อยเข้าหีบ)",
     brix: [14.97, 14.98, 14.97, 14.96, 14.95, 14.96, 14.93], pol: [10.58, 10.58, 10.60, 10.59, 10.59, 10.56, 10.57], fiber: [11.20, 12.05, 12.30, 12.32, 12.36, 11.31, 10.90],
     certs: { refr: { no: "", U: 0.11, note: "ใบรับรอง Refractometer ปี 2564 ไม่อยู่ในระบบ — ใช้ U 0.11 ตามรายงาน (ถือเป็น U ที่ k = 2)" }, pol: { no: "CB-007-23-0" },
       bal2: { no: "", U: 0.011, note: "ใบรับรองเครื่องชั่งปี 2564 ไม่อยู่ในระบบ — ใช้ U 0.011 g ตามรายงาน" } },
     paper: { Brix: "0.232 (ตาราง 0.220)", Pol: "0.042", Fiber: "0.0548" } },
-  { key: "2566b", date: "2023-10-06", label: "RDI-LF-069 Rev.00 ลงวันที่ 6 ต.ค. 2566", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
+  { key: "2566b", date: "2023-10-06", label: "MPIR-LF-069 Rev.00 ลงวันที่ 6 ต.ค. 2566", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
     note: "ค่า Brix ทั้ง 7 ซ้ำเท่ากัน (14.94) — s = 0",
     brix: [14.94, 14.94, 14.94, 14.94, 14.94, 14.94, 14.94], pol: [10.57, 10.56, 10.57, 10.56, 10.57, 10.57, 10.57], fiber: [15.09, 16.36, 15.67, 16.27, 16.01, 16.04, 16.12],
     certs: { refr: { no: "23CH1188" }, pol: { no: "CB-007-23-0" }, bal2: { no: "23M9468" } },
     paper: { Brix: "0.215", Pol: "0.042", Fiber: "0.0316" } },
-  { key: "2567", date: "2024-10-04", label: "RDI-LF-069 Rev.00 ลงวันที่ 4 ต.ค. 2567", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
+  { key: "2567", date: "2024-10-04", label: "MPIR-LF-069 Rev.00 ลงวันที่ 4 ต.ค. 2567", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
     brix: [16.94, 16.95, 16.97, 16.95, 16.92, 16.91, 16.90], pol: [13.07, 13.07, 13.03, 13.04, 13.04, 13.04, 13.04], fiber: [15.71, 16.13, 16.06, 15.57, 15.03, 13.85, 15.73],
     certs: { refr: { no: "CB-044-24" }, pol: { no: "CB-043-24" }, bal2: { no: "M24-4835A" } },
     paper: { Brix: "0.188", Pol: "0.040", Fiber: "0.0413" } },
-  { key: "2568", date: "2025-09-24", label: "RDI-LF-069 Rev.00 ลงวันที่ 24 ก.ย. 2568", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางสาวรัตนา เมืองมนตรี",
+  { key: "2568", date: "2025-09-24", label: "MPIR-LF-069 Rev.00 ลงวันที่ 24 ก.ย. 2568", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางสาวรัตนา เมืองมนตรี",
     brix: [17.27, 17.24, 17.24, 17.26, 17.22, 17.23, 17.23], pol: [14.37, 14.37, 14.36, 14.37, 14.37, 14.37, 14.37], fiber: [11.86, 12.48, 12.70, 12.75, 13.14, 12.97, 12.71],
     certs: { refr: { no: "AT071/25" }, pol: { no: "CB-048-25" }, bal2: { no: "25M9520" } },
     paper: { Brix: "0.22", Pol: "0.040", Fiber: "0.0342 (สรุป 0.0413)" } },
@@ -7983,9 +7983,9 @@ function planLf069Budgets({ equipment, certificates, budgets, mapping, currentDi
   for (const r of LF069_REPORTS) {
     const be = r.key.slice(0, 4);
     const tests = [
-      { param: "Brix", unit: "%Brix", method: "RDI-WI-02", inst: "refr", readings: r.brix },
-      { param: "Pol", unit: "%Pol", method: "RDI-WI-02", inst: "pol", readings: r.pol },
-      { param: "Fiber", unit: "%Fiber", method: "RDI-WI-03", inst: "bal2", readings: r.fiber },
+      { param: "Brix", unit: "%Brix", method: "MPIR-WI-002-06", inst: "refr", readings: r.brix },
+      { param: "Pol", unit: "%Pol", method: "MPIR-WI-002-06", inst: "pol", readings: r.pol },
+      { param: "Fiber", unit: "%Fiber", method: "MPIR-WI-003", inst: "bal2", readings: r.fiber },
     ];
     for (const t of tests) {
       const instId = mapping[t.inst];
@@ -8059,7 +8059,7 @@ function LegacyVerificationImport({ equipment, certificates, verifications, budg
       <div style={{ ...S.modalBox, maxWidth: 1040, padding: 20, marginTop: 20 }} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>นำเข้าใบรับรอง ผลทวนสอบ และความไม่แน่นอนย้อนหลัง (ปี 2566–2568)</div>
         <div style={{ fontSize: 12.5, color: "var(--muted)", margin: "2px 0 12px" }}>
-          ใบรับรองปี 2566–2567 จากรายงาน RDI-LF-068 · ใบรับรองปี 2568 จากใบรับรองต้นฉบับของผู้สอบเทียบ · ค่าที่อ่านได้จากการทวนสอบปี 2567–2568 (ไม่ใช้ค่าทวนสอบปี 2566) · LabTrack คำนวณ Error, U และผลตัดสินใหม่ทั้งหมด · ตั้งเกณฑ์ TER (|Error| + U ≤ เกณฑ์การยอมรับ, Conservative) ให้ใบรับรองทุกใบของเครื่องที่เลือก รวมใบปีปัจจุบัน
+          ใบรับรองปี 2566–2567 จากรายงาน MPIR-LF-068 · ใบรับรองปี 2568 จากใบรับรองต้นฉบับของผู้สอบเทียบ · ค่าที่อ่านได้จากการทวนสอบปี 2567–2568 (ไม่ใช้ค่าทวนสอบปี 2566) · LabTrack คำนวณ Error, U และผลตัดสินใหม่ทั้งหมด · ตั้งเกณฑ์ TER (|Error| + U ≤ เกณฑ์การยอมรับ, Conservative) ให้ใบรับรองทุกใบของเครื่องที่เลือก รวมใบปีปัจจุบัน
         </div>
         <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>1. จับคู่เครื่องมือ</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "8px 14px" }}>
@@ -12411,7 +12411,7 @@ function link(url, text) {
 }
 const ACTIVITY_TYPE_LABEL = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ", dailyCheck: "Daily check" };
 
-/* ================= MPIR Calibration Record export (RDI-LF-070) =================
+/* ================= MPIR Calibration Record export (MPIR-LF-070) =================
    Generates an .xlsx workbook matching the structure of "MPIR Calibration
    Record and Acceptance Evaluation Form" (11 sheets) so the lab can hand off
    or archive a document in the exact format their QM team already reviews.
@@ -12426,9 +12426,9 @@ const MPIR_DOC = {
   "sheets": [
     {
       "name": "01_Instrument_Master",
-      "subtitle": "ทะเบียนเครื่องมือวัด / Instrument Master Register   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "ทะเบียนเครื่องมือวัด / Instrument Master Register   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): ทะเบียนกลางของเครื่องมือทุกรายการ พร้อมเกณฑ์ความคลาดเคลื่อนสูงสุดที่ยอมรับได้ (MPE/Tolerance) แหล่งอ้างอิงของเกณฑ์ Decision Rule ที่อนุมัติ ความถี่สอบเทียบ และคะแนนความเสี่ยง — เป็นแหล่งอ้างอิงหลักของทุก Sheet",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
       "headers": [
         "รหัสเครื่องมือ\nInstrument ID",
         "ชื่อเครื่องมือ\nInstrument Name",
@@ -12472,9 +12472,9 @@ const MPIR_DOC = {
     },
     {
       "name": "02_Certificate_Data",
-      "subtitle": "ตารางถ่ายโอนข้อมูลจากใบรับรองการสอบเทียบ / Calibration Certificate Data Transfer   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "ตารางถ่ายโอนข้อมูลจากใบรับรองการสอบเทียบ / Calibration Certificate Data Transfer   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): บันทึกข้อมูลจากใบรับรองการสอบเทียบรายจุดสอบเทียบ (หนึ่งแถวต่อหนึ่ง Calibration Point) รองรับใบรับรองที่รายงานผลต่างรูปแบบกัน และตรวจสอบความครบถ้วนของใบรับรองโดยอัตโนมัติ",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | โครงสร้างคอลัมน์ของ Sheet นี้ใช้เป็น JSON schema สำหรับการดึงข้อมูลจากไฟล์ PDF ใบรับรองใน web app ได้โดยตรง",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | โครงสร้างคอลัมน์ของ Sheet นี้ใช้เป็น JSON schema สำหรับการดึงข้อมูลจากไฟล์ PDF ใบรับรองใน web app ได้โดยตรง",
       "headers": [
         "รหัสรายการ\nRecord ID",
         "รหัสเครื่องมือ\nInstrument ID",
@@ -12522,9 +12522,9 @@ const MPIR_DOC = {
     },
     {
       "name": "03_Acceptance_Criteria",
-      "subtitle": "เกณฑ์การยอมรับผลการสอบเทียบและการตัดสิน / Acceptance Criteria and Decision   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "เกณฑ์การยอมรับผลการสอบเทียบและการตัดสิน / Acceptance Criteria and Decision   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): เปรียบเทียบผลจากใบรับรอง (Sheet 02) กับเกณฑ์ที่ห้องปฏิบัติการกำหนด (Sheet 01) ตาม Decision Rule ที่เลือก แล้วกำหนดสถานะ PASS / CONDITIONAL PASS / WARNING / FAIL / REVIEW REQUIRED / INCOMPLETE DATA",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | ห้ามสรุปว่าเครื่องมือ \"ผ่าน\" จากข้อความ Statement of Conformity ในใบรับรองเพียงอย่างเดียว",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | ห้ามสรุปว่าเครื่องมือ \"ผ่าน\" จากข้อความ Statement of Conformity ในใบรับรองเพียงอย่างเดียว",
       "headers": [
         "ลำดับ\nIndex",
         "รหัสเครื่องมือ\nInstrument ID",
@@ -12560,9 +12560,9 @@ const MPIR_DOC = {
     },
     {
       "name": "04_Daily_Intermediate_Check",
-      "subtitle": "บันทึกผล Daily Check / Intermediate Check / Performance Check / Daily, Intermediate and Performance Check Record   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "บันทึกผล Daily Check / Intermediate Check / Performance Check / Daily, Intermediate and Performance Check Record   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): บันทึกผลการตรวจสอบระหว่างรอบการสอบเทียบ โดยเกณฑ์เตือน (Warning Limit) และเกณฑ์ดำเนินการ (Action Limit) คำนวณจาก Tolerance ที่อนุมัติใน Sheet 01 และ Correction จากใบรับรองใน Sheet 02",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance | การกำหนดเกณฑ์แบบอื่นต้องได้รับอนุมัติจาก Lab manager และบันทึกใน Sheet 09",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | Warning Limit = ค่าอ้างอิง ± (2/3 × Tolerance) | Action Limit = ค่าอ้างอิง ± Tolerance | การกำหนดเกณฑ์แบบอื่นต้องได้รับอนุมัติจาก Lab manager และบันทึกใน Sheet 09",
       "headers": [
         "วันที่ตรวจสอบ\nCheck Date",
         "รหัสเครื่องมือ\nInstrument ID",
@@ -12602,9 +12602,9 @@ const MPIR_DOC = {
     },
     {
       "name": "05_Uncertainty_Input",
-      "subtitle": "ข้อมูลนำเข้าสำหรับการประเมินความไม่แน่นอนของการวัด / Measurement Uncertainty Input   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "ข้อมูลนำเข้าสำหรับการประเมินความไม่แน่นอนของการวัด / Measurement Uncertainty Input   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): รวบรวมองค์ประกอบความไม่แน่นอน (Uncertainty components) แยกตาม Budget ID เพื่อคำนวณ Combined standard uncertainty และ Expanded uncertainty ตาม Measurement Model ของแต่ละวิธีทดสอบ",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | คำเตือน: ค่าความไม่แน่นอนจากใบรับรองการสอบเทียบไม่ควรนำมาใช้แทนค่าความไม่แน่นอนของวิธีทดสอบทั้งหมดโดยตรง แต่ควรใช้เป็นองค์ประกอบหนึ่งใน Uncertainty Budget ตาม Measurement Model",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | คำเตือน: ค่าความไม่แน่นอนจากใบรับรองการสอบเทียบไม่ควรนำมาใช้แทนค่าความไม่แน่นอนของวิธีทดสอบทั้งหมดโดยตรง แต่ควรใช้เป็นองค์ประกอบหนึ่งใน Uncertainty Budget ตาม Measurement Model",
       "headers": [
         "รหัส Uncertainty Budget\nBudget ID",
         "รหัสเครื่องมือ\nInstrument ID",
@@ -12636,9 +12636,9 @@ const MPIR_DOC = {
     },
     {
       "name": "06_Trend_Analysis",
-      "subtitle": "การติดตามแนวโน้มการเปลี่ยนแปลงของเครื่องมือ / Trend and Drift Analysis   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "การติดตามแนวโน้มการเปลี่ยนแปลงของเครื่องมือ / Trend and Drift Analysis   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): เปรียบเทียบผลการสอบเทียบข้ามรอบ เพื่อประเมินอัตราการเลื่อน (Drift) คาดการณ์เวลาที่เครื่องมือจะหลุดเกณฑ์ และใช้เป็นหลักฐานประกอบการทบทวนความถี่การสอบเทียบ",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
       "headers": [
         "รหัสเครื่องมือ\nInstrument ID",
         "พารามิเตอร์\nParameter",
@@ -12662,9 +12662,9 @@ const MPIR_DOC = {
     },
     {
       "name": "07_Equipment_Status",
-      "subtitle": "สรุปสถานะเครื่องมือ / Equipment Status Summary   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "สรุปสถานะเครื่องมือ / Equipment Status Summary   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): สรุปสถานะรายเครื่องมือจากผลการสอบเทียบ (Sheet 03) ผลการตรวจสอบระหว่างรอบ (Sheet 04) และคะแนนความเสี่ยง (Sheet 01) ใช้เป็นข้อมูลสำหรับติดฉลากสถานะเครื่องมือและการทบทวนระบบ",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | คอลัมน์ \"สถานะการใช้งาน\" เป็นการตัดสินใจของห้องปฏิบัติการ ไม่ใช่ผลคำนวณ ต้องมีผู้อนุมัติกำกับทุกครั้ง",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager | คอลัมน์ \"สถานะการใช้งาน\" เป็นการตัดสินใจของห้องปฏิบัติการ ไม่ใช่ผลคำนวณ ต้องมีผู้อนุมัติกำกับทุกครั้ง",
       "headers": [
         "รหัสเครื่องมือ\nInstrument ID",
         "พารามิเตอร์\nParameter",
@@ -12689,9 +12689,9 @@ const MPIR_DOC = {
     },
     {
       "name": "08_Action_and_Impact",
-      "subtitle": "การดำเนินการและการประเมินผลกระทบ / Action and Impact Evaluation   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "การดำเนินการและการประเมินผลกระทบ / Action and Impact Evaluation   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): บันทึกการดำเนินการเมื่อผลการสอบเทียบหรือผลการตรวจสอบระหว่างรอบไม่เป็นไปตามเกณฑ์ รวมถึงการประเมินผลกระทบย้อนหลังต่อผลการทดสอบที่รายงานไปแล้ว ตาม ISO/IEC 17025:2017 ข้อ 7.10 และ 8.7",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
       "headers": [
         "เลขที่รายการ\nAction ID",
         "วันที่พบ\nDate Identified",
@@ -12719,9 +12719,9 @@ const MPIR_DOC = {
     },
     {
       "name": "09_Approval_Record",
-      "subtitle": "บันทึกการทบทวนและอนุมัติ / Review and Approval Record   |   รหัสเอกสาร (Doc. Code): RDI-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
+      "subtitle": "บันทึกการทบทวนและอนุมัติ / Review and Approval Record   |   รหัสเอกสาร (Doc. Code): MPIR-LF-070 (เสนอไว้ รอกำหนดโดย MPIR)   |   Revision: 00 (ฉบับร่าง / Draft)   |   Effective Date: รอกำหนดโดย MPIR   |   หน้า (Page): ___ / ___   |   ระยะเวลาจัดเก็บ (Retention): 6 ปี หรือรอกำหนดโดย MPIR",
       "purpose": "วัตถุประสงค์ (Purpose): บันทึกการอนุมัติเกณฑ์การยอมรับ Decision Rule การใช้ Correction ความถี่การตรวจสอบ และการอนุมัติให้ใช้งานเครื่องมือ เพื่อใช้เป็นหลักฐานสำหรับการตรวจประเมินภายในและการตรวจประเมินจากหน่วยรับรอง",
-      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
+      "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
       "headers": [
         "เลขที่การอนุมัติ\nApproval ID",
         "วันที่\nDate",
@@ -12746,7 +12746,7 @@ const MPIR_DOC = {
   ],
   "lookup": {
     "title": "MPIR Central Laboratory, Mitr Phol Innovation and Research Center  |  แบบบันทึกและประเมินเกณฑ์การสอบเทียบเครื่องมือวัด (Calibration Record and Acceptance Evaluation Form)",
-    "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก RDI-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
+    "legend": "คำอธิบายสี: เหลือง = ช่องกรอกข้อมูล (Input) | เขียวอ่อน = ช่องคำนวณอัตโนมัติ ห้ามพิมพ์ทับ (Auto-calculated) | วันที่ใช้รูปแบบ DD/MM/YYYY | ข้อมูลใบรับรองถอดจากใบรับรองจริง 4 ฉบับ (AT102/26, AT103/26, AT104/26, AT105/26) และข้อมูลทำซ้ำถอดจาก MPIR-LF-069 Rev.00 (04/10/2567) | ค่า Tolerance และ Decision Rule เป็นข้อเสนอตั้งต้น ต้องอนุมัติโดย Lab manager",
     "headers": [
       "กลุ่มเครื่องมือ\n(LK_GROUP)",
       "ชนิดของเกณฑ์\n(LK_TOLTYPE)",
@@ -13664,7 +13664,7 @@ function ReportsTab({ equipment, setEquipment, activities, dailyChecks = [], che
 
   const txCount = consumables.reduce((sum, s) => sum + (s.transactions || []).length, 0);
 
-  // MPIR Calibration Record (RDI-LF-070) — single workbook, all 11 sheets,
+  // MPIR Calibration Record (MPIR-LF-070) — single workbook, all 11 sheets,
   // matching the lab's official calibration-record template. Kept as its
   // own panel (not a generic list-export card) since it produces one
   // multi-sheet document rather than one flat table.
@@ -13749,7 +13749,7 @@ function ReportsTab({ equipment, setEquipment, activities, dailyChecks = [], che
       <QRPrintPanel equipment={equipment} setEquipment={setEquipment} />
 
       <div style={{ ...S.panel, marginBottom: 20 }}>
-        <div style={S.panelHead}><ClipboardList size={16} color="var(--teal)" /><span style={S.panelTitle}>MPIR Calibration Record (RDI-LF-070)</span></div>
+        <div style={S.panelHead}><ClipboardList size={16} color="var(--teal)" /><span style={S.panelTitle}>MPIR Calibration Record (MPIR-LF-070)</span></div>
         <div style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 12px" }}>
           ส่งออกไฟล์ Excel ตามฟอร์แมตแบบบันทึกและประเมินเกณฑ์การสอบเทียบเครื่องมือวัดของ MPIR ทั้ง 11 Sheet ในไฟล์เดียว —
           กรอกข้อมูลอัตโนมัติจากแอปนี้ทุก Sheet — ทะเบียนเครื่องมือ {equipment.length} รายการ, ใบรับรอง {certificates.length} จุดสอบเทียบ,
