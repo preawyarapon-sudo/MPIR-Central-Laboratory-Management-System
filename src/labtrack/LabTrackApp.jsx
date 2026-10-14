@@ -13,6 +13,10 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database";
 import * as XLSX from "xlsx";
 
+// Lab decision (14 ต.ค. 2569): no approvals inside the app — checks and
+// reports are downloaded and signed on paper, then filed.
+const IN_APP_APPROVAL = false;
+
 /* ---------- Lab Analysis Tracker (separate Firebase project) ----------
    Read-only connection into the analysis-job database so the dashboard can
    show live "ล่าช้า / ใกล้ครบกำหนด / งานที่ต้องทำ" counts. This app and the
@@ -1608,7 +1612,9 @@ const NAV = [
   // Sub-link of "equipment" in the desktop sidebar (see nested rendering
   // below) — still its own top-level tab/URL, and stays a normal flat
   // item in the mobile bottom bar since that layout has no room to nest.
-  { key: "dailyCheck", label: "ตรวจเช็คเครื่องมือ", icon: CheckCircle2, parent: "equipment" },
+  // Daily check now lives in the calibration app (QR links open it there);
+  // kept here only as a hidden, URL-reachable tab.
+  { key: "dailyCheck", label: "ตรวจเช็คเครื่องมือ", icon: CheckCircle2, parent: "equipment", hidden: true },
   // The former 8 separate sub-tabs (certificates, acceptance,
   // intermediateCheck, uncertainty, trend, equipStatus, actionImpact,
   // approvalRecord) are now one menu entry: pick an instrument first, then
@@ -1621,7 +1627,10 @@ const NAV = [
   // src/calibration). The former hub stays reachable while Intermediate
   // check and Uncertainty move over.
   { key: "calibrationApp", label: "แอพสอบเทียบ", icon: FileCheck2, parent: "equipment", external: "/?app=calibration" },
-  { key: "calibrationRecords", label: "สอบเทียบ (หน้าเดิม)", icon: FileCheck2, parent: "equipment" },
+  // Hidden from the menu (hidden: true) but still reachable by URL
+  // (/?tab=calibrationRecords) from the calibration app's links, for
+  // Intermediate check, Uncertainty and the one-time import of old data.
+  { key: "calibrationRecords", label: "สอบเทียบ (หน้าเดิม)", icon: FileCheck2, parent: "equipment", hidden: true },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
@@ -1885,7 +1894,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   // already hides itself whenever visibleNav.length <= 1, so this alone
   // keeps a guest confined to their single page (Daily check, or read-only
   // equipment history) with no other tab ever a click away.
-  const visibleNav = (restrictToDailyCheck || restrictToEquipmentView) ? [] : restrictToBooking ? RESTRICTED_NAV : NAV;
+  const visibleNav = (restrictToDailyCheck || restrictToEquipmentView) ? [] : restrictToBooking ? RESTRICTED_NAV : NAV.filter(n => !n.hidden);
   // One-shot: when set, the Bookings tab (once mounted) jumps straight to
   // this sub-view instead of its default "pending" — used by the global
   // "ต้องคืน" reminder banner below so restricted accounts land exactly on
@@ -3179,7 +3188,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
       return {
         key: "d" + c.id, cat: "dailyCheck", icon: FlaskConical, title: "Daily check",
         when: `${fmtDate(c.date)}${c.time ? ` ${c.time}` : ""}`, sortKey: (c.date || "") + (c.time || ""),
-        who: c.checkedBy || "-", whoSub: c.approved ? `อนุมัติโดย ${c.approvedByName || "-"}` : "รออนุมัติ",
+        who: c.checkedBy || "-", whoSub: IN_APP_APPROVAL ? (c.approved ? `อนุมัติโดย ${c.approvedByName || "-"}` : "รออนุมัติ") : "",
         status: c.result === true ? { text: "ผ่าน", ...DONE } : c.result === false ? { text: "ไม่ผ่าน", fg: "#C6493B", bg: "#FDF1F1", line: "#F2C4C4" } : null,
         note: h.value != null ? { tone: "info", icon: ClipboardCheck, text: <>ผลตรวจ : <b>{h.value}{h.unit ? ` ${h.unit}` : ""}</b></> } : null,
         onOpen: () => openDaily(c, true),
@@ -3962,7 +3971,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
       : isEc ? ecResult.pass
       : true));
   const canSave = readingsComplete && preUseChosen && f.checkedBy.trim().length > 0;
-  const showApproveButton = isExisting && canApprove && !f.approved;
+  const showApproveButton = IN_APP_APPROVAL && isExisting && canApprove && !f.approved;
 
   return (
     <Modal onClose={onCancel} title={`บันทึกการตรวจสอบ${equip ? ` — ${equip.code}` : ""}`} wide>
@@ -4058,7 +4067,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
             <Field label="%Brix วัดได้จริง"><input type="number" step="any" style={S.input} value={f.brixReading} onChange={set("brixReading")} /></Field>
             <Field label="เกณฑ์ที่ยอมรับ (%Brix)" plain>
               <div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
-                {refractometerResult.min !== null ? `${refractometerResult.min} – ${refractometerResult.max} °Brix` : "ยังไม่ได้ตั้งค่า — ตั้ง Tolerance ที่ บันทึกการสอบเทียบ › ข้อมูลเครื่องมือ"}
+                {refractometerResult.min !== null ? `${refractometerResult.min} – ${refractometerResult.max} °Brix` : "ยังไม่ได้ตั้งค่า — ตั้งเกณฑ์ที่แอพสอบเทียบ › แท็บ Daily check"}
                 {refractometerResult.source === "sheet01" && (
                   <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix (จาก Tolerance ในบันทึกการสอบเทียบ)</div>
                 )}
@@ -4127,6 +4136,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
         ) : null}
 
         <Field label="ผู้ตรวจสอบ"><input style={S.input} value={f.checkedBy} onChange={set("checkedBy")} /></Field>
+{IN_APP_APPROVAL && (
         <Field label="การอนุมัติ">
           <div style={{
             ...S.input, display: "flex", alignItems: "center", gap: 6,
@@ -4138,6 +4148,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
               : "ยังไม่อนุมัติ"}
           </div>
         </Field>
+        )}
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.remarks} onChange={set("remarks")} /></Field>
       </div>
 
@@ -8762,7 +8773,7 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
   });
   const color = (res) => res === "PASS" ? "var(--green)" : res === "WARNING" ? "var(--amber)" : res === "FAIL" ? "var(--red)" : "var(--muted)";
   const RESULT_TH = { PASS: "ผ่าน", FAIL: "ไม่ผ่าน", WARNING: "WARNING" };
-  const COLS = ["วันที่", "ประเภท", "รายละเอียด", "ผล", "ผู้ตรวจ / อนุมัติ", ...(readOnly ? [] : [""])];
+  const COLS = ["วันที่", "ประเภท", "รายละเอียด", "ผล", IN_APP_APPROVAL ? "ผู้ตรวจ / อนุมัติ" : "ผู้ตรวจ", ...(readOnly ? [] : [""])];
   const kindBadge = (k) => k === "daily"
     ? <span style={{ ...S.tag, borderColor: "#8FB4DF", color: "#1D5FB8", background: "#EAF2FD" }}>Daily</span>
     : <span style={{ ...S.tag, borderColor: "#C4B2E6", color: "#6A43B5", background: "#F3EEFB" }}>Intermediate</span>;
@@ -8823,7 +8834,7 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
                         </td>
                         <td style={{ ...S.td, fontSize: 12.5 }}>
                           {c.checkedBy || "-"}
-                          {r.kind === "daily" && (c.approved
+                          {IN_APP_APPROVAL && r.kind === "daily" && (c.approved
                             ? <div style={{ fontSize: 11, color: "var(--green)" }}>อนุมัติแล้ว{c.approvedByName ? ` · ${c.approvedByName}` : ""}</div>
                             : <div style={{ fontSize: 11, color: "var(--amber)" }}>รออนุมัติ</div>)}
                           {r.kind === "ic" && c.reviewedBy && <div style={{ fontSize: 11, color: "var(--muted)" }}>ทบทวน: {c.reviewedBy}</div>}
@@ -8892,7 +8903,7 @@ function checkLogRows(dailyChecks, icChecks, instrument) {
       const h = checkHeadline(c);
       return { kind: "daily", key: c.id, rec: c, date: c.date || "", time: c.time || "", value: h.value, unit: h.unit,
         result: c.result === true ? "PASS" : c.result === false ? "FAIL" : "-", by: c.checkedBy || "",
-        approval: c.approved ? `อนุมัติแล้ว${c.approvedByName ? ` · ${c.approvedByName}` : ""}` : "รออนุมัติ", approved: !!c.approved, note: c.remarks || "" };
+        approval: !IN_APP_APPROVAL ? "" : c.approved ? `อนุมัติแล้ว${c.approvedByName ? ` · ${c.approvedByName}` : ""}` : "รออนุมัติ", approved: !!c.approved, note: c.remarks || "" };
     }),
     ...icChecks.map(c => {
       const calc = calcIntermediateCheck(c, instrument);
@@ -8985,7 +8996,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
           <thead><tr>
             {head("date", "วันที่ / เวลา")}{head("kind", "ประเภท")}{head("value", `ผลการตรวจ${unitLabel ? ` (${unitLabel})` : ""}`)}
-            {head("result", "สถานะ")}{head("by", "ผู้ตรวจ / อนุมัติ")}{head("note", "หมายเหตุ")}{head(null, "การจัดการ")}
+            {head("result", "สถานะ")}{head("by", IN_APP_APPROVAL ? "ผู้ตรวจ / อนุมัติ" : "ผู้ตรวจ")}{head("note", "หมายเหตุ")}{head(null, "การจัดการ")}
           </tr></thead>
           <tbody>
             {sorted.map(r => {
@@ -9293,7 +9304,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
                           ? <span style={{ display: "inline-block", background: lastStyle.fg, color: "#fff", borderRadius: 999, padding: M ? "1px 10px" : "5px 18px", fontSize: M ? 12 : 15, fontWeight: 700 }}>{lastStyle.th}</span>
                           : <span style={{ fontSize: statValue, fontWeight: 700, color: "var(--muted)" }}>-</span>}
                       </div>
-                      <div style={{ fontSize: M ? 11 : 13, color: "var(--muted)", marginTop: M ? 3 : 6, ...(M ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}) }}>{last ? [lastStyle.note, last.kind === "daily" ? (last.approved ? "อนุมัติแล้ว" : "รออนุมัติ") : ""].filter(Boolean).join(" · ") : ""}</div>
+                      <div style={{ fontSize: M ? 11 : 13, color: "var(--muted)", marginTop: M ? 3 : 6, ...(M ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}) }}>{last ? [lastStyle.note, IN_APP_APPROVAL && last.kind === "daily" ? (last.approved ? "อนุมัติแล้ว" : "รออนุมัติ") : ""].filter(Boolean).join(" · ") : ""}</div>
                     </div>
                   </div>
                   <div style={statCard(plannedToday && doneToday < plannedToday ? "#FFF9EE" : "#F3FBF6", plannedToday && doneToday < plannedToday ? "#F6DDB0" : "#D3EEDF")}>
@@ -9401,7 +9412,7 @@ function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, 
   // new, unsaved form has nothing yet for an approver to sign off on. It
   // must be saved first (by whoever performed the check), then a separate
   // authorized approver account opens it and approves.
-  const showApproveButton = isExisting && canApprove && !f.approved;
+  const showApproveButton = IN_APP_APPROVAL && isExisting && canApprove && !f.approved;
 
   return (
     <Modal onClose={onCancel} title={`บันทึกการตรวจสอบ${scale ? ` — ${scale.code}` : ""}`} wide>
@@ -9466,6 +9477,7 @@ function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, 
         </Field>
 
         <Field label="ผู้ตรวจสอบ"><input style={S.input} value={f.checkedBy} onChange={set("checkedBy")} /></Field>
+{IN_APP_APPROVAL && (
         <Field label="การอนุมัติ">
           <div style={{
             ...S.input, display: "flex", alignItems: "center", gap: 6,
@@ -9477,6 +9489,7 @@ function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, 
               : "ยังไม่อนุมัติ"}
           </div>
         </Field>
+        )}
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.remarks} onChange={set("remarks")} /></Field>
       </div>
 
@@ -9752,9 +9765,9 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
                     <Tag color={c.result ? "var(--green)" : "var(--red)"}>{c.result ? "ผ่าน" : "ไม่ผ่าน"}</Tag>
-                    {c.approved
+                    {IN_APP_APPROVAL && (c.approved
                       ? <Tag color="var(--green)">อนุมัติแล้ว</Tag>
-                      : <Tag color="var(--amber)">รออนุมัติ</Tag>}
+                      : <Tag color="var(--amber)">รออนุมัติ</Tag>)}
                   </div>
                 </div>
               ))}
@@ -15012,4 +15025,12 @@ const S = {
   },
 
   toast: { position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", background: "var(--ink)", color: "#fff", padding: "9px 18px", borderRadius: 30, fontSize: 12.5, zIndex: 60 },
+};
+
+// Shared with the calibration app (src/calibration), which hosts Daily check
+// and Intermediate check in its own tab.
+export {
+  CSS as LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable,
+  newIntermediateCheckFor, saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm,
+  mpirDailyCheckPoints as dailyCheckPoints,
 };
