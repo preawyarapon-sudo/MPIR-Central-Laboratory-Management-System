@@ -1599,7 +1599,7 @@ const REQUEST_ANALYSIS_LINK = { key: "requestAnalysis", label: "ขอรับ�
 // Short labels for the phone bottom bar (the sidebar keeps the full names).
 const BOTTOM_NAV_SHORT = {
   analysisTracking: "งานวิเคราะห์", requestAnalysis: "ขอรับบริการ", bookings: "จอง/ยืม", usageCalendar: "ปฏิทิน",
-  catalog: "เครื่องมือ", dailyCheck: "ตรวจเช็ค", calibrationRecords: "สอบเทียบ", consumables: "พัสดุ", purchase: "ใบขอซื้อ",
+  catalog: "เครื่องมือ", dailyCheck: "ตรวจเช็ค", calibrationApp: "แอพสอบเทียบ", calibrationRecords: "สอบเทียบเดิม", consumables: "พัสดุ", purchase: "ใบขอซื้อ",
 };
 const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
@@ -1617,7 +1617,11 @@ const NAV = [
   // bundle and keeps its own separate entry above. Air-conditioning
   // equipment (ไม่ได้สอบเทียบ) is filtered out of the instrument picker
   // inside the hub itself.
-  { key: "calibrationRecords", label: "บันทึกการสอบเทียบ", icon: FileCheck2, parent: "equipment" },
+  // The calibration app opens in its own browser tab (/?app=calibration, see
+  // src/calibration). The former hub stays reachable while Intermediate
+  // check and Uncertainty move over.
+  { key: "calibrationApp", label: "แอพสอบเทียบ", icon: FileCheck2, parent: "equipment", external: "/?app=calibration" },
+  { key: "calibrationRecords", label: "สอบเทียบ (หน้าเดิม)", icon: FileCheck2, parent: "equipment" },
   { key: "items", label: "อุปกรณ์", icon: Box },
   { key: "bookings", label: "จอง/ยืมเครื่องมือ", icon: CalendarCheck },
   { key: "chemicals", label: "สารเคมี", icon: FlaskConical },
@@ -7903,10 +7907,111 @@ function planLegacyImport({ equipment, certificates, verifications, mapping, dat
   return { newCerts, newVers, critIds, notes };
 }
 
-function LegacyVerificationImport({ equipment, certificates, verifications, currentDisplayName, onCancel, onImport }) {
+// ---------- Historical uncertainty reports RDI-LF-069 Rev.00 (2566–2568) ----------
+// Only the raw data are taken over (the 7 repeat results of each test and which
+// calibration certificate applied); LabTrack rebuilds every budget per RDI-WI-08:
+// u_A = s/√n in the result's own unit, u_B = U/k from the certificate, converted
+// to the result's unit with a sensitivity coefficient, uc = √Σ(c·u)², U = 2·uc.
+// The paper forms used RSD/√n (a ratio) next to absolute values, took the
+// certificates' expanded U as a standard uncertainty, and added °Z / g directly
+// to %Pol / %Fiber — so the paper U values are kept only for comparison.
+const LF069_FIBER_M1 = 100; // g of bagasse per test — assumed (RDI-WI-03); edit c if different
+// Apparent density of sucrose solution at 20 °C (g/mL) for the Pol factor
+const SUCROSE_DENSITY_20C = [[10, 1.03814], [15, 1.06104], [20, 1.08096], [25, 1.10356]];
+function sucroseDensity20(brix) {
+  const t = SUCROSE_DENSITY_20C, b = Math.min(Math.max(brix, t[0][0]), t[t.length - 1][0]);
+  for (let i = 0; i < t.length - 1; i++) if (b <= t[i + 1][0]) return t[i][1] + (b - t[i][0]) / (t[i + 1][0] - t[i][0]) * (t[i + 1][1] - t[i][1]);
+  return t[t.length - 1][1];
+}
+const LF069_REPORTS = [
+  { key: "2566a", date: "2023-04-28", label: "RDI-LF-069 Rev.00 ลงวันที่ 28 เม.ย. 2566 (Polarimeter ใหม่)", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
+    note: "ใช้น้ำอ้อย/ชานอ้อยแช่แข็ง (ไม่มีอ้อยเข้าหีบ)",
+    brix: [14.97, 14.98, 14.97, 14.96, 14.95, 14.96, 14.93], pol: [10.58, 10.58, 10.60, 10.59, 10.59, 10.56, 10.57], fiber: [11.20, 12.05, 12.30, 12.32, 12.36, 11.31, 10.90],
+    certs: { refr: { no: "", U: 0.11, note: "ใบรับรอง Refractometer ปี 2564 ไม่อยู่ในระบบ — ใช้ U 0.11 ตามรายงาน (ถือเป็น U ที่ k = 2)" }, pol: { no: "CB-007-23-0" },
+      bal2: { no: "", U: 0.011, note: "ใบรับรองเครื่องชั่งปี 2564 ไม่อยู่ในระบบ — ใช้ U 0.011 g ตามรายงาน" } },
+    paper: { Brix: "0.232 (ตาราง 0.220)", Pol: "0.042", Fiber: "0.0548" } },
+  { key: "2566b", date: "2023-10-06", label: "RDI-LF-069 Rev.00 ลงวันที่ 6 ต.ค. 2566", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
+    note: "ค่า Brix ทั้ง 7 ซ้ำเท่ากัน (14.94) — s = 0",
+    brix: [14.94, 14.94, 14.94, 14.94, 14.94, 14.94, 14.94], pol: [10.57, 10.56, 10.57, 10.56, 10.57, 10.57, 10.57], fiber: [15.09, 16.36, 15.67, 16.27, 16.01, 16.04, 16.12],
+    certs: { refr: { no: "23CH1188" }, pol: { no: "CB-007-23-0" }, bal2: { no: "23M9468" } },
+    paper: { Brix: "0.215", Pol: "0.042", Fiber: "0.0316" } },
+  { key: "2567", date: "2024-10-04", label: "RDI-LF-069 Rev.00 ลงวันที่ 4 ต.ค. 2567", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางอนุทิน ปัทมะสุวรรณ์",
+    brix: [16.94, 16.95, 16.97, 16.95, 16.92, 16.91, 16.90], pol: [13.07, 13.07, 13.03, 13.04, 13.04, 13.04, 13.04], fiber: [15.71, 16.13, 16.06, 15.57, 15.03, 13.85, 15.73],
+    certs: { refr: { no: "CB-044-24" }, pol: { no: "CB-043-24" }, bal2: { no: "M24-4835A" } },
+    paper: { Brix: "0.188", Pol: "0.040", Fiber: "0.0413" } },
+  { key: "2568", date: "2025-09-24", label: "RDI-LF-069 Rev.00 ลงวันที่ 24 ก.ย. 2568", by: "นางสาวพิสิทธินี ชาปัญญา", approver: "นางสาวรัตนา เมืองมนตรี",
+    brix: [17.27, 17.24, 17.24, 17.26, 17.22, 17.23, 17.23], pol: [14.37, 14.37, 14.36, 14.37, 14.37, 14.37, 14.37], fiber: [11.86, 12.48, 12.70, 12.75, 13.14, 12.97, 12.71],
+    certs: { refr: { no: "AT071/25" }, pol: { no: "CB-048-25" }, bal2: { no: "25M9520" } },
+    paper: { Brix: "0.22", Pol: "0.040", Fiber: "0.0342 (สรุป 0.0413)" } },
+];
+// Rebuilds the LF-069 budgets as Sheet 05 rows. certificates = what the
+// certificate store will hold after this import (existing + new).
+function planLf069Budgets({ equipment, certificates, budgets, mapping, currentDisplayName }) {
+  const out = [], notes = [];
+  const certPoint = (instId, no, level) => {
+    const pts = typeBPointsOf(certificates, instId).filter(c => normCertNo(c.certificateNo) === normCertNo(no));
+    if (!pts.length) return null;
+    return pts.slice().sort((a, b) => Math.abs((numOrNull(a.calibrationPoint) ?? numOrNull(a.referenceValue) ?? 0) - level) - Math.abs((numOrNull(b.calibrationPoint) ?? numOrNull(b.referenceValue) ?? 0) - level))[0];
+  };
+  for (const r of LF069_REPORTS) {
+    const be = r.key.slice(0, 4);
+    const tests = [
+      { param: "Brix", unit: "%Brix", method: "RDI-WI-02", inst: "refr", readings: r.brix },
+      { param: "Pol", unit: "%Pol", method: "RDI-WI-02", inst: "pol", readings: r.pol },
+      { param: "Fiber", unit: "%Fiber", method: "RDI-WI-03", inst: "bal2", readings: r.fiber },
+    ];
+    for (const t of tests) {
+      const instId = mapping[t.inst];
+      if (!instId) continue;
+      const budgetId = `UB-${t.param.toUpperCase()}-${be}${r.key.length > 4 ? r.key.slice(4).toUpperCase() : ""}-LF069`;
+      if (budgets.some(b => b.budgetId === budgetId)) continue;
+      const inst = equipment.find(e => e.id === instId);
+      const A = typeAStats(t.readings);
+      const shared = { budgetId, instrumentId: instId, testMethod: t.method, parameter: t.param, combinedK: 2, measuredValue: round4(A.mean),
+        reviewDate: r.date, approvedBy: "", preparedBy: currentDisplayName || "", wiProcedure: WI08.code,
+        legacySource: r.label, legacyPaperU: r.paper[t.param], legacyBy: r.by, legacyApprover: r.approver };
+      const rows = [{
+        ...blankUncertaintyRow(instId, budgetId), ...shared, wiSource: "A",
+        componentName: "Type A — ความซ้ำของการวัด (Repeatability)", symbol: "uA", value: round4(A.s), unit: t.unit,
+        distribution: "Normal (k=1)", divisor: round4(Math.sqrt(A.n)), sensitivityCoefficient: 1, degreesOfFreedom: A.n - 1,
+        readings: t.readings, nDiv: "",
+        dataSource: [`วัดซ้ำ ${A.n} ครั้ง ค่าเฉลี่ย ${round4(A.mean)} SD ${round4(A.s)} (หารด้วย √${A.n}) จาก ${r.label}`, r.note && t.param === "Brix" ? r.note : ""].filter(Boolean).join(" · "),
+      }];
+      const ref = r.certs[t.inst];
+      const level = t.param === "Fiber" ? LF069_FIBER_M1 : t.param === "Pol" ? A.mean / (26 / (100 * sucroseDensity20(typeAStats(r.brix).mean))) : A.mean;
+      const p = ref.no ? certPoint(instId, ref.no, level) : null;
+      const U = p ? derivedUOf(p) : ref.U ?? null, k = p ? (Number(p.coverageFactor) || 2) : 2;
+      if (U == null) { notes.push(`${t.param} ${r.label}: ไม่พบใบรับรอง ${ref.no} ของ ${inst?.code || "เครื่องมือ"} ในระบบ — นำเข้าใบรับรองก่อน`); continue; }
+      const src = p ? `ใบรับรอง ${p.certificateNo} (${calPointLabel(p)}) U = ${round4(U)}, k = ${k}` : ref.note;
+      const bBase = { ...blankUncertaintyRow(instId, budgetId), ...shared, wiSource: "B", value: round4(U), divisor: k,
+        distribution: k === 2 ? "Normal (k=2)" : `Normal (k=${k})`, refInstrumentId: instId, refInstrumentCode: inst?.code || "",
+        certPointId: p?.id || "", certDate: p?.calibrationDate || "" };
+      if (t.param === "Brix") {
+        rows.push({ ...bBase, componentName: `Type B — ใบรับรองสอบเทียบ ${inst?.code || "Refractometer"}`, symbol: "uB1", unit: "%Brix", sensitivityCoefficient: 1, dataSource: src });
+      } else if (t.param === "Pol") {
+        const d = sucroseDensity20(typeAStats(r.brix).mean), c = round4(26 / (100 * d));
+        rows.push({ ...bBase, componentName: `Type B — ใบรับรองสอบเทียบ ${inst?.code || "Polarimeter"} (°Z → %Pol)`, symbol: "uB1", unit: "°Z", sensitivityCoefficient: c,
+          dataSource: `${src} · c = 1/Pol factor = 26/(100 × ${d.toFixed(5)}) = ${c} (ความหนาแน่นที่ ${round4(typeAStats(r.brix).mean)} %Brix)` });
+      } else {
+        const F = A.mean, cM = round4(100 / LF069_FIBER_M1), c1 = round4(F / LF069_FIBER_M1);
+        const ass = `สมมติ M1 = ${LF069_FIBER_M1} g — แก้ c ถ้าน้ำหนักตัวอย่างตาม WI ต่างจากนี้`;
+        rows.push({ ...bBase, componentName: `Type B — ชั่ง M2 (ภาชนะ + ชานหลังอบ) ${inst?.code || ""}`.trim(), symbol: "uB1", unit: "g", sensitivityCoefficient: cM, dataSource: `${src} · c = 100/M1 · ${ass}` });
+        rows.push({ ...bBase, id: uid(), componentName: `Type B — ชั่ง M0 (ภาชนะเปล่า) ${inst?.code || ""}`.trim(), symbol: "uB2", unit: "g", sensitivityCoefficient: cM, dataSource: `${src} · c = 100/M1` });
+        rows.push({ ...bBase, id: uid(), componentName: `Type B — ชั่ง M1 (ชานก่อนอบ) ${inst?.code || ""}`.trim(), symbol: "uB3", unit: "g", sensitivityCoefficient: c1, dataSource: `${src} · c = %Fiber/M1 = ${round4(F)}/${LF069_FIBER_M1}` });
+      }
+      out.push(...rows);
+    }
+  }
+  return { newBudgets: out, budgetNotes: notes };
+}
+
+function LegacyVerificationImport({ equipment, certificates, verifications, budgets = [], currentDisplayName, onCancel, onImport }) {
   const [mapping, setMapping] = useState(() => Object.fromEntries(Object.entries(LF068_INSTRUMENTS).map(([k, def]) => [k, guessLegacyInstrument(def, equipment).id])));
   const [dates, setDates] = useState({});
-  const plan = planLegacyImport({ equipment, certificates, verifications, mapping, dates, currentDisplayName });
+  const plan0 = planLegacyImport({ equipment, certificates, verifications, mapping, dates, currentDisplayName });
+  const bplan = planLf069Budgets({ equipment, certificates: [...certificates, ...plan0.newCerts], budgets, mapping, currentDisplayName });
+  const plan = { ...plan0, ...bplan, notes: [...plan0.notes, ...bplan.budgetNotes] };
+  const nBudgets = new Set(plan.newBudgets.map(b => b.budgetId)).size;
   const eqLabel = (e) => `${e.code || ""} — ${e.name || ""}${e.serialNo ? ` (S/N ${e.serialNo})` : ""}`;
   const warnFor = (row, i) => {
     const instId = mapping[row.inst];
@@ -7925,7 +8030,7 @@ function LegacyVerificationImport({ equipment, certificates, verifications, curr
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(18,37,59,0.45)", zIndex: 2000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onCancel}>
       <div style={{ ...S.modalBox, maxWidth: 1040, padding: 20, marginTop: 20 }} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 16, fontWeight: 700 }}>นำเข้าใบรับรองและผลทวนสอบย้อนหลัง (ปี 2566–2568)</div>
+        <div style={{ fontSize: 16, fontWeight: 700 }}>นำเข้าใบรับรอง ผลทวนสอบ และความไม่แน่นอนย้อนหลัง (ปี 2566–2568)</div>
         <div style={{ fontSize: 12.5, color: "var(--muted)", margin: "2px 0 12px" }}>
           ใบรับรองปี 2566–2567 จากรายงาน RDI-LF-068 · ใบรับรองปี 2568 จากใบรับรองต้นฉบับของผู้สอบเทียบ · ค่าที่อ่านได้จากการทวนสอบปี 2567–2568 (ไม่ใช้ค่าทวนสอบปี 2566) · LabTrack คำนวณ Error, U และผลตัดสินใหม่ทั้งหมด · ตั้งเกณฑ์ TER (|Error| + U ≤ เกณฑ์การยอมรับ, Conservative) ให้ใบรับรองทุกใบของเครื่องที่เลือก รวมใบปีปัจจุบัน
         </div>
@@ -7969,13 +8074,13 @@ function LegacyVerificationImport({ equipment, certificates, verifications, curr
           </table>
         </div>
         <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 10, background: "#EEF4FA", fontSize: 13 }}>
-          จะเพิ่มจุดสอบเทียบ <b>{plan.newCerts.length}</b> จุด · ผลทวนสอบ <b>{plan.newVers.length}</b> รายการ · ตั้งเกณฑ์ TER ให้ใบรับรองที่มีอยู่แล้ว <b>{plan.critIds.size}</b> จุด
+          จะเพิ่มจุดสอบเทียบ <b>{plan.newCerts.length}</b> จุด · ผลทวนสอบ <b>{plan.newVers.length}</b> รายการ · ตั้งเกณฑ์ TER ให้ใบรับรองที่มีอยู่แล้ว <b>{plan.critIds.size}</b> จุด · Uncertainty Budget (LF-069) <b>{nBudgets}</b> ชุด
           {plan.notes.map((n, i) => <div key={i} style={{ fontSize: 12, color: "var(--red)", marginTop: 2 }}>{n}</div>)}
           <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>รายการที่นำเข้าแล้วจะไม่ซ้ำ — กดนำเข้าซ้ำได้อย่างปลอดภัย · ทุกการเปลี่ยนแปลงถูกเก็บในประวัติการแก้ไข</div>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
           <button style={S.ghostBtn} onClick={onCancel}>ยกเลิก</button>
-          <button style={S.primaryBtn} disabled={!plan.newCerts.length && !plan.newVers.length && !plan.critIds.size} onClick={() => onImport(plan, mapping)}>นำเข้า</button>
+          <button style={S.primaryBtn} disabled={!plan.newCerts.length && !plan.newVers.length && !plan.critIds.size && !plan.newBudgets.length} onClick={() => onImport(plan, mapping)}>นำเข้า</button>
         </div>
       </div>
     </div>
@@ -8092,13 +8197,13 @@ function CalibrationRecordsHub({
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button style={S.smallBtn} onClick={() => exportAll()}><FileDown size={13} /> ส่งออก Excel (MPIR)</button>
-            <button style={S.smallBtn} onClick={() => setShowLegacyImport(true)}><FileCheck2 size={13} /> นำเข้าผลทวนสอบเดิม (LF-068)</button>
+            <button style={S.smallBtn} onClick={() => setShowLegacyImport(true)}><FileCheck2 size={13} /> นำเข้าข้อมูลเดิม (LF-068 / LF-069)</button>
             <button style={S.smallBtn} onClick={() => setShowGuide(true)}><BookOpen size={13} /> คู่มือ</button>
           </div>
         </div>
         {showGuide && <CalibrationGuideModal onClose={() => setShowGuide(false)} />}
         {showLegacyImport && (
-          <LegacyVerificationImport equipment={equipment} certificates={certificates} verifications={verifications} currentDisplayName={currentDisplayName}
+          <LegacyVerificationImport equipment={equipment} certificates={certificates} verifications={verifications} budgets={uncertaintyBudgets} currentDisplayName={currentDisplayName}
             onCancel={() => setShowLegacyImport(false)}
             onImport={(plan, mapping) => {
               const patchOf = Object.fromEntries(Object.entries(mapping).filter(([, id]) => id).map(([k, id]) => [id, terCriteriaPatch(LF068_INSTRUMENTS[k])]));
@@ -8106,12 +8211,13 @@ function CalibrationRecordsHub({
                 setCertificates([...certificates.map(c => plan.critIds.has(c.id) ? { ...c, ...patchOf[c.instrumentId] } : c), ...plan.newCerts]);
               }
               if (plan.newVers.length) setVerifications([...verifications, ...plan.newVers]);
+              if (plan.newBudgets.length) setUncertaintyBudgets([...uncertaintyBudgets, ...plan.newBudgets]);
               const serialFix = equipment.filter(e => !e.serialNo && Object.entries(mapping).some(([, id]) => id === e.id));
               if (serialFix.length) setEquipment(equipment.map(e => {
                 const k = Object.keys(mapping).find(key => mapping[key] === e.id);
                 return k && !e.serialNo ? { ...e, serialNo: LF068_INSTRUMENTS[k].serials[0] } : e;
               }));
-              notify(`นำเข้าแล้ว: จุดสอบเทียบ ${plan.newCerts.length} · ผลทวนสอบ ${plan.newVers.length} · ตั้งเกณฑ์ TER ${plan.critIds.size} จุด`);
+              notify(`นำเข้าแล้ว: จุดสอบเทียบ ${plan.newCerts.length} · ผลทวนสอบ ${plan.newVers.length} · ตั้งเกณฑ์ TER ${plan.critIds.size} จุด · Uncertainty Budget ${new Set(plan.newBudgets.map(b => b.budgetId)).size} ชุด`);
               setShowLegacyImport(false);
             }} />
         )}
