@@ -2,6 +2,7 @@
 // the browser's "Save as PDF" produces the file. Signature boxes are left
 // blank — the report is signed on paper and filed (lab decision).
 import { LOGO_DATA_URI } from "./logo.js";
+import { mpirCodes } from "./calc.js";
 import { num, fmt, fmtSigned, fmtDate, digitsFor, certSummary, verifySummary, isBefore, isAfter, refOf, VERIFY_MAX_READS } from "./calc.js";
 
 // Registered document codes of the printed forms.
@@ -12,7 +13,8 @@ export const VERIFY_REASONS = [["cal", "หลังสอบเทียบ"], 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 export function lf068Html(round, instrument) {
-  const v = round.verification || {};
+  const v0 = round.verification || {};
+  const v = { ...v0, wi: mpirCodes(v0.wi), wiReview: mpirCodes(v0.wiReview), remark: mpirCodes(v0.remark), stdName: mpirCodes(v0.stdName) };
   const cs = certSummary(round.points, instrument);
   const vs = verifySummary(round.verification, instrument, round.points);
   const dg = digitsFor(v.resolution || instrument.resolution);
@@ -38,7 +40,7 @@ export function lf068Html(round, instrument) {
 <tr><td class="l">เหตุที่ทวนสอบ</td><td colspan="3">${reason}</td></tr>
 <tr><td class="l">วันที่รับเครื่องคืน</td><td>${esc(fmtDate(v.returnedDate))}</td><td class="l">ตรวจสภาพเครื่อง</td><td>${v.condition === "abnormal" ? `☑ พบความผิดปกติ: ${esc(v.conditionNote)}` : "☑ สมบูรณ์"}</td></tr></table>
 <h3><b>2</b>เกณฑ์การยอมรับและกฎการตัดสิน</h3><table><tr><td class="l">เกณฑ์ (Tolerance)</td><td>${tolTxt}</td></tr>
-<tr><td class="l">ที่มาของเกณฑ์</td><td>${esc(crit?.basis || head.certCriteriaBasis || "")}</td></tr>
+<tr><td class="l">ที่มาของเกณฑ์</td><td>${esc(mpirCodes(crit?.basis || head.certCriteriaBasis || ""))}</td></tr>
 <tr><td class="l">Decision Rule</td><td><b>TER (Conservative):</b> ผ่าน เมื่อ |Error| + U ≤ Tolerance <span class="note">(U = ความไม่แน่นอนขยาย k = 2)</span></td></tr></table>
 <h3><b>3</b>ทวนสอบผลการสอบเทียบเทียบกับเกณฑ์</h3><table><tr><td class="l">เลขที่ใบรับรอง</td><td>${esc(round.certificateNo)}</td><td class="l">วันที่สอบเทียบ</td><td>${esc(fmtDate(round.calibrationDate))}</td></tr>
 <tr><td class="l">หน่วยงานสอบเทียบ</td><td>${esc(head.provider)}</td><td class="l">รับรอง ISO/IEC 17025</td><td>${/ได้รับการรับรอง ISO\/IEC 17025 ในขอบข่าย/.test(head.providerAccreditationStatus || "") ? "☑ ได้รับการรับรองในขอบข่ายนี้" : esc(head.providerAccreditationStatus || "☐ ไม่ระบุ")}</td></tr></table>

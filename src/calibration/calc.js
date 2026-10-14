@@ -203,3 +203,18 @@ export function typeA(readings) {
   const sd = Math.sqrt(x.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1));
   return { n, mean, sd, u: sd / Math.sqrt(n) };
 }
+
+/* ---------- document codes ---------- */
+// The lab's documents moved from RDI-xx-00 to MPIR-xx-000. Records saved
+// before the change still carry the old codes; show them with the new ones.
+const CODE_MAP = [
+  [/RDI-WI-02\b(?!-)/g, "MPIR-WI-002-06"], // Brix / Pol method
+  [/RDI-WI-002\b/g, "MPIR-WI-002"],         // use of balances
+  [/RDI-WI-03\b/g, "MPIR-WI-003"],
+  [/RDI-WI-08\b/g, "MPIR-WI-008"],
+  [/RDI-(LF|WI|LP|QP|SP)-(\d+)/g, "MPIR-$1-$2"],
+];
+export function mpirCodes(text) {
+  if (text == null) return text;
+  return CODE_MAP.reduce((t, [a, b]) => t.replace(a, b), String(text));
+}

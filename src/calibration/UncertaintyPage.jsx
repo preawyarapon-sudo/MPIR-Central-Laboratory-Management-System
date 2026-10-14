@@ -4,13 +4,13 @@
 // (see uncertainty.js) and the report is downloaded and signed on paper.
 import { useState, useMemo } from "react";
 import { ChevronLeft, Plus, FileDown, Check, X, Pencil, Trash2, AlertTriangle } from "lucide-react";
-import { num, fmt, fmtDate, todayISO, beYear } from "./calc.js";
+import { num, fmt, fmtDate, todayISO, beYear, mpirCodes } from "./calc.js";
 import { TESTS, calcReport, roundsFor, printLf069, DEFAULT_REPEATS, MAX_REPEATS, resolutionOf } from "./uncertainty.js";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const DEFAULT_OBJECTIVE = "ประเมินค่าความไม่แน่นอนของการตรวจทดสอบค่าบริกซ์และโพล ในน้ำอ้อย และไฟเบอร์ในชานอ้อยย่อย";
-const DEFAULT_REFS = ["RDI-WI-02 วิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย",
-  "RDI-WI-03 การวิเคราะห์ค่าเส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย", "RDI-WI-08 การประเมินค่าความไม่แน่นอนของการวัด",
+const DEFAULT_REFS = ["MPIR-WI-002-06 วิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย",
+  "MPIR-WI-003 การวิเคราะห์ค่าเส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย", "MPIR-WI-008 การประเมินค่าความไม่แน่นอนของการวัด",
   "รายงานผลการทวนสอบเครื่องมือ (LF-068) ของ Refractometer, Polarimeter และเครื่องชั่ง 2 ตำแหน่ง"].join("\n");
 const normNo = (s) => String(s || "").toUpperCase().replace(/\s+/g, "");
 
@@ -27,7 +27,7 @@ export function newReport(prev, equipment, certificates, me) {
   const rep = {
     id: uid(), reportDate: date, testDate: "", year: String(beYear(date)),
     objective: prev?.objective || DEFAULT_OBJECTIVE, testers: prev?.testers || "", supervisor: prev?.supervisor || "",
-    sampleNote: "", references: prev?.references || DEFAULT_REFS, preparedBy: me || "", example: {},
+    sampleNote: "", references: prev?.references ? mpirCodes(prev.references) : DEFAULT_REFS, preparedBy: me || "", example: {},
   };
   for (const T of TESTS) {
     const instrumentId = prev?.[T.key]?.instrumentId || guessInstrument(T, equipment);
@@ -89,7 +89,7 @@ export function UncertaintyList({ reports, certificates, equipment, onNew, onOpe
             <div className="ca-sub-head ca-pad0" style={{ marginTop: 0 }}>
               <div>
                 <h2>ประจำปี {rep.year || beYear(rep.reportDate)} <span className="ca-muted ca-small">· ลงวันที่ {fmtDate(rep.reportDate)}</span></h2>
-                <div className="ca-small ca-muted">{rep.legacyLabel ? `นำเข้าจาก ${rep.legacyLabel} · คำนวณใหม่` : rep.downloadedAt ? `ดาวน์โหลดล่าสุด ${fmtDate(rep.downloadedAt.slice(0, 10))}${rep.downloadedBy ? ` โดย ${rep.downloadedBy}` : ""}${rep.reprintNeeded ? " · มีการแก้ไขหลังดาวน์โหลด ต้องพิมพ์ใหม่" : ""}` : "ยังไม่ได้ดาวน์โหลด"}</div>
+                <div className="ca-small ca-muted">{rep.legacyLabel ? `นำเข้าจาก ${mpirCodes(rep.legacyLabel)} · คำนวณใหม่` : rep.downloadedAt ? `ดาวน์โหลดล่าสุด ${fmtDate(rep.downloadedAt.slice(0, 10))}${rep.downloadedBy ? ` โดย ${rep.downloadedBy}` : ""}${rep.reprintNeeded ? " · มีการแก้ไขหลังดาวน์โหลด ต้องพิมพ์ใหม่" : ""}` : "ยังไม่ได้ดาวน์โหลด"}</div>
               </div>
               <div className="ca-row ca-wrap">
                 <button className="ca-btn" onClick={() => onOpen(rep.id)}><Pencil size={15} /> เปิด / แก้ไข</button>
@@ -156,7 +156,7 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
         <h1>รายงานความไม่แน่นอน ประจำปี {d.year || beYear(d.reportDate)}</h1>
         <p className="ca-muted">ตามแบบฟอร์ม LF-069 · กรอกเฉพาะช่องสีขาว ช่องสีฟ้าระบบคำนวณให้</p>
       </div></header>
-      {d.legacyLabel && <p className="ca-chips"><span className="ca-muted">นำเข้าจาก:</span><span>{d.legacyLabel}</span><span className="ca-muted">— ผลทดสอบซ้ำตามรายงานเดิม · ตัวเลขคำนวณใหม่</span></p>}
+      {d.legacyLabel && <p className="ca-chips"><span className="ca-muted">นำเข้าจาก:</span><span>{mpirCodes(d.legacyLabel)}</span><span className="ca-muted">— ผลทดสอบซ้ำตามรายงานเดิม · ตัวเลขคำนวณใหม่</span></p>}
 
       <section className="ca-card ca-stack-sm">
         <h2>1–3 ข้อมูลรายงาน</h2>
