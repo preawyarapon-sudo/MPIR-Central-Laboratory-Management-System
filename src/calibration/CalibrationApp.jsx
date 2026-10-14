@@ -6,7 +6,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   LayoutGrid, ChevronLeft, Plus, Trash2, FileDown, AlertTriangle, Search, Pencil, X,
-  ClipboardList, ExternalLink, Gauge, Calculator, ClipboardCheck, Check,
+  ClipboardList, ExternalLink, Gauge, Calculator, ClipboardCheck, Check, CheckCircle2, CalendarClock, Ruler, Target, Settings2,
 } from "lucide-react";
 import {
   num, fmt, fmtSigned, fmtDate, todayISO, addMonthsISO, digitsFor, roundKey, roundsOf, certSummary,
@@ -15,6 +15,7 @@ import {
 } from "./calc.js";
 import { printLf068, printCheckLog, VERIFY_REASONS } from "./report.js";
 import TrendChart from "./TrendChart.jsx";
+import { EquipmentEditor, InstrumentInfo, InstrumentPhoto, blankInstrument, STATUS_LABEL } from "./EquipmentEditor.jsx";
 import {
   LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable, newIntermediateCheckFor,
   saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm, dailyCheckPoints, LF069_REPORTS,
@@ -52,7 +53,7 @@ const KEYS = ["equipment", "certificates", "verifications", "dailyChecks", "inte
 export default function CalibrationApp({ currentUsername = "", currentDisplayName = "", guest = false, initial = null, onLogin = null }) {
   const [data, setData] = useState({ equipment: [], certificates: [], verifications: [], dailyChecks: [], intermediateChecks: [], uncertaintyReports: [] });
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(initial || { name: "overview" });
+  const [page, setPage] = useState(() => initial?.name === "equipNew" ? { name: "equipEdit", draft: blankInstrument() } : (initial || { name: "overview" }));
   const [toast, setToastState] = useState({ text: "", ms: 3500 });
   const setToast = (text, ms = 3500) => setToastState({ text, ms });
   const me = currentDisplayName || currentUsername || "";
@@ -119,7 +120,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
           <div className="ca-side-foot" style={{ marginTop: 0 }}>โหมดผู้เยี่ยมชม (สแกน QR) · ไม่ต้องเข้าสู่ระบบ</div>
           {onLogin && <button className="ca-btn" onClick={onLogin}>เข้าสู่ระบบ</button>}
         </>) : (<>
-          <button className={`ca-nav ${["overview", "instrument", "edit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "overview" })}><LayoutGrid size={17} /> ภาพรวมและทะเบียน</button>
+          <button className={`ca-nav ${["overview", "instrument", "edit", "equipEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "overview" })}><LayoutGrid size={17} /> ภาพรวมและทะเบียน</button>
           <button className={`ca-nav ${page.name === "dailyAll" ? "on" : ""}`} onClick={() => go({ name: "dailyAll" })}><ClipboardCheck size={17} /> Daily check (ทุกเครื่อง)</button>
           <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน</button>
           <div className="ca-side-foot">{me ? `ผู้ใช้: ${me}` : ""}<br />ข้อมูลชุดเดียวกับ LabTrack</div>
@@ -128,7 +129,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
       <main className="ca-main">
         {loading ? <div className="ca-empty">กำลังโหลดข้อมูล…</div> : (<>
           {page.name === "overview" && (
-            <Overview equipment={data.equipment} roundsById={roundsById} onOpen={(id) => go({ name: "instrument", instrumentId: id })} />
+            <Overview equipment={data.equipment} roundsById={roundsById} onOpen={(id) => go({ name: "instrument", instrumentId: id })} onAdd={() => go({ name: "equipEdit", draft: blankInstrument() })} />
           )}
           {(page.name === "dailyAll" || page.name === "guestDaily") && (
             <div className="ca-stack">
@@ -147,6 +148,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
               setDailyChecks={(l) => setListSmart("dailyChecks", l)} setIntermediateChecks={(l) => setListSmart("intermediateChecks", l)}
               onSaveInstrument={async (id, patch) => { await mutate("equipment", list => list.map(x => x.id === id ? { ...x, ...patch } : x)); setToast("บันทึกเกณฑ์แล้ว"); }}
               onBack={guest ? null : () => go({ name: "overview" })}
+              onEditInstrument={() => go({ name: "equipEdit", instrumentId: instrument.id })}
               onSelect={(k) => setPage({ ...page, roundKey: k })}
               onNew={() => go({ name: "edit", instrumentId: instrument.id, roundKey: null })}
               onEdit={(k) => go({ name: "edit", instrumentId: instrument.id, roundKey: k })}
@@ -162,6 +164,32 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                 setToast("ดาวน์โหลดรายงานแล้ว · นำไปลงนามและเก็บตามระบบเอกสาร");
               }} />
           )}
+          {page.name === "equipEdit" && (page.draft || data.equipment.find(x => x.id === page.instrumentId)) && (() => {
+            const inst = page.draft || data.equipment.find(x => x.id === page.instrumentId);
+            const id = inst.id;
+            const hasRecords = data.certificates.some(c => c.instrumentId === id) || data.verifications.some(v => v.instrumentId === id)
+              || data.dailyChecks.some(c => c.equipmentId === id) || data.intermediateChecks.some(c => c.instrumentId === id);
+            return (
+              <EquipmentEditor key={id} instrument={inst} equipment={data.equipment} hasRecords={hasRecords} due={instrumentStatus(inst, roundsById[id] || []).due}
+                onCancel={() => go(data.equipment.some(x => x.id === id) ? { name: "instrument", instrumentId: id, tab: "info" } : { name: "overview" })}
+                onSave={async (rec, isNew) => {
+                  const at = new Date().toISOString();
+                  await mutate("equipment", list => {
+                    const prev = list.find(x => x.id === rec.id);
+                    const changes = prev ? Object.keys(rec).filter(k => k !== "editLog" && String(prev[k] ?? "") !== String(rec[k] ?? "")).map(k => ({ field: k, from: prev[k] ?? "", to: rec[k] ?? "" })) : [];
+                    const out = { ...rec, editLog: [...(prev?.editLog || []), { at, by: me, note: prev ? "แก้ไขข้อมูลเครื่อง (Instrument Assurance System)" : "เพิ่มเครื่องมือ (Instrument Assurance System)", changes }] };
+                    return prev ? list.map(x => x.id === rec.id ? out : x) : [out, ...list];
+                  });
+                  setToast(isNew ? "เพิ่มเครื่องมือแล้ว" : "บันทึกข้อมูลเครื่องแล้ว");
+                  go({ name: "instrument", instrumentId: rec.id, tab: "info" });
+                  return true;
+                }}
+                onDelete={async (delId) => {
+                  await mutate("equipment", list => list.filter(x => x.id !== delId));
+                  setToast("ลบเครื่องมือแล้ว"); go({ name: "overview" });
+                }} />
+            );
+          })()}
           {page.name === "uncList" && (
             <UncertaintyList reports={data.uncertaintyReports} certificates={data.certificates} equipment={data.equipment}
               legacyCount={legacyReports(LF069_REPORTS, data.uncertaintyReports, data.equipment, data.certificates, me).length}
@@ -261,7 +289,7 @@ function Pill({ tone = "grey", children }) {
   return <span className="ca-pill" style={{ color: t.fg, background: t.bg }}>{children}</span>;
 }
 
-function Overview({ equipment, roundsById, onOpen }) {
+function Overview({ equipment, roundsById, onOpen, onAdd = null }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [showAll, setShowAll] = useState(false);
@@ -287,7 +315,8 @@ function Overview({ equipment, roundsById, onOpen }) {
   const nOver = count(["overdue", "fail", "off"]), nSoon = count(["soon"]);
   return (
     <div className="ca-stack">
-      <header className="ca-head"><div><h1>ภาพรวมเครื่องมือ</h1><p className="ca-muted">ทะเบียนเครื่องมือที่ต้องสอบเทียบ · กดรหัสเครื่องเพื่อดูรอบสอบเทียบ</p></div></header>
+      <header className="ca-head"><div><h1>ภาพรวมเครื่องมือ</h1><p className="ca-muted">ทะเบียนเครื่องมือที่ต้องสอบเทียบ · กดรหัสเครื่องเพื่อดูรอบสอบเทียบ</p></div>
+        {onAdd && <button className="ca-btn ca-btn-primary" onClick={onAdd}><Plus size={16} /> เพิ่มเครื่องมือ</button>}</header>
       <div className="ca-kpis">
         {kpis.map(k => (
           <button key={k.label} className={`ca-kpi ${filter === k.f ? "on" : ""}`} onClick={() => setFilter(filter === k.f ? "all" : k.f)}>
@@ -316,7 +345,7 @@ function Overview({ equipment, roundsById, onOpen }) {
             <tbody>
               {shown.map(({ e, rounds, st }) => (
                 <tr key={e.id}>
-                  <td><button className="ca-link ca-strong" onClick={() => onOpen(e.id)}>{e.code || e.name}</button></td>
+                  <td><button className="ca-link ca-strong ca-codecell" onClick={() => onOpen(e.id)}><InstrumentPhoto e={e} size={36} />{e.code || e.name}</button></td>
                   <td>{e.name}{e.location ? <div className="ca-small ca-muted">{e.location}</div> : null}</td>
                   <td className="ca-muted ca-hide-sm">{[e.brand, e.model].filter(Boolean).join(" / ") || "–"}{e.serialNo ? <div className="ca-small">S/N {e.serialNo}</div> : null}</td>
                   <td className="ca-hide-sm">{fmtDate(rounds[0]?.calibrationDate || e.lastCalibration)}</td>
@@ -337,7 +366,7 @@ function Overview({ equipment, roundsById, onOpen }) {
 /* =================================================================== */
 function InstrumentPage({ instrument: e, rounds, selectedKey, onBack, onSelect, onNew, onEdit, onDownload,
   guest = false, me = "", currentUsername = "", notify, initialTab, openDaily,
-  certificates, dailyChecks, intermediateChecks, setDailyChecks, setIntermediateChecks, onSaveInstrument }) {
+  certificates, dailyChecks, intermediateChecks, setDailyChecks, setIntermediateChecks, onSaveInstrument, onEditInstrument }) {
   const st = instrumentStatus(e, rounds);
   const sel = rounds.find(r => r.key === selectedKey) || rounds[0] || null;
   const crit = rounds[0] ? criteriaOf(e, rounds[0].points[0]) : criteriaOf(e, {});
@@ -345,19 +374,31 @@ function InstrumentPage({ instrument: e, rounds, selectedKey, onBack, onSelect, 
   const hasDaily = hasDailyForm(e);
   const myDaily = dailyChecks.filter(c => c.equipmentId === e.id);
   const myIc = intermediateChecks.filter(c => c.instrumentId === e.id);
-  const tabs = [["rounds", `รอบสอบเทียบ (${rounds.length})`], ...(hasDaily ? [["daily", `Daily check (${myDaily.length})`]] : []), ...(!guest ? [["ic", `Intermediate check (${myIc.length})`]] : [])];
+  const tabs = [["rounds", `รอบสอบเทียบ (${rounds.length})`], ...(hasDaily ? [["daily", `Daily check (${myDaily.length})`]] : []), ...(!guest ? [["ic", `Intermediate check (${myIc.length})`]] : []), ["info", "ข้อมูลเครื่อง"]];
   const [tab, setTab] = useState(() => tabs.some(t => t[0] === initialTab) ? initialTab : "rounds");
   const [editingIc, setEditingIc] = useState(null);
   return (
     <div className="ca-stack">
-      {onBack && <button className="ca-link ca-back" onClick={onBack}><ChevronLeft size={16} /> ทะเบียนเครื่องมือ</button>}
-      <header className="ca-head">
-        <div>
-          <h1>{e.code ? `${e.code} — ` : ""}{e.name}</h1>
+      {onBack && <nav className="ca-crumb" aria-label="ตำแหน่งหน้า"><button className="ca-link" onClick={onBack}>เครื่องมือ</button><span>›</span><span>{e.code || e.name}</span></nav>}
+      <header className="ca-hero">
+        <InstrumentPhoto e={e} size={104} />
+        <div className="ca-hero-main">
+          <h1><span className="ca-hero-code">{e.code}</span> {e.name}</h1>
           <p className="ca-muted">{[[e.brand, e.model].filter(Boolean).join(" "), e.serialNo && `S/N ${e.serialNo}`, e.location].filter(Boolean).join(" · ") || "–"}</p>
-          <p className="ca-muted">เกณฑ์ {crit ? `± ${crit.tolerance} ${e.calUnit || ""} · TER (|Error| + U ≤ เกณฑ์)` : "ยังไม่กำหนด"} · ครบกำหนด {fmtDate(st.due)}</p>
+          <div className="ca-chips2">
+            <span><Ruler size={15} /> ความละเอียด : {e.resolution ? `${e.resolution} ${e.calUnit || ""}` : "–"}</span>
+            <span><Target size={15} /> เกณฑ์ : {crit ? `± ${crit.tolerance} ${e.calUnit || ""}${crit.type && crit.type !== "absolute" ? ` (${crit.type})` : ""} · TER` : "ยังไม่กำหนด"}</span>
+            <span><CalendarClock size={15} /> ครบกำหนดสอบเทียบ : {fmtDate(st.due)}{st.days != null ? ` (${st.days < 0 ? `เกิน ${-st.days} วัน` : `อีก ${st.days} วัน`})` : ""}</span>
+          </div>
         </div>
-        <div className="ca-row"><Pill tone={st.tone}>{st.label}</Pill>{!guest && tab === "rounds" && <button className="ca-btn ca-btn-primary" onClick={onNew}><Plus size={16} /> บันทึกรอบสอบเทียบใหม่</button>}</div>
+        <div className="ca-hero-side">
+          <div className="ca-statuscard" style={{ background: TONE[st.tone]?.bg, color: TONE[st.tone]?.fg }}>
+            {st.tone === "green" ? <CheckCircle2 size={34} /> : <AlertTriangle size={34} />}
+            <div><div className="ca-strong" style={{ fontSize: 17 }}>{e.status && e.status !== "active" ? STATUS_LABEL[e.status] : st.label}</div>
+              <div className="ca-small" style={{ color: "var(--muted)" }}>{e.status && e.status !== "active" ? (e.unavailableReason || "ตั้งค่าที่ข้อมูลเครื่อง") : "อ้างอิงผลสอบเทียบล่าสุด"}</div></div>
+          </div>
+          {!guest && onEditInstrument && <button className="ca-btn" onClick={() => setTab("info")}><Settings2 size={15} /> ข้อมูลเครื่องมือ</button>}
+        </div>
       </header>
       <div className="ca-tabs" role="tablist">
         {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
@@ -365,7 +406,8 @@ function InstrumentPage({ instrument: e, rounds, selectedKey, onBack, onSelect, 
 
       {tab === "rounds" && (<>
         <section className="ca-card">
-          <h2>ประวัติสอบเทียบ</h2>
+          <div className="ca-sub-head ca-pad0" style={{ marginTop: 0 }}><h2>ประวัติสอบเทียบ</h2>
+            {!guest && <button className="ca-btn ca-btn-primary" onClick={onNew}><Plus size={16} /> บันทึกรอบสอบเทียบใหม่</button>}</div>
           {timeline.length ? (
             <ol className="ca-timeline">
               {timeline.map(r => {
@@ -397,6 +439,8 @@ function InstrumentPage({ instrument: e, rounds, selectedKey, onBack, onSelect, 
         {rounds.length > 0 && <TrendChart rounds={rounds} instrument={e} />}
         {sel && <RoundView key={sel.key} round={sel} instrument={e} isLatest={rounds[0]?.key === sel.key} readOnly={guest} onEdit={() => onEdit(sel.key)} onDownload={onDownload} />}
       </>)}
+
+      {tab === "info" && <InstrumentInfo instrument={e} guest={guest} onEdit={onEditInstrument} due={st.due} />}
 
       {tab === "daily" && (<>
         {!guest && <CheckCriteria instrument={e} onSave={onSaveInstrument} />}
@@ -439,7 +483,7 @@ function CheckCriteria({ instrument: e, onSave }) {
     <div className="ca-download" style={{ marginTop: 0 }}>
       <label className="ca-field"><span>เกณฑ์ Daily / Intermediate check ± ({e.calUnit || "หน่วยของเครื่อง"})</span><input value={t} onChange={ev => setT(ev.target.value)} inputMode="decimal" placeholder="เช่น 0.09" /></label>
       <label className="ca-field"><span>ชนิด</span><select value={type} onChange={ev => setType(ev.target.value)}><option value="absolute">ค่าคงที่</option><option value="% of reading">% ของค่าที่อ่าน</option></select></label>
-      <span className="ca-muted ca-small" style={{ flex: 1, minWidth: 180 }}>ใช้คำนวณช่วงยอมรับของการตรวจประจำวันและระหว่างใช้งาน (Warning = ⅔ ของเกณฑ์) · ช่วงของ Oven, Polarimeter, Cooling Bath ตั้งที่หน้าเครื่องมือใน LabTrack</span>
+      <span className="ca-muted ca-small" style={{ flex: 1, minWidth: 180 }}>ใช้คำนวณช่วงยอมรับของการตรวจประจำวันและระหว่างใช้งาน (Warning = ⅔ ของเกณฑ์) · ช่วงของ Oven, Polarimeter, Cooling Bath, ตู้ควบคุมความชื้น ตั้งที่แท็บ “ข้อมูลเครื่อง”</span>
       <button className="ca-btn" disabled={!dirty} onClick={() => onSave(e.id, { tolerance: num(t) ?? "", toleranceType: type })}><Check size={15} /> บันทึกเกณฑ์</button>
     </div>
   );
@@ -899,6 +943,17 @@ div.ca-tl{cursor:default}.ca-tl.on{background:#E3EFFA}
 .ca-legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12.5px;color:var(--muted);padding:2px 0 0 74px}
 .ca-legend span{display:inline-flex;align-items:center;gap:6px}.ca-legend i{display:inline-block;width:12px;height:12px;border-radius:50%}
 .ca-legend i.dash{width:18px;height:0;border-radius:0;border-top:2px dashed}
+.ca-crumb{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--muted)}.ca-crumb .ca-link{min-height:auto;padding:0}
+.ca-hero{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px 20px}
+.ca-hero-main{flex:1 1 360px;min-width:0;display:flex;flex-direction:column;gap:6px}.ca-hero-main h1{font-size:25px}.ca-hero-code{color:var(--teal-dark);margin-right:6px}
+.ca-hero-side{display:flex;flex-direction:column;gap:10px;align-items:stretch;flex:0 1 280px}
+.ca-chips2{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.ca-chips2 span{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:10px;padding:6px 12px;font-size:13.5px;background:#FAFCFE}
+.ca-statuscard{display:flex;gap:12px;align-items:center;border-radius:14px;padding:14px 16px}
+.ca-photo{flex:none;border:1px solid var(--line);border-radius:14px;background:#F3F8FD;display:flex;align-items:center;justify-content:center;overflow:hidden;color:var(--muted);font-size:11px;text-align:center}
+.ca-photo img{width:100%;height:100%;object-fit:contain;background:#fff}
+.ca-codecell{gap:10px;white-space:nowrap}.ca-codecell .ca-photo{border-radius:8px}
+.ca-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 20px;margin:0}.ca-dl div{border-bottom:1px solid #EEF3F8;padding-bottom:6px}
+.ca-dl dt{font-size:12.5px;color:var(--muted)}.ca-dl dd{margin:2px 0 0;font-size:14.5px;word-break:break-word}
 .ca-hide-sm{}
 @media (max-width:640px){.ca-hide-sm{display:none}.ca-pill{white-space:normal}}
 @media (max-width:760px){.ca-side{border-right:none;border-bottom:1px solid var(--line);flex-direction:row;flex-wrap:wrap;padding:10px}.ca-brand{padding:0 8px 0 0}.ca-nav-group,.ca-side-foot{display:none}.ca-main{padding:16px 12px 64px}.ca-steps{grid-template-columns:1fr}.ca-span2{grid-column:auto}}
