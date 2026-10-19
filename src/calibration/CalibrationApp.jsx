@@ -391,8 +391,8 @@ function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId
                 <div style={{ margin: "10px 0 4px" }}><Pill tone={st ? st.tone : "grey"}>{st ? st.label : "ไม่บังคับทวนสอบ"}</Pill></div>
                 <div className="ca-small">{v ? <>ทวนสอบ {fmtDate(v.verifyDate)}{st?.vs ? <> · <b style={{ color: st.vs.measOk ? "#187A52" : "#B42318" }}>{st.vs.measOk ? `ผ่าน ${st.vs.pts.length}/${st.vs.pts.length} จุด` : "ไม่ผ่าน"}</b></> : null}</> : <span className="ca-muted">ยังไม่มีผลทวนสอบ</span>}</div>
                 <div className="ca-row ca-wrap" style={{ marginTop: 12 }}>
-                  <button className={`ca-btn ${st?.key === "todo" ? "ca-btn-primary" : ""}`} onClick={() => onVerify(e.id, r.key)}>{v ? <><Pencil size={15} /> แก้ไขผลทวนสอบ</> : <><Plus size={15} /> ทวนสอบ</>}</button>
-                  {v && <button className={`ca-btn ${["report", "reprint"].includes(st?.key) ? "ca-btn-primary" : ""}`} onClick={() => onOpen(e.id, r.key)}><FileDown size={15} /> LF-068</button>}
+                  <button className={`ca-btn ${st?.key === "todo" ? "ca-btn-primary" : ""}`} onClick={() => onVerify(e.id, r.key)}>{v ? <><Pencil size={15} /> กรอก/แก้ไขผล</> : <><Plus size={15} /> กรอกผลทวนสอบ</>}</button>
+                  {v && <button className={`ca-btn ${["report", "reprint"].includes(st?.key) ? "ca-btn-primary" : ""}`} onClick={() => onOpen(e.id, r.key)}><FileDown size={15} /> ดูผลและดาวน์โหลด LF-068</button>}
                 </div>
               </section>);
           })}
