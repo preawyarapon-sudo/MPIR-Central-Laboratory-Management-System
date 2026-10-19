@@ -106,6 +106,18 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
   }, [guest, page.name]);
   const instrument = page.instrumentId ? data.equipment.find(e => e.id === page.instrumentId) : null;
   const go = (p) => { setPage(p); window.scrollTo(0, 0); };
+  async function downloadRound(inst, round, usage) {
+    if (!printLf068({ ...round, verification: round.verification ? { ...round.verification, usage } : null }, inst)) return;
+    const at = new Date().toISOString();
+    if (round.verification) {
+      await mutate("verifications", list => list.map(v => v.id === round.verification.id
+        ? { ...v, usage, downloadedAt: at, downloadedBy: me, reprintNeeded: false, editLog: [...(v.editLog || []), { at, by: me, note: "ดาวน์โหลดรายงาน LF-068" }] } : v));
+    }
+    const isLatest = (roundsById[inst.id] || [])[0]?.key === round.key;
+    if (isLatest) await mutate("equipment", list => list.map(e => e.id === inst.id ? { ...e, currentStatus: usage, statusApprovalDate: todayISO() } : e));
+    setToast("ดาวน์โหลดรายงานแล้ว · นำไปลงนามและเก็บตามระบบเอกสาร");
+  }
+  const inVerify = ["verifyList", "verifyRound", "edit"].includes(page.name);
 
   return (
     <div className="ca-root">
@@ -120,8 +132,8 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
           <div className="ca-side-foot" style={{ marginTop: 0 }}>โหมดผู้เยี่ยมชม (สแกน QR) · ไม่ต้องเข้าสู่ระบบ</div>
           {onLogin && <button className="ca-btn" onClick={onLogin}>เข้าสู่ระบบ</button>}
         </>) : (<>
-          <button className={`ca-nav ${["overview", "instrument", "equipEdit"].includes(page.name) || (page.name === "edit" && page.from !== "verify") ? "on" : ""}`} onClick={() => go({ name: "overview" })}><LayoutGrid size={17} /> ภาพรวมและทะเบียน</button>
-          <button className={`ca-nav ${page.name === "verifyList" || (page.name === "edit" && page.from === "verify") ? "on" : ""}`} onClick={() => go({ name: "verifyList" })}><ShieldCheck size={17} /> ทวนสอบเครื่องมือ</button>
+          <button className={`ca-nav ${["overview", "instrument", "equipEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "overview" })}><LayoutGrid size={17} /> ภาพรวมและทะเบียน</button>
+          <button className={`ca-nav ${inVerify ? "on" : ""}`} onClick={() => go({ name: "verifyList" })}><ShieldCheck size={17} /> ทวนสอบเครื่องมือ</button>
           <button className={`ca-nav ${page.name === "dailyAll" ? "on" : ""}`} onClick={() => go({ name: "dailyAll" })}><ClipboardCheck size={17} /> Daily check (ทุกเครื่อง)</button>
           <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน</button>
           <div className="ca-side-foot">{me ? `ผู้ใช้: ${me}` : ""}<br />ข้อมูลชุดเดียวกับ LabTrack</div>
@@ -133,10 +145,27 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
             <Overview equipment={data.equipment} roundsById={roundsById} onOpen={(id) => go({ name: "instrument", instrumentId: id })} onAdd={() => go({ name: "equipEdit", draft: blankInstrument() })} />
           )}
           {page.name === "verifyList" && (
-            <VerifyList equipment={data.equipment} roundsById={roundsById}
-              onVerify={(id, k) => go({ name: "edit", instrumentId: id, roundKey: k, from: "verify" })}
-              onOpen={(id, k) => go({ name: "instrument", instrumentId: id, roundKey: k })} />
+            <VerifyList equipment={data.equipment} roundsById={roundsById} selectedId={page.instrumentId}
+              onSelect={(id) => go({ name: "verifyList", instrumentId: id || undefined })}
+              onNew={(id) => go({ name: "edit", instrumentId: id, roundKey: null })}
+              onVerify={(id, k) => go({ name: "edit", instrumentId: id, roundKey: k })}
+              onOpen={(id, k) => go({ name: "verifyRound", instrumentId: id, roundKey: k })} />
           )}
+          {page.name === "verifyRound" && instrument && (() => {
+            const rounds = roundsById[instrument.id] || [];
+            const round = rounds.find(r => r.key === page.roundKey);
+            if (!round) return <div className="ca-empty">ไม่พบรอบสอบเทียบ</div>;
+            return (
+              <div className="ca-stack">
+                <nav className="ca-crumb" aria-label="ตำแหน่งหน้า"><button className="ca-link" onClick={() => go({ name: "verifyList" })}>ทวนสอบเครื่องมือ</button><span>›</span>
+                  <button className="ca-link" onClick={() => go({ name: "verifyList", instrumentId: instrument.id })}>{instrument.code}</button><span>›</span><span>รอบ {fmtDate(round.calibrationDate)}</span></nav>
+                <header className="ca-head"><div><h1>{instrument.code} {instrument.name}</h1>
+                  <p className="ca-muted">{[instrument.brand, instrument.model].filter(Boolean).join(" ")}{instrument.serialNo ? ` · S/N ${instrument.serialNo}` : ""}</p></div></header>
+                <RoundView key={round.key} round={round} instrument={instrument} isLatest={rounds[0]?.key === round.key}
+                  onEdit={() => go({ name: "edit", instrumentId: instrument.id, roundKey: round.key })}
+                  onDownload={(r, usage) => downloadRound(instrument, r, usage)} />
+              </div>);
+          })()}
           {(page.name === "dailyAll" || page.name === "guestDaily") && (
             <div className="ca-stack">
               <header className="ca-head"><div><h1>Daily check</h1><p className="ca-muted">{guest ? "บันทึกผลตรวจเช็คประจำวัน · ระบุชื่อผู้ตรวจทุกครั้ง" : "เลือกเครื่องแล้วบันทึกผล · ดาวน์โหลดบันทึกรายเดือนได้ที่หน้าเครื่องมือ แท็บ Daily check"}</p></div></header>
@@ -148,27 +177,14 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
             </div>
           )}
           {page.name === "instrument" && instrument && (
-            <InstrumentPage instrument={instrument} rounds={roundsById[instrument.id] || []} selectedKey={page.roundKey}
+            <InstrumentPage instrument={instrument} rounds={roundsById[instrument.id] || []}
               guest={guest} me={me} currentUsername={currentUsername} notify={notify} initialTab={page.tab} openDaily={page.openDaily}
               certificates={data.certificates} dailyChecks={data.dailyChecks} intermediateChecks={data.intermediateChecks}
               setDailyChecks={(l) => setListSmart("dailyChecks", l)} setIntermediateChecks={(l) => setListSmart("intermediateChecks", l)}
               onSaveInstrument={async (id, patch) => { await mutate("equipment", list => list.map(x => x.id === id ? { ...x, ...patch } : x)); setToast("บันทึกเกณฑ์แล้ว"); }}
               onBack={guest ? null : () => go({ name: "overview" })}
               onEditInstrument={() => go({ name: "equipEdit", instrumentId: instrument.id })}
-              onSelect={(k) => setPage({ ...page, roundKey: k })}
-              onNew={() => go({ name: "edit", instrumentId: instrument.id, roundKey: null })}
-              onEdit={(k) => go({ name: "edit", instrumentId: instrument.id, roundKey: k })}
-              onDownload={async (round, usage) => {
-                if (!printLf068({ ...round, verification: round.verification ? { ...round.verification, usage } : null }, instrument)) return;
-                const at = new Date().toISOString();
-                if (round.verification) {
-                  await mutate("verifications", list => list.map(v => v.id === round.verification.id
-                    ? { ...v, usage, downloadedAt: at, downloadedBy: me, reprintNeeded: false, editLog: [...(v.editLog || []), { at, by: me, note: "ดาวน์โหลดรายงาน LF-068" }] } : v));
-                }
-                const isLatest = (roundsById[instrument.id] || [])[0]?.key === round.key;
-                if (isLatest) await mutate("equipment", list => list.map(e => e.id === instrument.id ? { ...e, currentStatus: usage, statusApprovalDate: todayISO() } : e));
-                setToast("ดาวน์โหลดรายงานแล้ว · นำไปลงนามและเก็บตามระบบเอกสาร");
-              }} />
+              onOpenVerify={() => go({ name: "verifyList", instrumentId: instrument.id })} />
           )}
           {page.name === "equipEdit" && (page.draft || data.equipment.find(x => x.id === page.instrumentId)) && (() => {
             const inst = page.draft || data.equipment.find(x => x.id === page.instrumentId);
@@ -242,7 +258,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
           )}
           {page.name === "edit" && instrument && (
             <RoundEditor instrument={instrument} rounds={roundsById[instrument.id] || []} roundKeyToEdit={page.roundKey} me={me}
-              onCancel={() => go(page.from === "verify" ? { name: "verifyList" } : { name: "instrument", instrumentId: instrument.id, roundKey: page.roundKey })}
+              onCancel={() => go(page.roundKey ? { name: "verifyRound", instrumentId: instrument.id, roundKey: page.roundKey } : { name: "verifyList", instrumentId: instrument.id })}
               onSave={async ({ points, verification, oldKey, newKey, calDate }) => {
                 const at = new Date().toISOString();
                 const clash = (roundsById[instrument.id] || []).some(r => r.key === newKey && r.key !== oldKey);
@@ -277,8 +293,8 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                   await mutate("equipment", list => list.map(e => e.id === instrument.id
                     ? { ...e, lastCalibration: calDate, nextDue: addMonthsISO(calDate, num(e.intervalMonths) || 12) } : e));
                 }
-                setToast(page.from === "verify" ? "บันทึกผลทวนสอบแล้ว · ดาวน์โหลด LF-068 ได้ที่หน้าเครื่องมือ" : "บันทึกแล้ว");
-                go(page.from === "verify" ? { name: "verifyList" } : { name: "instrument", instrumentId: instrument.id, roundKey: newKey });
+                setToast("บันทึกแล้ว · ดาวน์โหลด LF-068 ได้ด้านล่าง");
+                go({ name: "verifyRound", instrumentId: instrument.id, roundKey: newKey });
                 return true;
               }} />
           )}
@@ -309,55 +325,89 @@ function verifyState(round, e) {
   if (!v.downloadedAt) return { key: "report", label: "รอดาวน์โหลด LF-068", tone: "amber", sort: 2, vs };
   return { key: "done", label: "ทวนสอบแล้ว", tone: "green", sort: 3, vs };
 }
-function VerifyList({ equipment, roundsById, onVerify, onOpen }) {
+function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId, onSelect }) {
   const [q, setQ] = useState("");
-  const [filter, setFilter] = useState("todo");
-  const rows = useMemo(() => equipment.flatMap(e => (roundsById[e.id] || []).map((r, i) => ({ e, r, latest: i === 0, st: verifyState(r, e) })))
-    .filter(x => x.st), [equipment, roundsById]);
-  const count = (keys) => rows.filter(x => keys.includes(x.st.key)).length;
+  const [filterSel, setFilter] = useState(null);
   const groups = { todo: ["todo", "fail", "report", "reprint"], done: ["done"], all: null };
-  const shown = rows
-    .filter(x => !groups[filter] || groups[filter].includes(x.st.key))
-    .filter(x => !q || `${x.e.code} ${x.e.name} ${x.e.serialNo} ${x.r.certificateNo}`.toLowerCase().includes(q.toLowerCase()))
-    .sort((a, b) => a.st.sort - b.st.sort || (b.r.calibrationDate || "").localeCompare(a.r.calibrationDate || ""));
-  const tabs = [["todo", "ต้องดำเนินการ", count(groups.todo)], ["done", "ทวนสอบแล้ว", count(groups.done)], ["all", "ทั้งหมด", rows.length]];
+  // one row per instrument; its state = the most urgent of its rounds
+  const rows = useMemo(() => equipment.map(e => {
+    const rounds = (roundsById[e.id] || []).map((r, i) => ({ r, latest: i === 0, st: verifyState(r, e) }));
+    const states = rounds.filter(x => x.st).map(x => x.st);
+    const st = states.sort((a, b) => a.sort - b.sort)[0] || { key: "none", label: "ไม่มีข้อมูลทวนสอบ", tone: "grey", sort: 4 };
+    return { e, rounds, st, todo: states.filter(x => groups.todo.includes(x.key)).length, verified: rounds.filter(x => x.r.verification).length };
+  }).filter(x => x.rounds.length), [equipment, roundsById]);
+  const inGroup = (x, k) => !groups[k] || (k === "todo" ? x.todo > 0 : x.todo === 0 && x.verified > 0);
+  // open on "ต้องดำเนินการ" when there is work, otherwise on "ทั้งหมด"
+  const filter = filterSel || (rows.some(x => x.todo > 0) ? "todo" : "all");
+  const sel = selectedId ? rows.find(x => x.e.id === selectedId) : null;
+
+  if (sel) {
+    const { e } = sel;
+    return (
+      <div className="ca-stack">
+        <nav className="ca-crumb" aria-label="ตำแหน่งหน้า"><button className="ca-link" onClick={() => onSelect(null)}>ทวนสอบเครื่องมือ</button><span>›</span><span>{e.code}</span></nav>
+        <header className="ca-head"><div>
+          <h1>{e.code} {e.name}</h1>
+          <p className="ca-muted">{[e.brand, e.model].filter(Boolean).join(" ")}{e.serialNo ? ` · S/N ${e.serialNo}` : ""} · เลือกรอบสอบเทียบที่ต้องการทวนสอบ</p>
+        </div></header>
+        <div className="ca-vgrid">
+          {sel.rounds.map(({ r, latest, st }) => {
+            const v = r.verification;
+            return (
+              <section key={r.key} className={`ca-card ca-vcard ${st && groups.todo.includes(st.key) ? "todo" : ""}`}>
+                <div className="ca-small ca-muted">รอบสอบเทียบ{latest ? " · ล่าสุด" : ""}</div>
+                <h2 style={{ margin: "2px 0 0" }}>{fmtDate(r.calibrationDate)}</h2>
+                <div className="ca-muted ca-small">ใบรับรอง {r.certificateNo || "–"}</div>
+                <div style={{ margin: "10px 0 4px" }}><Pill tone={st ? st.tone : "grey"}>{st ? st.label : "ไม่บังคับทวนสอบ"}</Pill></div>
+                <div className="ca-small">{v ? <>ทวนสอบ {fmtDate(v.verifyDate)}{st?.vs ? <> · <b style={{ color: st.vs.measOk ? "#187A52" : "#B42318" }}>{st.vs.measOk ? `ผ่าน ${st.vs.pts.length}/${st.vs.pts.length} จุด` : "ไม่ผ่าน"}</b></> : null}</> : <span className="ca-muted">ยังไม่มีผลทวนสอบ</span>}</div>
+                <div className="ca-row ca-wrap" style={{ marginTop: 12 }}>
+                  <button className={`ca-btn ${st?.key === "todo" ? "ca-btn-primary" : ""}`} onClick={() => onVerify(e.id, r.key)}>{v ? <><Pencil size={15} /> แก้ไขผลทวนสอบ</> : <><Plus size={15} /> ทวนสอบ</>}</button>
+                  {v && <button className={`ca-btn ${["report", "reprint"].includes(st?.key) ? "ca-btn-primary" : ""}`} onClick={() => onOpen(e.id, r.key)}><FileDown size={15} /> LF-068</button>}
+                </div>
+              </section>);
+          })}
+          <button className="ca-card ca-vcard ca-vnew" onClick={() => onNew(e.id)}><Plus size={20} /><span>บันทึกรอบสอบเทียบใหม่</span><span className="ca-small ca-muted">กรอกผลจากใบรับรอง แล้วทวนสอบต่อในหน้าเดียวกัน</span></button>
+        </div>
+      </div>
+    );
+  }
+
+  const shown = rows.filter(x => inGroup(x, filter))
+    .filter(x => !q || `${x.e.code} ${x.e.name} ${x.e.serialNo} ${x.rounds.map(r => r.r.certificateNo).join(" ")}`.toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => a.st.sort - b.st.sort || String(a.e.code || "").localeCompare(String(b.e.code || ""), "th", { numeric: true }));
+  const tabs = [["todo", "ต้องดำเนินการ"], ["done", "ทวนสอบแล้ว"], ["all", "ทั้งหมด"]];
   return (
     <div className="ca-stack">
       <header className="ca-head"><div>
         <h1>ทวนสอบเครื่องมือ</h1>
-        <p className="ca-muted">ทวนสอบเครื่องมือหลังรับคืนจากการสอบเทียบ ก่อนนำกลับมาใช้งาน (MPIR-LF-068) · รอบที่สอบเทียบตั้งแต่ {fmtDate(VERIFICATION_REQUIRED_FROM)} ต้องทวนสอบ</p>
+        <p className="ca-muted">ทวนสอบเครื่องมือหลังรับคืนจากการสอบเทียบ ก่อนนำกลับมาใช้งาน (MPIR-LF-068) · เลือกเครื่องมือเพื่อดูรอบสอบเทียบ</p>
       </div></header>
       <div className="ca-row ca-wrap" style={{ justifyContent: "space-between" }}>
         <div className="ca-row ca-wrap" role="tablist">
-          {tabs.map(([k, l, n]) => <button key={k} role="tab" aria-selected={filter === k} className={`ca-btn ${filter === k ? "ca-btn-primary" : ""}`} onClick={() => setFilter(k)}>{l} ({n})</button>)}
+          {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={filter === k} className={`ca-btn ${filter === k ? "ca-btn-primary" : ""}`} onClick={() => setFilter(k)}>{l} ({rows.filter(x => inGroup(x, k)).length})</button>)}
         </div>
         <label className="ca-search"><Search size={16} /><input value={q} onChange={ev => setQ(ev.target.value)} placeholder="ค้นหา รหัส ชื่อ S/N เลขที่ใบรับรอง" /></label>
       </div>
       {!shown.length ? <section className="ca-card ca-empty">{filter === "todo" ? "ไม่มีเครื่องที่ต้องทวนสอบ" : "ไม่มีรายการ"}</section> : (
         <section className="ca-card ca-pad0">
           <div className="ca-scroll">
-            <table className="ca-table">
-              <thead><tr><th>เครื่องมือ</th><th>รอบสอบเทียบ</th><th>วันที่ทวนสอบ</th><th>ผลทวนสอบ</th><th>สถานะ</th><th></th></tr></thead>
-              <tbody>{shown.map(({ e, r, latest, st }) => {
-                const v = r.verification;
+            <table className="ca-table ca-rowlink">
+              <thead><tr><th>เครื่องมือ</th><th>รอบสอบเทียบล่าสุด</th><th>ทวนสอบล่าสุด</th><th>สถานะ</th><th></th></tr></thead>
+              <tbody>{shown.map(({ e, rounds, st, todo }) => {
+                const last = rounds[0].r, lastV = rounds.find(x => x.r.verification)?.r.verification;
                 return (
-                  <tr key={`${e.id}|${r.key}`}>
+                  <tr key={e.id} tabIndex={0} onClick={() => onSelect(e.id)} onKeyDown={ev => { if (ev.key === "Enter") onSelect(e.id); }}>
                     <td><b>{e.code}</b> {e.name}<div className="ca-small ca-muted">{[e.brand, e.model].filter(Boolean).join(" ")}{e.serialNo ? ` · S/N ${e.serialNo}` : ""}</div></td>
-                    <td>{fmtDate(r.calibrationDate)}<div className="ca-small ca-muted">{r.certificateNo || "–"}{latest ? " · รอบล่าสุด" : ""}</div></td>
-                    <td>{v ? fmtDate(v.verifyDate) : "–"}</td>
-                    <td>{st.vs ? <span style={{ color: st.vs.measOk ? "#187A52" : "#B42318", fontWeight: 600 }}>{st.vs.measOk ? `ผ่าน ${st.vs.pts.length}/${st.vs.pts.length} จุด` : "ไม่ผ่าน"}</span> : "–"}</td>
-                    <td><Pill tone={st.tone}>{st.label}</Pill></td>
-                    <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                      <button className={`ca-btn ${st.key === "todo" ? "ca-btn-primary" : ""}`} onClick={() => onVerify(e.id, r.key)}>{v ? <><Pencil size={15} /> แก้ไขผลทวนสอบ</> : <><Plus size={15} /> ทวนสอบ</>}</button>{" "}
-                      {v && <button className={`ca-btn ${["report", "reprint"].includes(st.key) ? "ca-btn-primary" : ""}`} onClick={() => onOpen(e.id, r.key)}><FileDown size={15} /> LF-068</button>}
-                    </td>
+                    <td>{fmtDate(last.calibrationDate)}<div className="ca-small ca-muted">{last.certificateNo || "–"} · ทั้งหมด {rounds.length} รอบ</div></td>
+                    <td>{lastV ? fmtDate(lastV.verifyDate) : "–"}</td>
+                    <td><Pill tone={st.tone}>{st.label}</Pill>{todo > 1 ? <span className="ca-small ca-muted"> +{todo - 1}</span> : null}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><span className="ca-link">เลือกรอบ ›</span></td>
                   </tr>);
               })}</tbody>
             </table>
           </div>
         </section>
       )}
-      <p className="ca-small ca-muted">รอบสอบเทียบใหม่บันทึกที่หน้าเครื่องมือ (ภาพรวมและทะเบียน → เลือกเครื่อง → บันทึกรอบสอบเทียบใหม่) แล้วจะขึ้นในหน้านี้ให้ทวนสอบ · ดาวน์โหลด LF-068 และเลือกสถานะการใช้งานที่หน้าเครื่องมือ</p>
     </div>
   );
 }
@@ -437,18 +487,16 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null }) {
 }
 
 /* =================================================================== */
-function InstrumentPage({ instrument: e, rounds, selectedKey, onBack, onSelect, onNew, onEdit, onDownload,
+function InstrumentPage({ instrument: e, rounds, onBack, onOpenVerify,
   guest = false, me = "", currentUsername = "", notify, initialTab, openDaily,
   certificates, dailyChecks, intermediateChecks, setDailyChecks, setIntermediateChecks, onSaveInstrument, onEditInstrument }) {
   const st = instrumentStatus(e, rounds);
-  const sel = rounds.find(r => r.key === selectedKey) || rounds[0] || null;
   const crit = rounds[0] ? criteriaOf(e, rounds[0].points[0]) : criteriaOf(e, {});
-  const timeline = [...rounds].reverse();
   const hasDaily = hasDailyForm(e);
   const myDaily = dailyChecks.filter(c => c.equipmentId === e.id);
   const myIc = intermediateChecks.filter(c => c.instrumentId === e.id);
-  const tabs = [["rounds", `รอบสอบเทียบ (${rounds.length})`], ...(hasDaily ? [["daily", `Daily check (${myDaily.length})`]] : []), ...(!guest ? [["ic", `Intermediate check (${myIc.length})`]] : []), ["info", "ข้อมูลเครื่อง"]];
-  const [tab, setTab] = useState(() => tabs.some(t => t[0] === initialTab) ? initialTab : "rounds");
+  const tabs = [["main", "แนวโน้มและข้อมูลเครื่อง"], ...(hasDaily ? [["daily", `Daily check (${myDaily.length})`]] : []), ...(!guest ? [["ic", `Intermediate check (${myIc.length})`]] : [])];
+  const [tab, setTab] = useState(() => tabs.some(t => t[0] === initialTab) ? initialTab : "main");
   const [editingIc, setEditingIc] = useState(null);
   return (
     <div className="ca-stack">
@@ -470,50 +518,18 @@ function InstrumentPage({ instrument: e, rounds, selectedKey, onBack, onSelect, 
             <div><div className="ca-strong" style={{ fontSize: 17 }}>{e.status && e.status !== "active" ? STATUS_LABEL[e.status] : st.label}</div>
               <div className="ca-small" style={{ color: "var(--muted)" }}>{e.status && e.status !== "active" ? (e.unavailableReason || "ตั้งค่าที่ข้อมูลเครื่อง") : "อ้างอิงผลสอบเทียบล่าสุด"}</div></div>
           </div>
-          {!guest && onEditInstrument && <button className="ca-btn" onClick={() => setTab("info")}><Settings2 size={15} /> ข้อมูลเครื่องมือ</button>}
+          {!guest && onOpenVerify && <button className="ca-btn" onClick={onOpenVerify}><ShieldCheck size={15} /> รอบสอบเทียบและทวนสอบ ({rounds.length})</button>}
         </div>
       </header>
       <div className="ca-tabs" role="tablist">
         {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
       </div>
 
-      {tab === "rounds" && (<>
-        <section className="ca-card">
-          <div className="ca-sub-head ca-pad0" style={{ marginTop: 0 }}><h2>ประวัติสอบเทียบ</h2>
-            {!guest && <button className="ca-btn ca-btn-primary" onClick={onNew}><Plus size={16} /> บันทึกรอบสอบเทียบใหม่</button>}</div>
-          {timeline.length ? (
-            <ol className="ca-timeline">
-              {timeline.map(r => {
-                const cs = certSummary(r.points, e);
-                const tone = cs.failCount ? "red" : cs.incomplete ? "grey" : "green";
-                const on = sel && sel.key === r.key;
-                return (
-                  <li key={r.key}>
-                    <button className={`ca-tl ${on ? "on" : ""}`} onClick={() => onSelect(r.key)} aria-pressed={on}>
-                      <span className="ca-dot" style={{ background: TONE[tone].fg, borderColor: TONE[tone].fg }} />
-                      <span className="ca-strong">{fmtDate(r.calibrationDate)}</span>
-                      <span className="ca-small ca-muted">{r.certificateNo || "–"}</span>
-                      <span className="ca-small ca-strong" style={{ color: TONE[tone].fg }}>{cs.failCount ? `ไม่ผ่าน ${cs.failCount} จุด` : cs.incomplete ? "ข้อมูลไม่ครบ" : "ผ่าน"}</span>
-                    </button>
-                  </li>
-                );
-              })}
-              <li>
-                <div className="ca-tl">
-                  <span className="ca-dot" style={{ background: "#FFFFFF", borderColor: TONE[st.tone]?.fg || "#4F6E8C" }} />
-                  <span className="ca-strong">{fmtDate(st.due)}</span>
-                  <span className="ca-small ca-muted">ครบกำหนดครั้งถัดไป</span>
-                  <span className="ca-small ca-strong" style={{ color: TONE[st.tone]?.fg }}>{st.days == null ? "–" : st.days < 0 ? `เกิน ${-st.days} วัน` : `อีก ${st.days} วัน`}</span>
-                </div>
-              </li>
-            </ol>
-          ) : <p className="ca-muted">ยังไม่มีใบรับรองของเครื่องนี้{guest ? "" : ' — กด "บันทึกรอบสอบเทียบใหม่"'}</p>}
-        </section>
-        {rounds.length > 0 && <TrendChart rounds={rounds} instrument={e} />}
-        {sel && <RoundView key={sel.key} round={sel} instrument={e} isLatest={rounds[0]?.key === sel.key} readOnly={guest} onEdit={() => onEdit(sel.key)} onDownload={onDownload} />}
+      {tab === "main" && (<>
+        {rounds.length > 0 ? <TrendChart rounds={rounds} instrument={e} /> : <section className="ca-card"><h2>แนวโน้มผลสอบเทียบ</h2><p className="ca-muted">ยังไม่มีผลสอบเทียบของเครื่องนี้</p></section>}
+        <InstrumentInfo instrument={e} guest={guest} onEdit={onEditInstrument} due={st.due} />
       </>)}
 
-      {tab === "info" && <InstrumentInfo instrument={e} guest={guest} onEdit={onEditInstrument} due={st.due} />}
 
       {tab === "daily" && (<>
         {!guest && <CheckCriteria instrument={e} onSave={onSaveInstrument} />}
@@ -972,6 +988,9 @@ const CSS = `
 .ca-back{align-self:flex-start}
 .ca-icon{background:none;border:none;color:var(--muted);cursor:pointer;width:40px;height:40px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center}
 .ca-icon:hover{background:#FDECEA;color:#B42318}
+.ca-vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}.ca-vcard{padding:16px 18px;margin:0}.ca-vcard.todo{border-color:#0A4F9B;box-shadow:0 0 0 1px #0A4F9B inset}
+.ca-vnew{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:1.5px dashed #B9D3EA;background:#F7FAFD;color:var(--teal-dark);cursor:pointer;font:inherit;min-height:170px;text-align:center}.ca-vnew:hover{background:#EEF5FC}
+.ca-rowlink tbody tr{cursor:pointer}.ca-rowlink tbody tr:hover td{background:#F4F8FC}
 .ca-search{display:flex;align-items:center;gap:6px;border:1px solid #B9D3EA;border-radius:10px;padding:0 10px;min-height:42px;color:var(--muted);background:#fff}
 .ca-search input{border:none;outline:none;font-size:14px;min-width:180px;background:none}
 .ca-scroll{overflow-x:auto}
