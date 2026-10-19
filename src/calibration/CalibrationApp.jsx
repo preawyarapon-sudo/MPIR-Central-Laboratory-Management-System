@@ -44,7 +44,8 @@ const TONE = {
   green: { fg: "#187A52", bg: "#E7F5EE" }, amber: { fg: "#8A5200", bg: "#FFF3DC" }, red: { fg: "#B42318", bg: "#FDECEA" },
   blue: { fg: "#0A4F9B", bg: "#E3EFFA" }, grey: { fg: "#4F6E8C", bg: "#EEF2F6" },
 };
-const isCalibrated = (e, rounds) => e.type !== "เครื่องปรับอากาศ" && (rounds.length > 0 || num(e.intervalMonths) != null || !!e.nextDue || num(e.tolerance) != null);
+const isAircon = (e) => e.type === "เครื่องปรับอากาศ" || /แอร์|เครื่องปรับอากาศ|air ?con/i.test(`${e.name || ""} ${e.type || ""}`);
+const isCalibrated = (e, rounds) => !isAircon(e) && (rounds.length > 0 || num(e.intervalMonths) != null || !!e.nextDue || num(e.tolerance) != null);
 
 /* =================================================================== */
 const KEYS = ["equipment", "certificates", "verifications", "dailyChecks", "intermediateChecks", "uncertaintyReports"];
@@ -118,6 +119,33 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
     setToast("ดาวน์โหลดรายงานแล้ว · นำไปลงนามและเก็บตามระบบเอกสาร");
   }
   const inVerify = ["verifyList", "verifyRound", "edit"].includes(page.name);
+  async function deleteInstrument(e) {
+    const n = { cert: (roundsById[e.id] || []).length, ver: data.verifications.filter(v => v.instrumentId === e.id).length,
+      daily: data.dailyChecks.filter(c => c.equipmentId === e.id).length, ic: data.intermediateChecks.filter(c => c.instrumentId === e.id).length };
+    const has = n.cert + n.ver + n.daily + n.ic > 0;
+    const msg = has
+      ? `ลบ ${e.code} ${e.name} ออกจากทะเบียน พร้อมบันทึกทั้งหมดของเครื่องนี้\n(รอบสอบเทียบ ${n.cert} · ทวนสอบ ${n.ver} · Daily check ${n.daily} · Intermediate check ${n.ic})\nลบแล้วกู้คืนไม่ได้ — พิมพ์รหัสเครื่อง "${e.code}" เพื่อยืนยัน`
+      : `ลบ ${e.code} ${e.name} ออกจากทะเบียน?`;
+    if (has ? window.prompt(msg) !== String(e.code) : !window.confirm(msg)) return;
+    await mutate("equipment", list => list.filter(x => x.id !== e.id));
+    if (n.cert) await mutate("certificates", list => list.filter(c => c.instrumentId !== e.id));
+    if (n.ver) await mutate("verifications", list => list.filter(v => v.instrumentId !== e.id));
+    if (n.daily) await mutate("dailyChecks", list => list.filter(c => c.equipmentId !== e.id));
+    if (n.ic) await mutate("intermediateChecks", list => list.filter(c => c.instrumentId !== e.id));
+    setToast(`ลบ ${e.code} แล้ว`);
+  }
+  async function deleteRound(inst, round) {
+    if (!window.confirm(`ลบรอบสอบเทียบ ${fmtDate(round.calibrationDate)} (ใบรับรอง ${round.certificateNo || "–"}) ของ ${inst.code}${round.verification ? " พร้อมผลทวนสอบ" : ""}?\nลบแล้วกู้คืนไม่ได้`)) return;
+    const same = (x) => x.instrumentId === inst.id && roundKey(x.certificateNo, x.calibrationDate) === round.key;
+    await mutate("certificates", list => list.filter(c => !same(c)));
+    if (round.verification) await mutate("verifications", list => list.filter(v => !(v.id === round.verification.id || same(v))));
+    const rest = (roundsById[inst.id] || []).filter(r => r.key !== round.key);
+    if ((roundsById[inst.id] || [])[0]?.key === round.key) {
+      const last = rest[0]?.calibrationDate || "";
+      await mutate("equipment", list => list.map(e => e.id === inst.id ? { ...e, lastCalibration: last, nextDue: last ? addMonthsISO(last, num(e.intervalMonths) || 12) : "" } : e));
+    }
+    setToast("ลบรอบสอบเทียบแล้ว");
+  }
 
   return (
     <div className="ca-root">
@@ -142,14 +170,15 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
       <main className="ca-main">
         {loading ? <div className="ca-empty">กำลังโหลดข้อมูล…</div> : (<>
           {page.name === "overview" && (
-            <Overview equipment={data.equipment} roundsById={roundsById} onOpen={(id) => go({ name: "instrument", instrumentId: id })} onAdd={() => go({ name: "equipEdit", draft: blankInstrument() })} />
+            <Overview equipment={data.equipment} roundsById={roundsById} onOpen={(id) => go({ name: "instrument", instrumentId: id })} onAdd={() => go({ name: "equipEdit", draft: blankInstrument() })} onDelete={deleteInstrument} />
           )}
           {page.name === "verifyList" && (
             <VerifyList equipment={data.equipment} roundsById={roundsById} selectedId={page.instrumentId}
               onSelect={(id) => go({ name: "verifyList", instrumentId: id || undefined })}
               onNew={(id) => go({ name: "edit", instrumentId: id, roundKey: null })}
               onVerify={(id, k) => go({ name: "edit", instrumentId: id, roundKey: k })}
-              onOpen={(id, k) => go({ name: "verifyRound", instrumentId: id, roundKey: k })} />
+              onOpen={(id, k) => go({ name: "verifyRound", instrumentId: id, roundKey: k })}
+              onDeleteRound={(id, r) => deleteRound(data.equipment.find(x => x.id === id), r)} />
           )}
           {page.name === "verifyRound" && instrument && (() => {
             const rounds = roundsById[instrument.id] || [];
@@ -325,7 +354,7 @@ function verifyState(round, e) {
   if (!v.downloadedAt) return { key: "report", label: "รอดาวน์โหลด LF-068", tone: "amber", sort: 2, vs };
   return { key: "done", label: "ทวนสอบแล้ว", tone: "green", sort: 3, vs };
 }
-function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId, onSelect }) {
+function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId, onSelect, onDeleteRound }) {
   const [q, setQ] = useState("");
   const [filterSel, setFilter] = useState(null);
   const groups = { todo: ["todo", "fail", "report", "reprint"], done: ["done"], all: null };
@@ -335,7 +364,7 @@ function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId
     const states = rounds.filter(x => x.st).map(x => x.st);
     const st = states.sort((a, b) => a.sort - b.sort)[0] || { key: "none", label: "ไม่มีข้อมูลทวนสอบ", tone: "grey", sort: 4 };
     return { e, rounds, st, todo: states.filter(x => groups.todo.includes(x.key)).length, verified: rounds.filter(x => x.r.verification).length };
-  }).filter(x => x.rounds.length), [equipment, roundsById]);
+  }).filter(x => x.rounds.length && !isAircon(x.e)), [equipment, roundsById]);
   const inGroup = (x, k) => !groups[k] || (k === "todo" ? x.todo > 0 : x.todo === 0 && x.verified > 0);
   // open on "ต้องดำเนินการ" when there is work, otherwise on "ทั้งหมด"
   const filter = filterSel || (rows.some(x => x.todo > 0) ? "todo" : "all");
@@ -355,7 +384,8 @@ function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId
             const v = r.verification;
             return (
               <section key={r.key} className={`ca-card ca-vcard ${st && groups.todo.includes(st.key) ? "todo" : ""}`}>
-                <div className="ca-small ca-muted">รอบสอบเทียบ{latest ? " · ล่าสุด" : ""}</div>
+                <div className="ca-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}><div className="ca-small ca-muted">รอบสอบเทียบ{latest ? " · ล่าสุด" : ""}</div>
+                  {onDeleteRound && <button className="ca-icon" style={{ margin: "-6px -8px 0 0" }} aria-label={`ลบรอบ ${fmtDate(r.calibrationDate)}`} title="ลบรอบสอบเทียบ" onClick={() => onDeleteRound(e.id, r)}><Trash2 size={15} /></button>}</div>
                 <h2 style={{ margin: "2px 0 0" }}>{fmtDate(r.calibrationDate)}</h2>
                 <div className="ca-muted ca-small">ใบรับรอง {r.certificateNo || "–"}</div>
                 <div style={{ margin: "10px 0 4px" }}><Pill tone={st ? st.tone : "grey"}>{st ? st.label : "ไม่บังคับทวนสอบ"}</Pill></div>
@@ -412,10 +442,9 @@ function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId
   );
 }
 
-function Overview({ equipment, roundsById, onOpen, onAdd = null }) {
+function Overview({ equipment, roundsById, onOpen, onAdd = null, onDelete = null }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
-  const [showAll, setShowAll] = useState(false);
   const rows = useMemo(() => equipment.map(e => {
     const rounds = roundsById[e.id] || [];
     return { e, rounds, st: instrumentStatus(e, rounds), cal: isCalibrated(e, rounds) };
@@ -431,10 +460,10 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null }) {
   ];
   const groups = { all: null, ok: ["ok", "soon"], soon: ["soon"], bad: ["overdue", "fail", "off"], todo: ["verify", "report"], action: ["soon", "overdue", "fail", "off", "verify", "report"] };
   const ql = q.trim().toLowerCase();
-  const shown = (showAll ? rows : cal)
+  const shown = cal
     .filter(r => !groups[filter] || groups[filter].includes(r.st.key))
     .filter(r => !ql || [r.e.code, r.e.name, r.e.brand, r.e.model, r.e.serialNo, r.e.location].some(x => String(x || "").toLowerCase().includes(ql)))
-    .sort((a, b) => a.st.sort - b.st.sort || String(a.e.code || "").localeCompare(String(b.e.code || ""), "th", { numeric: true }));
+    .sort((a, b) => String(a.e.code || a.e.name || "").localeCompare(String(b.e.code || b.e.name || ""), "en", { numeric: true, sensitivity: "base" }));
   const nOver = count(["overdue", "fail", "off"]), nSoon = count(["soon"]);
   return (
     <div className="ca-stack">
@@ -464,7 +493,7 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null }) {
         </div>
         <div className="ca-scroll">
           <table className="ca-table">
-            <thead><tr><th>รหัส</th><th>เครื่องมือ</th><th className="ca-hide-sm">ยี่ห้อ / รุ่น</th><th className="ca-hide-sm">สอบเทียบล่าสุด</th><th>ครบกำหนด</th><th>สถานะ</th></tr></thead>
+            <thead><tr><th>รหัส</th><th>เครื่องมือ</th><th className="ca-hide-sm">ยี่ห้อ / รุ่น</th><th className="ca-hide-sm">สอบเทียบล่าสุด</th><th>ครบกำหนด</th><th>สถานะ</th>{onDelete && <th aria-label="ลบ"></th>}</tr></thead>
             <tbody>
               {shown.map(({ e, rounds, st }) => (
                 <tr key={e.id}>
@@ -474,13 +503,13 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null }) {
                   <td className="ca-hide-sm">{fmtDate(rounds[0]?.calibrationDate || e.lastCalibration)}</td>
                   <td style={{ color: st.days != null && st.days < 0 ? "#B42318" : undefined, fontWeight: st.days != null && st.days < 0 ? 600 : 400 }}>{fmtDate(st.due)}</td>
                   <td><Pill tone={st.tone}>{st.label}</Pill></td>
+                  {onDelete && <td style={{ width: 44 }}><button className="ca-icon" aria-label={`ลบ ${e.code || e.name}`} title="ลบออกจากทะเบียน" onClick={() => onDelete(e)}><Trash2 size={15} /></button></td>}
                 </tr>
               ))}
-              {!shown.length && <tr><td colSpan={6} className="ca-empty">ไม่พบเครื่องมือ</td></tr>}
+              {!shown.length && <tr><td colSpan={7} className="ca-empty">ไม่พบเครื่องมือ</td></tr>}
             </tbody>
           </table>
         </div>
-        <div className="ca-card-foot"><button className="ca-link" onClick={() => setShowAll(!showAll)}>{showAll ? "ซ่อนเครื่องที่ไม่ต้องสอบเทียบ" : `แสดงเครื่องที่ไม่ต้องสอบเทียบด้วย (${rows.length - cal.length})`}</button></div>
       </section>
     </div>
   );
