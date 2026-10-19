@@ -5,10 +5,10 @@
 import { useState, useMemo } from "react";
 import { ChevronLeft, Plus, FileDown, Check, X, Pencil, Trash2, AlertTriangle } from "lucide-react";
 import { num, fmt, fmtDate, todayISO, beYear, mpirCodes } from "./calc.js";
-import { TESTS, calcReport, roundsFor, printLf069, DEFAULT_REPEATS, MAX_REPEATS, resolutionOf, DEFAULT_REPORT_REPEATS } from "./uncertainty.js";
+import { TESTS, calcReport, roundsFor, printLf069, DEFAULT_REPEATS, MAX_REPEATS, resolutionOf } from "./uncertainty.js";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
-const DEFAULT_OBJECTIVE = "ประเมินค่าความไม่แน่นอนของการตรวจทดสอบค่าบริกซ์และโพล ในน้ำอ้อย และไฟเบอร์ในชานอ้อยย่อย";
+const DEFAULT_OBJECTIVE = "ประเมินค่าความไม่แน่นอนของการวัดของเครื่องมือที่ใช้ตรวจทดสอบค่าบริกซ์และโพลในน้ำอ้อย และไฟเบอร์ในชานอ้อยย่อย";
 const DEFAULT_REFS = ["MPIR-WI-002 วิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย",
   "MPIR-WI-003 การวิเคราะห์ค่าเส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย", "MPIR-WI-008 การประเมินค่าความไม่แน่นอนของการวัด",
   "รายงานผลการทวนสอบเครื่องมือ (LF-068) ของ Refractometer, Polarimeter และเครื่องชั่ง 2 ตำแหน่ง"].join("\n");
@@ -99,9 +99,9 @@ export function UncertaintyList({ reports, certificates, equipment, onNew, onOpe
             </div>
             <div className="ca-scroll">
               <table className="ca-table ca-num">
-                <thead><tr><th>รายการ</th><th>n</th><th>ค่าเฉลี่ย</th><th>u_A</th><th>u_B</th><th>U (k=2)</th><th>รายงาน ±</th>{rep.paperU && <th>รายงานเดิม (กระดาษ)</th>}</tr></thead>
+                <thead><tr><th>รายการ</th><th>n</th><th>ค่าเฉลี่ย</th><th>RSD</th><th>u_c,rel</th><th>u_c</th><th>U (k=2)</th><th>ค่าที่ใช้ ±</th>{rep.paperU && <th>รายงานเดิม (กระดาษ)</th>}</tr></thead>
                 <tbody>{TESTS.map(T => { const r = R[T.key]; return (
-                  <tr key={T.key}><td style={{ fontFamily: "inherit" }}>{T.label}</td><td>{r.A.n}</td><td>{fmt(r.A.mean, r.dec)}</td><td>{fmt(r.A.uA, 4)}</td><td>{fmt(r.uB, 4)}</td><td>{fmt(r.U, 4)}</td>
+                  <tr key={T.key}><td style={{ fontFamily: "inherit" }}>{T.label}</td><td>{r.A.n}</td><td>{fmt(r.A.mean, r.dec)}</td><td>{fmt(r.A.rsd, 5)}</td><td>{fmt(r.ucRel, 5)}</td><td>{fmt(r.uc, 4)}</td><td>{fmt(r.U, 4)}</td>
                     <td className="ca-strong">{r.complete ? `${fmt(r.Ur, r.dec)} ${T.unit}` : <span className="ca-warn">ขาด{r.missing.join(", ")}</span>}</td>
                     {rep.paperU && <td className="ca-muted">{rep.paperU[T.short === "Fibre" ? "Fiber" : T.short] || "–"}</td>}</tr>); })}</tbody>
               </table>
@@ -109,7 +109,7 @@ export function UncertaintyList({ reports, certificates, equipment, onNew, onOpe
           </section>
         );
       })}
-      <p className="ca-small ca-muted">วิธีคำนวณ: u_A = SD/√m (SD จากผลทดสอบซ้ำ, m = จำนวนครั้งที่เฉลี่ยเป็นผลที่รายงาน ปกติ 2) · u_B = √(Calibration² + Resolution² [+ Pol factor²]) โดย Calibration = U ของใบรับรอง ÷ k, Resolution = d/(2√3) (Pol แปลง °Z → %Pol ด้วย 26/(100ρ) · Fibre รวมการชั่ง M0, M1, M2) · U = 2√(u_A² + u_B²) · ค่ารายงานปัดขึ้นตามความละเอียดของผล</p>
+      <p className="ca-small ca-muted">วิธีคำนวณ (ค่าความไม่แน่นอนของเครื่องมือ · แบบสัมพัทธ์ทั้งชุด): ทุกองค์ประกอบหารด้วยค่าเฉลี่ย (u/x̄) ก่อนรวม — Calibration = (U ของใบรับรอง ÷ k)/x̄, Resolution = (d/(2√3))/x̄ (Pol แปลง °Z → %Pol ด้วย 26/(100ρ) · Fibre รวมการชั่ง M0, M1, M2), Repeatability = RSD/√m (m = จำนวนครั้งที่ทดสอบซ้ำ n) · u_c = √Σ(u/x̄)² × x̄ · U = 2u_c · ปัดขึ้นตามความละเอียดของผล</p>
     </div>
   );
 }
@@ -124,7 +124,6 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
     setD(x => ({ ...x, [k]: v, ...(k === "reportDate" && v ? { year: String(beYear(v)) } : {}) }));
   };
   const setT = (tk, patch) => setD(x => ({ ...x, [tk]: { ...x[tk], ...patch } }));
-  const setEx = (k) => (ev) => setD(x => ({ ...x, example: { ...(x.example || {}), [k]: ev.target.value } }));
   const eqLabel = (e) => `${e.code || ""} — ${e.name || ""}${e.serialNo ? ` (S/N ${e.serialNo})` : ""}`;
   const sortedEq = useMemo(() => [...equipment].sort((a, b) => String(a.code || "").localeCompare(String(b.code || ""), "th", { numeric: true })), [equipment]);
 
@@ -205,7 +204,7 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
                   <label className="ca-field ca-span2"><span>หมายเหตุที่มา</span><input value={t.manualNote || ""} onChange={ev => setT(T.key, { manualNote: ev.target.value })} /></label>
                 </div>
               )}
-              <label className="ca-field"><span>จำนวนครั้งที่เฉลี่ยเป็นผลที่รายงาน (m)</span><input value={t.mRep ?? ""} onChange={ev => setT(T.key, { mRep: ev.target.value })} inputMode="numeric" placeholder={`${DEFAULT_REPORT_REPEATS} (ค่าปกติ)`} /></label>
+              <label className="ca-field"><span>ตัวหาร m ของ RSD/√m</span><input value={t.mRep ?? ""} onChange={ev => setT(T.key, { mRep: ev.target.value })} inputMode="numeric" placeholder={`${r.A.n || reads.length} (= จำนวนซ้ำ n)`} /></label>
               <label className="ca-field"><span>ความละเอียด d ({T.instUnit})</span><input value={t.res ?? ""} onChange={ev => setT(T.key, { res: ev.target.value })} inputMode="decimal" placeholder={`${resolutionOf(t, T, equipment)} (จากทะเบียน)`} /></label>
               {T.key === "fiber" && <label className="ca-field"><span>น้ำหนักชานก่อนอบ m = M1 − M0 (g) · WI: 200 ± 10</span><input value={t.m1 || ""} onChange={ev => setT(T.key, { m1: ev.target.value })} inputMode="decimal" /></label>}
             </div>
@@ -228,8 +227,8 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
             </div>
             <div className="ca-scroll">
               <table className="ca-table ca-num ca-calcbox">
-                <thead><tr><th>n</th><th>ค่าเฉลี่ย</th><th>SD</th><th>u_A = SD/√m</th><th>u Calibration</th><th>u Resolution</th>{T.key === "pol" && <th>u Pol factor</th>}<th>u_c</th><th>U = 2u_c</th><th>รายงาน ±</th></tr></thead>
-                <tbody><tr><td>{r.A.n}</td><td>{fmt(r.A.mean, r.dec)}</td><td>{fmt(r.A.sd, 4)}</td><td>{fmt(r.A.uA, 4)}</td><td>{fmt(r.uCal, 4)}</td><td>{fmt(r.uRes, 4)}</td>{T.key === "pol" && <td>{fmt(r.uPF, 4)}</td>}<td>{fmt(r.uc, 4)}</td><td>{fmt(r.U, 4)}</td>
+                <thead><tr><th>n</th><th>ค่าเฉลี่ย x̄</th><th>SD</th><th>RSD</th><th>RSD/√m</th><th>Calibration u/x̄</th><th>Resolution u/x̄</th>{T.key === "pol" && <th>Pol factor u/x̄</th>}<th>u_c,rel</th><th>u_c = u_c,rel × x̄</th><th>U = 2u_c</th><th>ค่าที่ใช้ ±</th></tr></thead>
+                <tbody><tr><td>{r.A.n}</td><td>{fmt(r.A.mean, r.dec)}</td><td>{fmt(r.A.sd, 4)}</td><td>{fmt(r.A.rsd, 5)}</td><td>{fmt(r.A.uArel, 5)}</td><td>{fmt(r.rCal, 5)}</td><td>{fmt(r.rRes, 5)}</td>{T.key === "pol" && <td>{fmt(r.rPF, 5)}</td>}<td>{fmt(r.ucRel, 5)}</td><td>{fmt(r.uc, 4)}</td><td>{fmt(r.U, 4)}</td>
                   <td className="ca-strong">{r.complete ? `${fmt(r.Ur, r.dec)} ${T.unit}` : "–"}</td></tr></tbody>
               </table>
             </div>
@@ -245,16 +244,6 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
           </section>
         );
       })}
-
-      <section className="ca-card ca-stack-sm">
-        <h2>6 ตัวอย่างการรายงานผล <span className="ca-muted ca-small">(ไม่บังคับ)</span></h2>
-        <div className="ca-grid4">
-          <label className="ca-field"><span>หมายเลขตัวอย่าง</span><input value={d.example?.sampleNo || ""} onChange={setEx("sampleNo")} /></label>
-          <label className="ca-field"><span>Brix</span><input value={d.example?.brix || ""} onChange={setEx("brix")} inputMode="decimal" /></label>
-          <label className="ca-field"><span>%Pol</span><input value={d.example?.pol || ""} onChange={setEx("pol")} inputMode="decimal" /></label>
-          <label className="ca-field"><span>%Fibre</span><input value={d.example?.fiber || ""} onChange={setEx("fiber")} inputMode="decimal" /></label>
-        </div>
-      </section>
 
       <div className="ca-savebar">
         <span className={problems.length ? "ca-warn" : "ca-muted"}>{problems.length ? `ยังขาด: ${problems.join(" · ")}` : "ข้อมูลครบ บันทึกและดาวน์โหลดได้"}</span>

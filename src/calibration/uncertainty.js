@@ -2,10 +2,11 @@
 // Fibre in prepared cane). Same layout as the yearly paper form; users type only
 // the repeat results and pick the calibration certificate — everything else is
 // calculated here (MPIR-WI-008 / GUM):
-//   u_A  = SD/√m                       (same unit as the result). SD comes from the
-//          n repeats of this study; m = number of measurements averaged for a
-//          reported result (routine: 2) — the uncertainty is for what the
-//          customer receives, not for the mean of the n study repeats.
+//   Relative method (lab decision 2569): every component is turned into a
+//   relative standard uncertainty u/x̄ before combining, Repeatability as
+//          u_A,rel = RSD/√m   (RSD = SD/x̄, m = n repeats by default — the
+//          uncertainty of the instrument, not of a 2-replicate customer result)
+//   u_c,rel = √(Σ u_rel²),  u_c = u_c,rel × x̄  (identical to the absolute GUM sum)
 //   u_B  = U_cert / k                  (certificate U is an expanded value)
 //   u_res = d/(2√3)                    (resolution of the instrument)
 //   Pol  : u(%Pol) = u(°Z) × 26/(100·ρ)            ρ = density of the juice at its Brix
@@ -13,7 +14,7 @@
 //   Fibre (MPIR-WI-003): %F = 100(M2 − M0)/(M1 − M0), M0 = cloth bag, M1 = bag + wet sample,
 //          M2 = bag + dried sample, m = M1 − M0 (200 ± 10 g):
 //          u = (u_w/m)·√[100² + F² + (100 − F)²] for each weighing u_w
-//   u_c  = √(Σu²),  U = k·u_c (k = 2, ~95 %)
+//   U = k·u_c (k = 2, ~95 %)
 import { mpirCodes, num, fmt, roundsOf, isBefore, refOf, uOf, fmtDate, beYear } from "./calc.js";
 import { LOGO_DATA_URI } from "./logo.js";
 
@@ -21,8 +22,7 @@ export const LF069_DOC = { code: "MPIR-LF-069", rev: "01" };
 export const UNC_KEY = "uncertaintyReports";
 export const DEFAULT_REPEATS = 7;
 export const MAX_REPEATS = 10;
-// Routine results are the mean of 2 measurements (lab practice).
-export const DEFAULT_REPORT_REPEATS = 2;
+// m defaults to the number of repeats n (instrument uncertainty).
 
 export const TESTS = [
   { key: "brix", label: "บริกซ์ (Brix)", short: "Brix", unit: "%Brix", inst: /refract|รีแฟรก/i, instLabel: "Refractometer", instUnit: "%Brix" },
@@ -89,8 +89,9 @@ export function calcReport(rep, certificates, equipment = []) {
   for (const T of TESTS) {
     const t = rep[T.key] || {};
     const A0 = stats(t.readings);
-    const mRep = Math.max(1, Math.round(num(t.mRep) || DEFAULT_REPORT_REPEATS));
-    const A = { ...A0, m: mRep, uA: A0.sd == null ? null : A0.sd / Math.sqrt(mRep) };
+    const mRep = Math.max(1, Math.round(num(t.mRep) || A0.n || DEFAULT_REPEATS));
+    const rsd = A0.sd != null && A0.mean ? A0.sd / Math.abs(A0.mean) : null;
+    const A = { ...A0, m: mRep, rsd, uArel: rsd == null ? null : rsd / Math.sqrt(mRep), uA: A0.sd == null ? null : A0.sd / Math.sqrt(mRep) };
     const dec = Math.max(2, decimalsOf(t.readings));
     const d = resolutionOf(t, T, equipment);
     let level = A.mean ?? null, c = 1, extra = {};
@@ -123,9 +124,13 @@ export function calcReport(rep, certificates, equipment = []) {
       }
     }
     const uB = uCal == null || (T.key === "pol" && uPF == null) ? null : Math.sqrt(uCal ** 2 + uRes ** 2 + (uPF || 0) ** 2);
-    const uc = uB != null && A.uA != null ? Math.sqrt(uB ** 2 + A.uA ** 2) : null;
+    // relative components (u / x̄) — combined as relatives, then × x̄
+    const xb = A.mean ? Math.abs(A.mean) : null, rel = (u) => (u == null || !xb ? null : u / xb);
+    const rCal = rel(uCal), rRes = rel(uRes), rPF = rel(uPF);
+    const ucRel = rCal != null && A.uArel != null && (T.key !== "pol" || rPF != null) ? Math.sqrt(rCal ** 2 + rRes ** 2 + (rPF || 0) ** 2 + A.uArel ** 2) : null;
+    const uc = ucRel == null ? null : ucRel * xb;
     const U = uc == null ? null : 2 * uc;
-    out[T.key] = { T, A, B, c, d, uR, uCal, uRes, uPF, uB, uc, U, Ur: roundUp(U, dec), dec, level, ...extra,
+    out[T.key] = { T, A, B, c, d, uR, uCal, uRes, uPF, uB, rCal, rRes, rPF, ucRel, uc, U, Ur: roundUp(U, dec), dec, level, ...extra,
       complete: uc != null, missing: [A.n < 2 ? "ผลทดสอบซ้ำอย่างน้อย 2 ค่า" : "", !B ? "ใบรับรองของเครื่องมือ" : "", T.key === "pol" && out.brix && !out.brix.complete ? "ผล Brix (ใช้หา Pol factor)" : ""].filter(Boolean) };
   }
   return out;
@@ -134,6 +139,7 @@ export function calcReport(rep, certificates, equipment = []) {
 /* ---------------- printable report ---------------- */
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 const f4 = (x) => fmt(x, 4);
+const f5 = (x) => fmt(x, 5); // relative (u/x̄)
 
 // Sources of uncertainty per test (cause-and-effect). Same in the printed
 // report and the registered Word form; every branch is either calculated or
@@ -166,7 +172,7 @@ function readingsTable(cols, rowsN) {
   const stat = (label, f) => `<tr class="s"><td>${label}</td>${cols.map(c => `<td>${f(c.r)}</td>`).join("")}</tr>`;
   return `<table class="n w60"><tr><th>ตัวอย่างซ้ำที่</th>${cols.map(c => `<th>${esc(c.label)}</th>`).join("")}</tr>${body}
 ${stat("Average", r => fmt(r.A.mean, r.dec))}${rowsN.includes("max") ? stat("Max", r => fmt(r.A.max, r.dec)) + stat("Min", r => fmt(r.A.min, r.dec)) : ""}
-${stat("SD", r => f4(r.A.sd))}${stat(`u<sub>A</sub>(x) = SD/√m`, r => `${f4(r.A.uA)} <span style="font-weight:400">(m = ${r.A.m})</span>`)}</table>`;
+${stat("SD", r => f4(r.A.sd))}${stat("RSD (SD/Ave)", r => f5(r.A.rsd))}${stat(`u<sub>A,rel</sub> = RSD/√m`, r => `${f5(r.A.uArel)} <span style="font-weight:400">(m = ${r.A.m})</span>`)}</table>`;
 }
 
 export function lf069Html(rep, certificates, equipment) {
@@ -176,12 +182,11 @@ export function lf069Html(rep, certificates, equipment) {
   const instTxt = (t) => { const e = inst(rep[t]?.instrumentId); return e ? `${e.code || ""} ${e.name || ""}${e.brand || e.model ? ` [${[e.brand, e.model].filter(Boolean).join(", ")}${e.serialNo ? `, S/N ${e.serialNo}` : ""}]` : ""}`.trim() : ""; };
   const year = rep.year || beYear(rep.reportDate);
   const Bline = (r, what) => r.B ? `${what}: ${esc(r.B.text)} → u = U/k = ${f4(r.B.u)} ${esc(r.T.instUnit)}` : `${what}: <b>ยังไม่ได้ระบุใบรับรอง</b>`;
+  const relOf = (u, r) => `${f4(u)}/${fmt(r.A.mean, r.dec)} = <b>${f5(u == null || !r.A.mean ? null : u / Math.abs(r.A.mean))}</b>`;
   const hdr = (pg, tot) => `<table class="hd"><tr><td class="brand" rowspan="2"><img src="${LOGO_DATA_URI}" alt="MITR PHOL Innovation &amp; Research Center"></td><td class="t" rowspan="2">รายงานผลการประเมินความไม่แน่นอนของการวัด<small>Measurement Uncertainty Evaluation Report · ประจำปี ${esc(year)}</small></td><td class="m">รหัสเอกสาร: <b>${LF069_DOC.code}</b> Rev.: <b>${LF069_DOC.rev}</b></td></tr><tr><td class="m">หน้า ${pg} / ${tot}</td></tr></table>`;
   const refs = mpirCodes(rep.references || "").split(/\n/).map(s => s.trim()).filter(Boolean);
   const sumRow = (label, fn, note = "") => `<tr><td class="lft">${label}</td>${fn}<td class="lft">${note}</td></tr>`;
 
-  const ex = rep.example || {};
-  const exLine = (v, r, unit) => num(v) == null ? "" : `<p class="ind2">- ค่า${r.T.key === "brix" ? "บริกซ์" : r.T.key === "pol" ? "โพล" : "ไฟเบอร์"} ${esc(v)} ± ${fmt(r.Ur, r.dec)} ${unit} ที่ระดับความเชื่อมั่น 95%</p>`;
   const sign = (title, name) => `<td><div class="line"></div>(${name ? esc(name) : "&nbsp;".repeat(40)})<br>${title}<br>วันที่ ........./........./.........</td>`;
   const p1 = `${hdr(1, 5)}
 <h3><b>1</b>วัตถุประสงค์</h3><p>${esc(rep.objective)}</p>
@@ -203,13 +208,14 @@ ${fishbone(FISHBONES.pol.effect, FISHBONES.pol.bones)}
 `;
   const p2 = `${hdr(2, 5)}
 <h5>4.1.3 แหล่งของ Uncertainty และสรุปการคำนวณ</h5>
-<table class="n"><tr><th class="lft">หัวข้อ</th><th>Brix (%Brix)</th><th>Pol (%Pol)</th><th class="lft">หมายเหตุ</th></tr>
-${sumRow("1 Standard Uncertainty of Component", "<td></td><td></td>")}
-${sumRow("&nbsp;&nbsp;1.1 Calibration", `<td>${f4(b.uCal)}</td><td>${f4(p.uCal)}</td>`, "Brix = Refractometer · Pol = Polarimeter (°Z → %Pol)")}
-${sumRow("&nbsp;&nbsp;1.2 Resolution", `<td>${f4(b.uRes)}</td><td>${f4(p.uRes)}</td>`, `d = ${esc(b.d)} %Brix / ${esc(p.d)} °Z`)}
-${sumRow("&nbsp;&nbsp;1.3 Pol Factor (จาก Brix)", `<td>–</td><td>${f4(p.uPF)}</td>`, "ρ<sub>20</sub> ขึ้นกับค่า Brix")}
-${sumRow("&nbsp;&nbsp;1.4 Repeatability (u<sub>A</sub>)", `<td>${f4(b.A.uA)}</td><td>${f4(p.A.uA)}</td>`, `SD จาก ${b.A.n} / ${p.A.n} ซ้ำ · รายงานเฉลี่ย m = ${b.A.m} / ${p.A.m} ครั้ง · รวมผลของอุณหภูมิ`)}
-${sumRow("2 Combined Uncertainty (u<sub>c</sub>)", `<td>${f4(b.uc)}</td><td>${f4(p.uc)}</td>`)}
+<table class="n"><tr><th class="lft">หัวข้อ</th><th>Brix</th><th>Pol</th><th class="lft">หมายเหตุ</th></tr>
+${sumRow("1 Relative Standard Uncertainty (u/x̄)", "<td></td><td></td>", `x̄ = ${fmt(b.A.mean, b.dec)} %Brix / ${fmt(p.A.mean, p.dec)} %Pol`)}
+${sumRow("&nbsp;&nbsp;1.1 Calibration", `<td>${f5(b.rCal)}</td><td>${f5(p.rCal)}</td>`, "Brix = Refractometer · Pol = Polarimeter (°Z → %Pol)")}
+${sumRow("&nbsp;&nbsp;1.2 Resolution", `<td>${f5(b.rRes)}</td><td>${f5(p.rRes)}</td>`, `d = ${esc(b.d)} %Brix / ${esc(p.d)} °Z`)}
+${sumRow("&nbsp;&nbsp;1.3 Pol Factor (จาก Brix)", `<td>–</td><td>${f5(p.rPF)}</td>`, "ρ<sub>20</sub> ขึ้นกับค่า Brix")}
+${sumRow("&nbsp;&nbsp;1.4 Repeatability (RSD/√m)", `<td>${f5(b.A.uArel)}</td><td>${f5(p.A.uArel)}</td>`, `RSD จาก ${b.A.n} / ${p.A.n} ซ้ำ · m = ${b.A.m} / ${p.A.m} · รวมผลของอุณหภูมิ`)}
+${sumRow("2 Combined (u<sub>c,rel</sub>)", `<td>${f5(b.ucRel)}</td><td>${f5(p.ucRel)}</td>`)}
+${sumRow("&nbsp;&nbsp;u<sub>c</sub> = u<sub>c,rel</sub> × x̄", `<td>${f4(b.uc)}</td><td>${f4(p.uc)}</td>`, "%Brix / %Pol")}
 ${sumRow("3 Expanded Uncertainty (U, k = 2)", `<td><b>${f4(b.U)}</b></td><td><b>${f4(p.U)}</b></td>`, "ที่ระดับความเชื่อมั่น 95%")}</table>
 
 <h5>4.1.4 รายละเอียดการคำนวณ Uncertainty</h5>
@@ -219,27 +225,27 @@ ${sumRow("3 Expanded Uncertainty (U, k = 2)", `<td><b>${f4(b.U)}</b></td><td><b>
 <tr><td>ความละเอียดของเครื่องมือ (Resolution)</td><td>u = d/(2√3) (Type B, rectangular)</td></tr>
 <tr><td>Pol Factor</td><td>ความหนาแน่นของน้ำอ้อยขึ้นกับค่า Brix ที่วัดได้ (Type B)</td></tr>
 <tr><td>การชักตัวอย่าง วิธีวิเคราะห์ และผู้วิเคราะห์</td><td>Uncertainty ของการวิเคราะห์ซ้ำ (Type A)</td></tr></table>
-<p class="ind"><b>4.1.4.2 Standard Uncertainty ของแต่ละ Component</b></p>
-<p class="ind2">- Calibration: ${Bline(b, "Refractometer")}</p>
-<p class="ind2">- Resolution: u = d/(2√3) = ${esc(b.d)}/3.4641 = <b>${f4(b.uRes)}</b> %Brix</p>
-<p class="ind2">- Calibration: ${Bline(p, "Polarimeter")}<br>&nbsp;&nbsp;แปลงเป็น %Pol ด้วย Pol Factor: c = 26/(100 × ρ<sub>20</sub>) = 26/(100 × ${fmt(p.rho, 5)}) = ${f4(p.c)} (ρ<sub>20</sub> ที่ ${fmt(p.brixUsed, 2)} %Brix) → ${f4(p.B?.u)} × ${f4(p.c)} = <b>${f4(p.uCal)}</b> %Pol</p>
-<p class="ind2">- Resolution: u = ${esc(p.d)}/3.4641 × ${f4(p.c)} = <b>${f4(p.uRes)}</b> %Pol</p>
-<p class="ind2">- Pol Factor: u = %Pol × (dρ/dBrix)/ρ<sub>20</sub> × u<sub>c</sub>[Brix] = ${fmt(p.A.mean, p.dec)} × ${fmt(p.slope, 5)}/${fmt(p.rho, 5)} × ${f4(b.uc)} = <b>${f4(p.uPF)}</b> %Pol</p>
+<p class="ind"><b>4.1.4.2 Standard Uncertainty ของแต่ละ Component</b> (แปลงเป็นค่าสัมพัทธ์ u/x̄ ก่อนรวม)</p>
+<p class="ind2">- Calibration: ${Bline(b, "Refractometer")} → u/x̄ = ${relOf(b.uCal, b)}</p>
+<p class="ind2">- Resolution: u = d/(2√3) = ${esc(b.d)}/3.4641 = ${f4(b.uRes)} %Brix → u/x̄ = ${relOf(b.uRes, b)}</p>
+<p class="ind2">- Calibration: ${Bline(p, "Polarimeter")}<br>&nbsp;&nbsp;แปลงเป็น %Pol ด้วย Pol Factor: c = 26/(100 × ρ<sub>20</sub>) = 26/(100 × ${fmt(p.rho, 5)}) = ${f4(p.c)} (ρ<sub>20</sub> ที่ ${fmt(p.brixUsed, 2)} %Brix) → ${f4(p.B?.u)} × ${f4(p.c)} = ${f4(p.uCal)} %Pol → u/x̄ = ${relOf(p.uCal, p)}</p>
+<p class="ind2">- Resolution: u = ${esc(p.d)}/3.4641 × ${f4(p.c)} = ${f4(p.uRes)} %Pol → u/x̄ = ${relOf(p.uRes, p)}</p>
+<p class="ind2">- Pol Factor: u = %Pol × (dρ/dBrix)/ρ<sub>20</sub> × u<sub>c</sub>[Brix] = ${fmt(p.A.mean, p.dec)} × ${fmt(p.slope, 5)}/${fmt(p.rho, 5)} × ${f4(b.uc)} = ${f4(p.uPF)} %Pol → u/x̄ = ${relOf(p.uPF, p)}</p>
 `;
   const p3 = `${hdr(3, 5)}
-<p class="ind2">- Repeatability: SD จากการวัดบริกซ์และโพลของตัวอย่างเดียวกัน ${b.A.n} ซ้ำ · u<sub>A</sub>(x) = SD/√m โดย m = จำนวนครั้งที่วัดแล้วเฉลี่ยเป็นผลที่รายงานลูกค้า (Brix m = ${b.A.m}, Pol m = ${p.A.m})</p>
+<p class="ind2">- Repeatability: RSD จากการวัดบริกซ์และโพลของตัวอย่างเดียวกัน ${b.A.n} ซ้ำ · u<sub>A,rel</sub> = RSD/√m (Brix m = ${b.A.m}, Pol m = ${p.A.m})</p>
 ${readingsTable([{ label: "Brix (บริกซ์)", r: b }, { label: "% Pol (โพล)", r: p }], [])}
 <p class="ind"><b>4.1.4.3 Combined Uncertainty</b></p>
-<p class="ind2">u<sub>c</sub>[Brix] = √[(${f4(b.uCal)})² + (${f4(b.uRes)})² + (${f4(b.A.uA)})²] = <b>${f4(b.uc)}</b> %Brix</p>
-<p class="ind2">u<sub>c</sub>[Pol] = √[(${f4(p.uCal)})² + (${f4(p.uRes)})² + (${f4(p.uPF)})² + (${f4(p.A.uA)})²] = <b>${f4(p.uc)}</b> %Pol</p>
+<p class="ind2">u<sub>c,rel</sub>[Brix] = √[(${f5(b.rCal)})² + (${f5(b.rRes)})² + (${f5(b.A.uArel)})²] = ${f5(b.ucRel)} → u<sub>c</sub> = ${f5(b.ucRel)} × ${fmt(b.A.mean, b.dec)} = <b>${f4(b.uc)}</b> %Brix</p>
+<p class="ind2">u<sub>c,rel</sub>[Pol] = √[(${f5(p.rCal)})² + (${f5(p.rRes)})² + (${f5(p.rPF)})² + (${f5(p.A.uArel)})²] = ${f5(p.ucRel)} → u<sub>c</sub> = ${f5(p.ucRel)} × ${fmt(p.A.mean, p.dec)} = <b>${f4(p.uc)}</b> %Pol</p>
 <p class="ind"><b>4.1.4.4 Expanded Uncertainty</b> (Coverage Factor k = 2 ที่ระดับความเชื่อมั่น 95%)</p>
 <p class="ind2">U[Brix] = ${f4(b.uc)} × 2 = <b>${f4(b.U)}</b> %Brix &nbsp;&nbsp; U[Pol] = ${f4(p.uc)} × 2 = <b>${f4(p.U)}</b> %Pol</p>
-<h5>4.1.5 การรายงานผล พร้อมค่า Uncertainty</h5>
-<p class="ind2">Brix ในน้ำอ้อย = ค่าที่ได้จากการตรวจทดสอบ ± ${fmt(b.Ur, b.dec)} %Brix</p>
-<p class="ind2">%Pol ในน้ำอ้อย = ค่าที่ได้จากการตรวจทดสอบ ± ${fmt(p.Ur, p.dec)} %Pol</p>
+<h5>4.1.5 ค่าความไม่แน่นอนของการวัดของเครื่องมือ</h5>
+<p class="ind2">Refractometer (Brix): U = ± ${fmt(b.Ur, b.dec)} %Brix (k = 2)</p>
+<p class="ind2">Polarimeter (Pol): U = ± ${fmt(p.Ur, p.dec)} %Pol (k = 2)</p>
 <h4>4.2 ความไม่แน่นอนของการวัดไฟเบอร์ในชานอ้อยย่อย</h4>
 <h5>4.2.1 สมการ</h5>
-<p class="ind">%ไฟเบอร์ = 100 × (M2 − M0) / (M1 − M0) &nbsp;(MPIR-WI-003 ข้อ 7.5)</p>
+<p class="ind">%ไฟเบอร์ = 100 × (M2 − M0) / (M1 − M0) &nbsp;(MPIR-WI-003 ข้อ 6.5)</p>
 <p class="ind">M0 = น้ำหนักถุงผ้า · M1 = น้ำหนักถุงผ้า + ชานอ้อยย่อยก่อนอบ · M2 = น้ำหนักถุงผ้า + ชานอ้อยย่อยหลังอบ · m = M1 − M0 = ${esc(fb.M1)} g (ตาม WI 200 ± 10 g)</p>
 <p class="ind">เครื่องชั่ง ${esc(instTxt("fiber"))}</p>
 <h5>4.2.2 แผนภูมิก้างปลา</h5>
@@ -249,35 +255,35 @@ ${fishbone(FISHBONES.fiber.effect, FISHBONES.fiber.bones)}
 `;
   const p4 = `${hdr(4, 5)}
 <h5>4.2.3 แหล่งของ Uncertainty และสรุปการคำนวณ</h5>
-<table class="n w80"><tr><th class="lft">หัวข้อ</th><th>%Fibre</th><th class="lft">หมายเหตุ</th></tr>
-${sumRow("1 Standard Uncertainty of Component", "<td></td>")}
-${sumRow("&nbsp;&nbsp;1.1 การชั่งน้ำหนัก — Calibration", `<td>${f4(fb.uCal)}</td>`, "M0, M1, M2")}
-${sumRow("&nbsp;&nbsp;1.2 การชั่งน้ำหนัก — Resolution", `<td>${f4(fb.uRes)}</td>`, `d = ${esc(fb.d)} g`)}
-${sumRow("&nbsp;&nbsp;1.3 Repeatability (u<sub>A</sub>)", `<td>${f4(fb.A.uA)}</td>`, `SD จาก ${fb.A.n} ซ้ำ · รายงานเฉลี่ย m = ${fb.A.m} ครั้ง · รวมผลของการอบ/ความชื้น`)}
-${sumRow("2 Combined Uncertainty (u<sub>c</sub>)", `<td>${f4(fb.uc)}</td>`)}
+<table class="n w80"><tr><th class="lft">หัวข้อ</th><th>Fibre</th><th class="lft">หมายเหตุ</th></tr>
+${sumRow("1 Relative Standard Uncertainty (u/x̄)", "<td></td>", `x̄ = ${fmt(fb.A.mean, fb.dec)} %Fibre`)}
+${sumRow("&nbsp;&nbsp;1.1 การชั่งน้ำหนัก — Calibration", `<td>${f5(fb.rCal)}</td>`, "M0, M1, M2")}
+${sumRow("&nbsp;&nbsp;1.2 การชั่งน้ำหนัก — Resolution", `<td>${f5(fb.rRes)}</td>`, `d = ${esc(fb.d)} g`)}
+${sumRow("&nbsp;&nbsp;1.3 Repeatability (RSD/√m)", `<td>${f5(fb.A.uArel)}</td>`, `RSD จาก ${fb.A.n} ซ้ำ · m = ${fb.A.m} · รวมผลของการอบ/ความชื้น`)}
+${sumRow("2 Combined (u<sub>c,rel</sub>)", `<td>${f5(fb.ucRel)}</td>`)}
+${sumRow("&nbsp;&nbsp;u<sub>c</sub> = u<sub>c,rel</sub> × x̄", `<td>${f4(fb.uc)}</td>`, "%Fibre")}
 ${sumRow("3 Expanded Uncertainty (U, k = 2)", `<td><b>${f4(fb.U)}</b></td>`, "ที่ระดับความเชื่อมั่น 95%")}</table>
 <h5>4.2.4 รายละเอียดการคำนวณ Uncertainty</h5>
 <p class="ind"><b>4.2.4.1 Standard Uncertainty ของการชั่งน้ำหนัก</b></p>
 <p class="ind2">- ${Bline(fb, "เครื่องชั่ง")}</p>
 <p class="ind2">- c<sub>M2</sub> = 100/m = ${f4(fb.c2)} · c<sub>M1</sub> = %F/m = ${fmt(fb.A.mean, fb.dec)}/${esc(fb.M1)} = ${f4(fb.c1)} · c<sub>M0</sub> = (100 − %F)/m = ${f4(fb.c0)} &nbsp;(%/g)</p>
-<p class="ind2">- Calibration: u × √[c<sub>M2</sub>² + c<sub>M1</sub>² + c<sub>M0</sub>²] = ${f4(fb.B?.u)} × √[(${f4(fb.c2)})² + (${f4(fb.c1)})² + (${f4(fb.c0)})²] = <b>${f4(fb.uCal)}</b> %Fibre</p>
-<p class="ind2">- Resolution: u = d/(2√3) = ${esc(fb.d)}/3.4641 = ${f4(fb.uR)} g ต่อการชั่ง → ${f4(fb.uR)} × √[(${f4(fb.c2)})² + (${f4(fb.c1)})² + (${f4(fb.c0)})²] = <b>${f4(fb.uRes)}</b> %Fibre</p>
-<p class="ind"><b>4.2.4.2 Repeatability: u<sub>A</sub>(x) = SD/√m</b> · SD จากการวัดไฟเบอร์ตัวอย่างเดียวกัน ${fb.A.n} ซ้ำ · m = ${fb.A.m} (จำนวนถุงที่เฉลี่ยเป็นผลที่รายงาน)</p>
+<p class="ind2">- Calibration: u × √[c<sub>M2</sub>² + c<sub>M1</sub>² + c<sub>M0</sub>²] = ${f4(fb.B?.u)} × √[(${f4(fb.c2)})² + (${f4(fb.c1)})² + (${f4(fb.c0)})²] = ${f4(fb.uCal)} %Fibre → u/x̄ = ${relOf(fb.uCal, fb)}</p>
+<p class="ind2">- Resolution: u = d/(2√3) = ${esc(fb.d)}/3.4641 = ${f4(fb.uR)} g ต่อการชั่ง → ${f4(fb.uR)} × √[(${f4(fb.c2)})² + (${f4(fb.c1)})² + (${f4(fb.c0)})²] = ${f4(fb.uRes)} %Fibre → u/x̄ = ${relOf(fb.uRes, fb)}</p>
+<p class="ind"><b>4.2.4.2 Repeatability: u<sub>A,rel</sub> = RSD/√m</b> · RSD จากการวัดไฟเบอร์ตัวอย่างเดียวกัน ${fb.A.n} ซ้ำ · m = ${fb.A.m}</p>
 ${readingsTable([{ label: "%ไฟเบอร์ในชานอ้อยย่อย", r: fb }], ["max"])}
 `;
   const p5 = `${hdr(5, 5)}
-<p class="ind"><b>4.2.4.3 Combined Uncertainty</b> &nbsp; u<sub>c</sub>[Fibre] = √[(${f4(fb.uCal)})² + (${f4(fb.uRes)})² + (${f4(fb.A.uA)})²] = <b>${f4(fb.uc)}</b></p>
+<p class="ind"><b>4.2.4.3 Combined Uncertainty</b> &nbsp; u<sub>c,rel</sub>[Fibre] = √[(${f5(fb.rCal)})² + (${f5(fb.rRes)})² + (${f5(fb.A.uArel)})²] = ${f5(fb.ucRel)} → u<sub>c</sub> = ${f5(fb.ucRel)} × ${fmt(fb.A.mean, fb.dec)} = <b>${f4(fb.uc)}</b> %Fibre</p>
 <p class="ind"><b>4.2.4.4 Expanded Uncertainty</b> &nbsp; U[Fibre] = ${f4(fb.uc)} × 2 = <b>${f4(fb.U)}</b> %Fibre</p>
-<h5>4.2.5 การรายงานผล พร้อมค่า Uncertainty</h5>
-<p class="ind2">%ไฟเบอร์ในชานอ้อยย่อย = ค่าที่ได้จากการตรวจทดสอบ ± ${fmt(fb.Ur, fb.dec)} %</p>
+<h5>4.2.5 ค่าความไม่แน่นอนของการวัด (เครื่องชั่ง)</h5>
+<p class="ind2">%ไฟเบอร์: U = ± ${fmt(fb.Ur, fb.dec)} % (k = 2)</p>
 <h3><b>5</b>สรุปผล</h3>
-<table class="n w80"><tr><th class="lft">รายการทดสอบ</th><th>U (k = 2)</th><th>ค่าที่ใช้รายงาน (ปัดขึ้น)</th></tr>
+<table class="n w80"><tr><th class="lft">รายการทดสอบ</th><th>U (k = 2)</th><th>ค่าที่ใช้ (ปัดขึ้น)</th></tr>
 <tr><td class="lft">องศาบริกซ์ (Brix) ในตัวอย่างน้ำอ้อย</td><td>${f4(b.U)}</td><td><b>± ${fmt(b.Ur, b.dec)} %Brix</b></td></tr>
 <tr><td class="lft">%โพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย</td><td>${f4(p.U)}</td><td><b>± ${fmt(p.Ur, p.dec)} %Pol</b></td></tr>
 <tr><td class="lft">%เส้นใย (Fibre) ในตัวอย่างชานอ้อยย่อย</td><td>${f4(fb.U)}</td><td><b>± ${fmt(fb.Ur, fb.dec)} %</b></td></tr></table>
-${ex.sampleNo || num(ex.brix) != null || num(ex.pol) != null || num(ex.fiber) != null ? `<h3><b>6</b>ตัวอย่างการรายงานผล</h3><p class="ind">ผลวิเคราะห์ตัวอย่าง หมายเลข ${esc(ex.sampleNo || "....")} รายงานดังนี้</p>${exLine(ex.brix, b, "%Brix")}${exLine(ex.pol, p, "%Pol")}${exLine(ex.fiber, fb, "%")}` : ""}
 <table class="sig"><tr>${sign("จัดทำโดย", rep.preparedBy)}${sign("ทบทวนโดย (TM/QM)", "")}${sign("อนุมัติโดย (Lab manager)", "")}</tr></table>
-<div class="note">u<sub>A</sub> = SD/√m (SD จากการทดสอบซ้ำ n ครั้ง, m = จำนวนครั้งที่เฉลี่ยเป็นผลที่รายงาน) · Calibration = U ของใบรับรอง ÷ k · Resolution = d/(2√3) · คูณ sensitivity coefficient ให้เป็นหน่วยของผล · U = 2u<sub>c</sub> · ค่าที่ใช้รายงานปัดขึ้นตามความละเอียดของผล · คำนวณโดยระบบ LabTrack (Instrument Assurance System) พิมพ์เมื่อ ${esc(new Date().toLocaleString("th-TH"))} · ฉบับที่ลงนามเก็บตามระบบเอกสาร</div>`;
+<div class="note">ค่าความไม่แน่นอนของเครื่องมือ · ทุกองค์ประกอบแปลงเป็นค่าสัมพัทธ์ u/x̄ ก่อนรวม: Calibration = (U ของใบรับรอง ÷ k)/x̄ · Resolution = (d/(2√3))/x̄ · Repeatability = RSD/√m (m = n ครั้งที่ทดสอบซ้ำ) · u<sub>c</sub> = √Σ(u/x̄)² × x̄ · U = 2u<sub>c</sub> · ค่าที่ใช้ปัดขึ้นตามความละเอียดของผล · คำนวณโดยระบบ LabTrack (Instrument Assurance System) พิมพ์เมื่อ ${esc(new Date().toLocaleString("th-TH"))} · ฉบับที่ลงนามเก็บตามระบบเอกสาร</div>`;
   const foot = `<div class="ft"><span>อ้างอิง ISO/IEC 17025:2017 ข้อ 7.6 · MPIR-WI-008</span><span>${LF069_DOC.code} Rev.${LF069_DOC.rev}</span></div>`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>LF-069 ประจำปี ${esc(year)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
