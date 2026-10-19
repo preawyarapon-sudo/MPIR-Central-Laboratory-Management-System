@@ -20,8 +20,9 @@ import { LOGO_DATA_URI } from "./logo.js";
 
 export const LF069_DOC = { code: "MPIR-LF-069", rev: "01" };
 export const UNC_KEY = "uncertaintyReports";
-export const DEFAULT_REPEATS = 7;
-export const MAX_REPEATS = 10;
+export const DEFAULT_REPEATS = 3; // rows offered for a new report (minimum)
+export const MIN_REPEATS = 3;
+export const MAX_REPEATS = 30;
 // m defaults to the number of repeats n (instrument uncertainty).
 
 export const TESTS = [
@@ -110,8 +111,9 @@ export function calcReport(rep, certificates, equipment = []) {
     const uR = d / r3; // resolution, instrument unit
     let uCal = null, uRes = null, uPF = null;
     if (T.key === "fiber") {
-      // ∂F/∂M2 = 100/m, ∂F/∂M1 = −F/m, ∂F/∂M0 = −(100 − F)/m
-      const F = A.mean ?? 0, m = extra.M1, c2 = 100 / m, c1 = F / m, c0 = (100 - F) / m;
+      // form equation %F = 100(M2 − M0)/M1, M1 = sample before drying:
+      // ∂F/∂M2 = 100/M1, ∂F/∂M0 = −100/M1, ∂F/∂M1 = −F/M1
+      const F = A.mean ?? 0, m = extra.M1, c2 = 100 / m, c1 = F / m, c0 = 100 / m;
       const prop = (u) => Math.sqrt((c2 * u) ** 2 + (c1 * u) ** 2 + (c0 * u) ** 2);
       uCal = B ? prop(B.u) : null; uRes = prop(uR);
       extra = { ...extra, c2, c1, c0 };
@@ -127,176 +129,206 @@ export function calcReport(rep, certificates, equipment = []) {
     // relative components (u / x̄) — combined as relatives, then × x̄
     const xb = A.mean ? Math.abs(A.mean) : null, rel = (u) => (u == null || !xb ? null : u / xb);
     const rCal = rel(uCal), rRes = rel(uRes), rPF = rel(uPF);
-    const ucRel = rCal != null && A.uArel != null && (T.key !== "pol" || rPF != null) ? Math.sqrt(rCal ** 2 + rRes ** 2 + (rPF || 0) ** 2 + A.uArel ** 2) : null;
+    // Calibration + Repeatability only, as in the registered form (resolution
+    // is reflected in the repeat readings; Pol factor not counted).
+    const ucRel = rCal != null && A.uArel != null ? Math.sqrt(rCal ** 2 + A.uArel ** 2) : null;
     const uc = ucRel == null ? null : ucRel * xb;
     const U = uc == null ? null : 2 * uc;
     out[T.key] = { T, A, B, c, d, uR, uCal, uRes, uPF, uB, rCal, rRes, rPF, ucRel, uc, U, Ur: roundUp(U, dec), dec, level, ...extra,
-      complete: uc != null, missing: [A.n < 2 ? "ผลทดสอบซ้ำอย่างน้อย 2 ค่า" : "", !B ? "ใบรับรองของเครื่องมือ" : "", T.key === "pol" && out.brix && !out.brix.complete ? "ผล Brix (ใช้หา Pol factor)" : ""].filter(Boolean) };
+      complete: uc != null, missing: [A.n < MIN_REPEATS ? `ค่าที่วัดได้อย่างน้อย ${MIN_REPEATS} ซ้ำ` : "", !B ? "ใบรับรองของเครื่องมือ" : ""].filter(Boolean) };
   }
   return out;
 }
 
 /* ---------------- printable report ---------------- */
+// Same layout as the registered paper form (RDI-LF-069 Rev.00, 6 pages):
+// small logo + "code Rev. Page x of 6" + centred title above a framed page,
+// numbered headings 1–6, tables and fishbones in the same places.
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 const f4 = (x) => fmt(x, 4);
 const f5 = (x) => fmt(x, 5); // relative (u/x̄)
 
-// Sources of uncertainty per test (cause-and-effect). Same in the printed
-// report and the registered Word form; every branch is either calculated or
-// stated as included in Repeatability.
+// Sources of uncertainty per test, drawn as in the paper form. Every branch is
+// either calculated or included in Repeatability.
 export const FISHBONES = {
-  brix: { effect: "Brix (%)", bones: [{ name: "Calibration", sub: ["ใบรับรอง Refractometer"] }, { name: "Repeatability", sub: ["ตัวอย่าง / ผู้วิเคราะห์", "อุณหภูมิ (ATC)"] }, { name: "Resolution", sub: ["d/(2√3)"] }] },
-  pol: { effect: "Pol (%)", bones: [{ name: "Pol Reading (°Z)", sub: ["Calibration", "Resolution"] }, { name: "Repeatability", sub: ["ตัวอย่าง / ผู้วิเคราะห์", "อุณหภูมิ"] }, { name: "Pol Factor", sub: ["Brix → ρ20"] }] },
-  fiber: { effect: "ไฟเบอร์ (%)", bones: [{ name: "M1", sub: ["Calibration", "Resolution"] }, { name: "M2", sub: ["Calibration", "Resolution"] }, { name: "M0", sub: ["Calibration", "Resolution"] }, { name: "Repeatability", sub: ["การอบ (อุณหภูมิ/เวลา)", "ความชื้นขณะชั่ง", "ผู้วิเคราะห์"] }] },
+  brix: { effect: "Brix (%)", top: [{ name: "ค่า Brix ที่อ่านได้จากการวัด", sub: ["Calibration"] }], bottom: [{ name: "Repeatability", sub: [] }] },
+  pol: { effect: "Pol (%)", top: [{ name: "Pol Reading (°Z)", sub: ["Calibration"] }], bottom: [{ name: "Pol Factor", sub: [] }, { name: "Repeatability", sub: [] }] },
+  fiber: { effect: "ไฟเบอร์ (%)", top: [{ name: "M1", sub: ["Linearity", "Resolution"] }, { name: "M0", sub: ["Linearity", "Resolution"] }], bottom: [{ name: "M2", sub: ["Temperature", "Linearity"] }, { name: "Repeatability", sub: [] }] },
 };
-// Cause-and-effect (fishbone) diagram as inline SVG.
-export function fishbone(effect, bones) {
-  const W = 520, H = 150, y = 75, x0 = 20, x1 = 400;
-  const top = bones.filter((_, i) => i % 2 === 0), bot = bones.filter((_, i) => i % 2 === 1);
-  const step = (x1 - x0 - 40) / Math.max(top.length, bot.length, 1);
+// Cause-and-effect diagram in the paper form's style (black lines, open triangle head).
+export function fishbone({ effect, top, bottom }) {
+  const W = 470, H = 150, y = 75, x1 = 330;
+  const slots = Math.max(top.length, bottom.length);
+  const step = (x1 - 40) / slots;
   const bone = (b, i, up) => {
-    const xe = x0 + 60 + i * step + step * 0.6, xs = xe - 40, ys = up ? y - 56 : y + 56;
-    const subs = (b.sub || []).map((s, j) => { const yy = ys + (up ? 1 : -1) * (14 + j * 13), xx = xs + 40 * ((yy - ys) / (y - ys));
-      return `<line x1="${xx - 46}" y1="${yy}" x2="${xx}" y2="${yy}" stroke="#555" stroke-width=".7"/><text x="${xx - 48}" y="${yy - 2}" text-anchor="end" font-size="8.5">${esc(s)}</text>`; }).join("");
-    return `<line x1="${xs}" y1="${ys}" x2="${xe}" y2="${y}" stroke="#1F4E6E" stroke-width="1.3"/><text x="${xs}" y="${up ? ys - 5 : ys + 12}" text-anchor="middle" font-size="9.5" font-weight="600">${esc(b.name)}</text>${subs}`;
+    const xe = 40 + step * (i + 1) - 10, xs = xe - 70, ys = up ? y - 58 : y + 58;
+    const subs = b.sub.map((s, j) => {
+      const f = 0.3 + j * (0.55 / Math.max(b.sub.length, 1)), yy = ys + (y - ys) * f, xx = xs + (xe - xs) * f;
+      return `<line x1="${xx - 46}" y1="${yy}" x2="${xx - 3}" y2="${yy}" stroke="#000" stroke-width=".7" marker-end="url(#ah)"/><text x="${xx - 48}" y="${yy + 3}" text-anchor="end" font-size="8.5">${esc(s)}</text>`;
+    }).join("");
+    return `<line x1="${xs}" y1="${ys}" x2="${xe}" y2="${y}" stroke="#000" stroke-width="1"/><text x="${xs}" y="${up ? ys - 5 : ys + 11}" text-anchor="middle" font-size="9">${esc(b.name)}</text>${subs}`;
   };
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:150mm;display:block;margin:2pt auto" font-family="Sarabun, sans-serif">
-<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="#1F4E6E" stroke-width="2"/><polygon points="${x1},${y - 5} ${x1 + 10},${y} ${x1},${y + 5}" fill="#1F4E6E"/>
-<rect x="${x1 + 12}" y="${y - 15}" width="${W - x1 - 14}" height="30" rx="4" fill="#E8EEF3" stroke="#1F4E6E"/><text x="${(x1 + 12 + W - 2) / 2}" y="${y + 4}" text-anchor="middle" font-size="10.5" font-weight="700">${esc(effect)}</text>
-${top.map((b, i) => bone(b, i, true)).join("")}${bot.map((b, i) => bone(b, i, false)).join("")}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="128mm" style="display:block;margin:3pt 0 3pt 12mm" font-family="Sarabun, sans-serif">
+<defs><marker id="ah" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#000"/></marker></defs>
+<line x1="20" y1="${y}" x2="${x1}" y2="${y}" stroke="#000" stroke-width="1.2" marker-end="url(#ah)"/>
+<polygon points="${x1 + 2},${y - 32} ${x1 + 82},${y} ${x1 + 2},${y + 32}" fill="#fff" stroke="#000" stroke-width="1.2"/>
+<text x="${x1 + 30}" y="${y + 4}" text-anchor="middle" font-size="10" font-weight="700">${esc(effect)}</text>
+${top.map((b, i) => bone(b, i, true)).join("")}${bottom.map((b, i) => bone(b, i, false)).join("")}</svg>`;
 }
 
-function readingsTable(cols, rowsN) {
-  const n = Math.max(...cols.map(c => c.r.A.n), 0);
-  const body = Array.from({ length: n }, (_, i) => `<tr><td>${i + 1}</td>${cols.map(c => `<td>${esc(c.r.A.x[i] ?? "")}</td>`).join("")}</tr>`).join("");
-  const stat = (label, f) => `<tr class="s"><td>${label}</td>${cols.map(c => `<td>${f(c.r)}</td>`).join("")}</tr>`;
-  return `<table class="n w60"><tr><th>ตัวอย่างซ้ำที่</th>${cols.map(c => `<th>${esc(c.label)}</th>`).join("")}</tr>${body}
-${stat("Average", r => fmt(r.A.mean, r.dec))}${rowsN.includes("max") ? stat("Max", r => fmt(r.A.max, r.dec)) + stat("Min", r => fmt(r.A.min, r.dec)) : ""}
-${stat("SD", r => f4(r.A.sd))}${stat("RSD (SD/Ave)", r => f5(r.A.rsd))}${stat(`u<sub>A,rel</sub> = RSD/√m`, r => `${f5(r.A.uArel)} <span style="font-weight:400">(m = ${r.A.m})</span>`)}</table>`;
+// Section 3: the user's references + the instrument verification report of
+// that year, added automatically ("รายงานผลการทวนสอบเครื่องมือ ปี 69").
+const VERIFY_REF = /^รายงาน(ผลการ)?ทวนสอบเครื่องมือ/;
+export function verifyRefOf(rep) {
+  const y = String(rep.year || beYear(rep.reportDate) || "");
+  return `รายงานผลการทวนสอบเครื่องมือ ปี ${y.slice(-2)}`;
 }
+export function referencesOf(rep) {
+  const own = mpirCodes(rep.references || "").split(/\n/).map(s => s.trim()).filter(s => s && !VERIFY_REF.test(s));
+  return [...own, verifyRefOf(rep)];
+}
+const longDate = (iso) => { if (!iso) return ""; const d = new Date(iso + "T00:00:00"); return isNaN(d) ? iso : d.toLocaleDateString("th-TH", { day: "numeric", month: "long", year: "numeric" }); };
 
 export function lf069Html(rep, certificates, equipment) {
   const R = calcReport(rep, certificates, equipment);
   const b = R.brix, p = R.pol, fb = R.fiber;
-  const inst = (id) => equipment.find(e => e.id === id);
-  const instTxt = (t) => { const e = inst(rep[t]?.instrumentId); return e ? `${e.code || ""} ${e.name || ""}${e.brand || e.model ? ` [${[e.brand, e.model].filter(Boolean).join(", ")}${e.serialNo ? `, S/N ${e.serialNo}` : ""}]` : ""}`.trim() : ""; };
   const year = rep.year || beYear(rep.reportDate);
-  const Bline = (r, what) => r.B ? `${what}: ${esc(r.B.text)} → u = U/k = ${f4(r.B.u)} ${esc(r.T.instUnit)}` : `${what}: <b>ยังไม่ได้ระบุใบรับรอง</b>`;
-  const relOf = (u, r) => `${f4(u)}/${fmt(r.A.mean, r.dec)} = <b>${f5(u == null || !r.A.mean ? null : u / Math.abs(r.A.mean))}</b>`;
-  const hdr = (pg, tot) => `<table class="hd"><tr><td class="brand" rowspan="2"><img src="${LOGO_DATA_URI}" alt="MITR PHOL Innovation &amp; Research Center"></td><td class="t" rowspan="2">รายงานผลการประเมินความไม่แน่นอนของการวัด<small>Measurement Uncertainty Evaluation Report · ประจำปี ${esc(year)}</small></td><td class="m">รหัสเอกสาร: <b>${LF069_DOC.code}</b> Rev.: <b>${LF069_DOC.rev}</b></td></tr><tr><td class="m">หน้า ${pg} / ${tot}</td></tr></table>`;
-  const refs = mpirCodes(rep.references || "").split(/\n/).map(s => s.trim()).filter(Boolean);
-  const sumRow = (label, fn, note = "") => `<tr><td class="lft">${label}</td>${fn}<td class="lft">${note}</td></tr>`;
+  const TOT = 6;
+  const page = (n, body) => `<section class="pg"><div class="hd"><img src="${LOGO_DATA_URI}" alt="MITR PHOL"><span class="code">${LF069_DOC.code} Rev.${LF069_DOC.rev} Page <b>${n}</b> of ${TOT}</span><div class="ttl">รายงานผลการประเมินความไม่แน่นอนของการวัด</div></div><div class="box">${body}</div></section>`;
+  const refs = referencesOf(rep);
+  const xbar = (r) => fmt(r.A.mean, r.dec);
+  const nLbl = (r) => r.A.m === r.A.n ? "n" : "m";
+  const readRows = (cols, short) => {
+    const n = Math.max(...cols.map(c => c.A.n), 0);
+    return Array.from({ length: n }, (_, i) => `<tr><td>${i + 1}</td>${cols.map(c => `<td>${esc(c.A.x[i] ?? "")}</td>`).join("")}</tr>`).join("")
+      + `<tr><td class="l">Average</td>${cols.map(c => `<td>${xbar(c)}</td>`).join("")}</tr>`
+      + `<tr><td class="l">SD</td>${cols.map(c => `<td>${f4(c.A.sd)}</td>`).join("")}</tr>`
+      + `<tr><td class="l">${short ? "RSD" : "RSD (SD/Ave)"}</td>${cols.map(c => `<td>${f5(c.A.rsd)}</td>`).join("")}</tr>`
+      + `<tr><td class="l">${short ? "UA(x)" : `UA (x) = (RSD/√${nLbl(cols[0])})`}</td>${cols.map(c => `<td>${f5(c.A.uArel)}</td>`).join("")}</tr>`;
+  };
+  // Combined table: certificate U → relative (U/Ave) → ÷ k. Pol U is in °Z,
+  // converted to %Pol with 26/(100ρ) first.
+  const calUconv = (r) => (r.B ? r.B.U * (r.T.key === "pol" ? r.c : 1) : null);
+  const calU = (r) => !r.B ? "–" : r.T.key === "pol" ? `${esc(r.B.U)} °Z = ${f4(calUconv(r))}` : esc(r.B.U);
+  const calRsd = (r) => (r.B && r.A.mean ? calUconv(r) / Math.abs(r.A.mean) : null);
+  const kLbl = b.B && p.B && b.B.k === p.B.k ? ` (k = ${esc(b.B.k)})` : "";
+  const ex = rep.example || {};
+  const exVal = (v, r, unit) => `${num(v) != null ? esc(v) : "........"}${unit} ± ${fmt(r.Ur, r.dec)}${unit} ที่ระดับความเชื่อมั่น 95%`;
 
-  const sign = (title, name) => `<td><div class="line"></div>(${name ? esc(name) : "&nbsp;".repeat(40)})<br>${title}<br>วันที่ ........./........./.........</td>`;
-  const p1 = `${hdr(1, 5)}
-<h3><b>1</b>วัตถุประสงค์</h3><p>${esc(rep.objective)}</p>
-<h3><b>2</b>ผู้ดำเนินการ</h3>
-<p>▪ ทดสอบซ้ำตามวิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย และการวิเคราะห์ค่าเส้นใย (Fibre) ในตัวอย่างชานอ้อยย่อย โดยเจ้าหน้าที่วิเคราะห์ ชื่อ ${esc(rep.testers || "....................")}${rep.testDate ? ` วันที่ทดสอบ ${esc(fmtDate(rep.testDate))}` : ""}</p>
-${rep.sampleNote ? `<p class="ind">หมายเหตุ: ${esc(rep.sampleNote)}</p>` : ""}
-<p>▪ ดูแลการทดสอบ และประเมินความไม่แน่นอนของการวัด โดย ${esc(rep.supervisor || "....................")}</p>
-<h3><b>3</b>เอกสารอ้างอิง</h3>${refs.map(r => `<p class="ind">- ${esc(r)}</p>`).join("")}
-<h3><b>4</b>ผลการประเมินความไม่แน่นอนของการวัด</h3>
+  const p1 = page(1, `<p class="yr">ประจำปี ${esc(year)}</p>
+<h3><span>1</span>วัตถุประสงค์</h3><p class="i1">${esc(rep.objective)}</p>
+<h3><span>2</span>ผู้ดำเนินการ:</h3>
+<p class="i1 blt">▪&nbsp;&nbsp;ทดสอบซ้ำ ตามวิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย และการวิเคราะห์ค่าเส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย โดย เจ้าหน้าที่วิเคราะห์<br>ชื่อ ${esc(rep.testers || "..............................")}</p>
+<p class="i1 blt">▪&nbsp;&nbsp;ดูแลการทดสอบ และประเมินความไม่แน่นอนของการวัด โดย ${esc(rep.supervisorRole ?? "ผู้จัดการด้านวิชาการ")}<br>ชื่อ ${esc(rep.supervisor || "..............................")}</p>
+<h3><span>3</span>เอกสารอ้างอิง</h3>${refs.map(r => `<p class="i1">-&nbsp;&nbsp;${esc(r)}</p>`).join("")}
+<h3><span>4</span>ผลการประเมินความไม่แน่นอนของการวัด</h3>
 <h4>4.1 ความไม่แน่นอนของวิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย</h4>
-<h5>4.1.1 สมการ และแผนภูมิก้างปลา — บริกซ์</h5>
-<p class="ind">บริกซ์ (Brix) = ค่า Brix ที่วัดได้จากเครื่อง Refractometer ${esc(instTxt("brix"))}</p>
-${fishbone(FISHBONES.brix.effect, FISHBONES.brix.bones)}
-<p class="ind note">อุณหภูมิ: เครื่องมีระบบชดเชยอุณหภูมิ (ATC) ผลที่เหลือรวมอยู่ใน Repeatability</p>
-<h5>4.1.2 สมการ และแผนภูมิก้างปลา — โพล</h5>
-<p class="ind">%Pol = Pol reading (°Z) × Pol Factor &nbsp;(MPIR-WI-002 ข้อ 7.5.2) &nbsp;·&nbsp; Pol Factor = 26.000 / (100 × ρ<sub>20</sub>) &nbsp;(ρ<sub>20</sub> = ความหนาแน่นของน้ำอ้อยที่ 20 °C ตามค่า Brix)</p>
-<p class="ind">Polarimeter ${esc(instTxt("pol"))}</p>
-${fishbone(FISHBONES.pol.effect, FISHBONES.pol.bones)}
-`;
-  const p2 = `${hdr(2, 5)}
-<h5>4.1.3 แหล่งของ Uncertainty และสรุปการคำนวณ</h5>
-<table class="n"><tr><th class="lft">หัวข้อ</th><th>Brix</th><th>Pol</th><th class="lft">หมายเหตุ</th></tr>
-${sumRow("1 Relative Standard Uncertainty (u/x̄)", "<td></td><td></td>", `x̄ = ${fmt(b.A.mean, b.dec)} %Brix / ${fmt(p.A.mean, p.dec)} %Pol`)}
-${sumRow("&nbsp;&nbsp;1.1 Calibration", `<td>${f5(b.rCal)}</td><td>${f5(p.rCal)}</td>`, "Brix = Refractometer · Pol = Polarimeter (°Z → %Pol)")}
-${sumRow("&nbsp;&nbsp;1.2 Resolution", `<td>${f5(b.rRes)}</td><td>${f5(p.rRes)}</td>`, `d = ${esc(b.d)} %Brix / ${esc(p.d)} °Z`)}
-${sumRow("&nbsp;&nbsp;1.3 Pol Factor (จาก Brix)", `<td>–</td><td>${f5(p.rPF)}</td>`, "ρ<sub>20</sub> ขึ้นกับค่า Brix")}
-${sumRow("&nbsp;&nbsp;1.4 Repeatability (RSD/√m)", `<td>${f5(b.A.uArel)}</td><td>${f5(p.A.uArel)}</td>`, `RSD จาก ${b.A.n} / ${p.A.n} ซ้ำ · m = ${b.A.m} / ${p.A.m} · รวมผลของอุณหภูมิ`)}
-${sumRow("2 Combined (u<sub>c,rel</sub>)", `<td>${f5(b.ucRel)}</td><td>${f5(p.ucRel)}</td>`)}
-${sumRow("&nbsp;&nbsp;u<sub>c</sub> = u<sub>c,rel</sub> × x̄", `<td>${f4(b.uc)}</td><td>${f4(p.uc)}</td>`, "%Brix / %Pol")}
-${sumRow("3 Expanded Uncertainty (U, k = 2)", `<td><b>${f4(b.U)}</b></td><td><b>${f4(p.U)}</b></td>`, "ที่ระดับความเชื่อมั่น 95%")}</table>
+<h5>4.1.1&nbsp;&nbsp;สมการ และแผนภูมิก้างปลา แสดงแหล่งที่มาของความไม่แน่นอนของการวัดค่าบริกซ์</h5>
+<div class="eqbox">บริกซ์ (Brix)&nbsp;&nbsp;&nbsp;&nbsp;= ค่า Brix ที่วัดได้จากเครื่อง Refractometer</div>
+${fishbone(FISHBONES.brix)}`);
 
-<h5>4.1.4 รายละเอียดการคำนวณ Uncertainty</h5>
-<p class="ind"><b>4.1.4.1 แหล่งของ Uncertainty</b></p>
-<table class="w80"><tr><th class="lft">Uncertainty Component</th><th class="lft">Source of Uncertainty</th></tr>
-<tr><td>ค่าความไม่แน่นอนของมาตรฐานอ้างอิง และของเครื่องมือ</td><td>Uncertainty จากการสอบเทียบ Refractometer และ Polarimeter (Type B)</td></tr>
-<tr><td>ความละเอียดของเครื่องมือ (Resolution)</td><td>u = d/(2√3) (Type B, rectangular)</td></tr>
-<tr><td>Pol Factor</td><td>ความหนาแน่นของน้ำอ้อยขึ้นกับค่า Brix ที่วัดได้ (Type B)</td></tr>
-<tr><td>การชักตัวอย่าง วิธีวิเคราะห์ และผู้วิเคราะห์</td><td>Uncertainty ของการวิเคราะห์ซ้ำ (Type A)</td></tr></table>
-<p class="ind"><b>4.1.4.2 Standard Uncertainty ของแต่ละ Component</b> (แปลงเป็นค่าสัมพัทธ์ u/x̄ ก่อนรวม)</p>
-<p class="ind2">- Calibration: ${Bline(b, "Refractometer")} → u/x̄ = ${relOf(b.uCal, b)}</p>
-<p class="ind2">- Resolution: u = d/(2√3) = ${esc(b.d)}/3.4641 = ${f4(b.uRes)} %Brix → u/x̄ = ${relOf(b.uRes, b)}</p>
-<p class="ind2">- Calibration: ${Bline(p, "Polarimeter")}<br>&nbsp;&nbsp;แปลงเป็น %Pol ด้วย Pol Factor: c = 26/(100 × ρ<sub>20</sub>) = 26/(100 × ${fmt(p.rho, 5)}) = ${f4(p.c)} (ρ<sub>20</sub> ที่ ${fmt(p.brixUsed, 2)} %Brix) → ${f4(p.B?.u)} × ${f4(p.c)} = ${f4(p.uCal)} %Pol → u/x̄ = ${relOf(p.uCal, p)}</p>
-<p class="ind2">- Resolution: u = ${esc(p.d)}/3.4641 × ${f4(p.c)} = ${f4(p.uRes)} %Pol → u/x̄ = ${relOf(p.uRes, p)}</p>
-<p class="ind2">- Pol Factor: u = %Pol × (dρ/dBrix)/ρ<sub>20</sub> × u<sub>c</sub>[Brix] = ${fmt(p.A.mean, p.dec)} × ${fmt(p.slope, 5)}/${fmt(p.rho, 5)} × ${f4(b.uc)} = ${f4(p.uPF)} %Pol → u/x̄ = ${relOf(p.uPF, p)}</p>
-`;
-  const p3 = `${hdr(3, 5)}
-<p class="ind2">- Repeatability: RSD จากการวัดบริกซ์และโพลของตัวอย่างเดียวกัน ${b.A.n} ซ้ำ · u<sub>A,rel</sub> = RSD/√m (Brix m = ${b.A.m}, Pol m = ${p.A.m})</p>
-${readingsTable([{ label: "Brix (บริกซ์)", r: b }, { label: "% Pol (โพล)", r: p }], [])}
-<p class="ind"><b>4.1.4.3 Combined Uncertainty</b></p>
-<p class="ind2">u<sub>c,rel</sub>[Brix] = √[(${f5(b.rCal)})² + (${f5(b.rRes)})² + (${f5(b.A.uArel)})²] = ${f5(b.ucRel)} → u<sub>c</sub> = ${f5(b.ucRel)} × ${fmt(b.A.mean, b.dec)} = <b>${f4(b.uc)}</b> %Brix</p>
-<p class="ind2">u<sub>c,rel</sub>[Pol] = √[(${f5(p.rCal)})² + (${f5(p.rRes)})² + (${f5(p.rPF)})² + (${f5(p.A.uArel)})²] = ${f5(p.ucRel)} → u<sub>c</sub> = ${f5(p.ucRel)} × ${fmt(p.A.mean, p.dec)} = <b>${f4(p.uc)}</b> %Pol</p>
-<p class="ind"><b>4.1.4.4 Expanded Uncertainty</b> (Coverage Factor k = 2 ที่ระดับความเชื่อมั่น 95%)</p>
-<p class="ind2">U[Brix] = ${f4(b.uc)} × 2 = <b>${f4(b.U)}</b> %Brix &nbsp;&nbsp; U[Pol] = ${f4(p.uc)} × 2 = <b>${f4(p.U)}</b> %Pol</p>
-<h5>4.1.5 ค่าความไม่แน่นอนของการวัดของเครื่องมือ</h5>
-<p class="ind2">Refractometer (Brix): U = ± ${fmt(b.Ur, b.dec)} %Brix (k = 2)</p>
-<p class="ind2">Polarimeter (Pol): U = ± ${fmt(p.Ur, p.dec)} %Pol (k = 2)</p>
-<h4>4.2 ความไม่แน่นอนของการวัดไฟเบอร์ในชานอ้อยย่อย</h4>
-<h5>4.2.1 สมการ</h5>
-<p class="ind">%ไฟเบอร์ = 100 × (M2 − M0) / (M1 − M0) &nbsp;(MPIR-WI-003 ข้อ 6.5)</p>
-<p class="ind">M0 = น้ำหนักถุงผ้า · M1 = น้ำหนักถุงผ้า + ชานอ้อยย่อยก่อนอบ · M2 = น้ำหนักถุงผ้า + ชานอ้อยย่อยหลังอบ · m = M1 − M0 = ${esc(fb.M1)} g (ตาม WI 200 ± 10 g)</p>
-<p class="ind">เครื่องชั่ง ${esc(instTxt("fiber"))}</p>
-<h5>4.2.2 แผนภูมิก้างปลา</h5>
-${fishbone(FISHBONES.fiber.effect, FISHBONES.fiber.bones)}
-<p class="ind note">อุณหภูมิ/เวลาอบ ความชื้นขณะชั่ง และผู้วิเคราะห์ รวมอยู่ใน Repeatability · Linearity ของเครื่องชั่งรวมอยู่ใน U ของใบรับรอง</p>
+  const p2 = page(2, `<h5>4.1.2&nbsp;&nbsp;สมการ และแผนภูมิก้างปลา แสดงแหล่งที่มาของความไม่แน่นอนของการวัดค่าโพล</h5>
+<table class="eq"><tr><td>โพล (%)</td><td>= ได้จากการเปิดตาราง Schmitz'Table using the °Brix and Pol Reading<br>หรือได้จากการคำนวน โดยที่</td></tr>
+<tr><td>โพล (%)</td><td>= Pol Reading (°Z) / Pol Factor</td></tr>
+<tr><td>Pol Factor</td><td>= <span class="frac"><span>100 * Appearance Density at 20°C of Sucrose per 100 g. of Sugar Solution</span><span>26.000</span></span></td></tr></table>
+${fishbone(FISHBONES.pol)}
+<h5>4.1.3&nbsp;&nbsp;แหล่งของ Uncertainty และสรุปการคำนวณค่า Uncertainty ของค่าบริกซ์ และ โพล (%)</h5>
+<table class="t"><tr><th style="width:42%">หัวข้อ</th><th>Brix</th><th>Pol (%)</th><th style="width:30%">หมายเหตุ</th></tr>
+<tr><td class="l">1 Standard Uncertainty of Component</td><td></td><td></td><td></td></tr>
+<tr><td class="l i">1.1 Calibration</td><td>${f5(b.rCal)}</td><td>${f5(p.rCal)}</td><td class="l">Brix = Calibration of Refractometer<br>Pol = Calibration of Polarimeter</td></tr>
+<tr><td class="l i">1.2 Repeatability</td><td>${f5(b.A.uArel)}</td><td>${f5(p.A.uArel)}</td><td class="l">${b.A.n} ซ้ำ</td></tr>
+<tr><td class="l">2. Combined Uncertainty</td><td>${f5(b.uc)}</td><td>${f5(p.uc)}</td><td></td></tr>
+<tr><td class="l">3. Expanded Uncertainty</td><td>${f5(b.U)}</td><td>${f5(p.U)}</td><td class="l">ที่ระดับความเชื่อมั่น 95%</td></tr></table>
+<h5>4.1.4&nbsp;&nbsp;รายละเอียดการคำนวณ Uncertainty</h5>
+<p class="i2">4.1.4.1</p>
+<table class="t w"><tr><th>Uncertainty Component</th><th>Source of Uncertainty</th></tr>
+<tr><td class="l">ค่าความไม่แน่นอนของวัสดุอ้างอิงหรือมาตรฐานอ้างอิง และค่าความไม่แน่นอนจากเครื่องมือ สภาวะแวดล้อม</td><td class="l">Uncertainty จากการสอบเทียบ Refractometer และ Polarimeter</td></tr>
+<tr><td class="l">การชักตัวอย่าง วิธีวิเคราะห์และผู้วิเคราะห์</td><td class="l">Uncertainty ของการวิเคราะห์ซ้ำ</td></tr></table>
+<p class="i2">4.1.4.2&nbsp;&nbsp;&nbsp;Standard Uncertainty ของแต่ละ Component</p>
+<p class="i3">- Uncertainty จากการสอบเทียบ Refractometer = ± ${b.B ? esc(b.B.U) : "–"}</p>
+<p class="i3">- Uncertainty จากการสอบเทียบ Polarimeter = ± ${p.B ? esc(p.B.U) : "–"}</p>
+<p class="i3">- UA(x) = Standard Deviation of Mean ของการวัดบริกซ์และโพล<br>&nbsp;&nbsp;&nbsp;ของตัวอย่างเดียวกันที่เป็นตัวแทน ${b.A.n} ซ้ำ</p>`);
 
-`;
-  const p4 = `${hdr(4, 5)}
-<h5>4.2.3 แหล่งของ Uncertainty และสรุปการคำนวณ</h5>
-<table class="n w80"><tr><th class="lft">หัวข้อ</th><th>Fibre</th><th class="lft">หมายเหตุ</th></tr>
-${sumRow("1 Relative Standard Uncertainty (u/x̄)", "<td></td>", `x̄ = ${fmt(fb.A.mean, fb.dec)} %Fibre`)}
-${sumRow("&nbsp;&nbsp;1.1 การชั่งน้ำหนัก — Calibration", `<td>${f5(fb.rCal)}</td>`, "M0, M1, M2")}
-${sumRow("&nbsp;&nbsp;1.2 การชั่งน้ำหนัก — Resolution", `<td>${f5(fb.rRes)}</td>`, `d = ${esc(fb.d)} g`)}
-${sumRow("&nbsp;&nbsp;1.3 Repeatability (RSD/√m)", `<td>${f5(fb.A.uArel)}</td>`, `RSD จาก ${fb.A.n} ซ้ำ · m = ${fb.A.m} · รวมผลของการอบ/ความชื้น`)}
-${sumRow("2 Combined (u<sub>c,rel</sub>)", `<td>${f5(fb.ucRel)}</td>`)}
-${sumRow("&nbsp;&nbsp;u<sub>c</sub> = u<sub>c,rel</sub> × x̄", `<td>${f4(fb.uc)}</td>`, "%Fibre")}
-${sumRow("3 Expanded Uncertainty (U, k = 2)", `<td><b>${f4(fb.U)}</b></td>`, "ที่ระดับความเชื่อมั่น 95%")}</table>
-<h5>4.2.4 รายละเอียดการคำนวณ Uncertainty</h5>
-<p class="ind"><b>4.2.4.1 Standard Uncertainty ของการชั่งน้ำหนัก</b></p>
-<p class="ind2">- ${Bline(fb, "เครื่องชั่ง")}</p>
-<p class="ind2">- c<sub>M2</sub> = 100/m = ${f4(fb.c2)} · c<sub>M1</sub> = %F/m = ${fmt(fb.A.mean, fb.dec)}/${esc(fb.M1)} = ${f4(fb.c1)} · c<sub>M0</sub> = (100 − %F)/m = ${f4(fb.c0)} &nbsp;(%/g)</p>
-<p class="ind2">- Calibration: u × √[c<sub>M2</sub>² + c<sub>M1</sub>² + c<sub>M0</sub>²] = ${f4(fb.B?.u)} × √[(${f4(fb.c2)})² + (${f4(fb.c1)})² + (${f4(fb.c0)})²] = ${f4(fb.uCal)} %Fibre → u/x̄ = ${relOf(fb.uCal, fb)}</p>
-<p class="ind2">- Resolution: u = d/(2√3) = ${esc(fb.d)}/3.4641 = ${f4(fb.uR)} g ต่อการชั่ง → ${f4(fb.uR)} × √[(${f4(fb.c2)})² + (${f4(fb.c1)})² + (${f4(fb.c0)})²] = ${f4(fb.uRes)} %Fibre → u/x̄ = ${relOf(fb.uRes, fb)}</p>
-<p class="ind"><b>4.2.4.2 Repeatability: u<sub>A,rel</sub> = RSD/√m</b> · RSD จากการวัดไฟเบอร์ตัวอย่างเดียวกัน ${fb.A.n} ซ้ำ · m = ${fb.A.m}</p>
-${readingsTable([{ label: "%ไฟเบอร์ในชานอ้อยย่อย", r: fb }], ["max"])}
-`;
-  const p5 = `${hdr(5, 5)}
-<p class="ind"><b>4.2.4.3 Combined Uncertainty</b> &nbsp; u<sub>c,rel</sub>[Fibre] = √[(${f5(fb.rCal)})² + (${f5(fb.rRes)})² + (${f5(fb.A.uArel)})²] = ${f5(fb.ucRel)} → u<sub>c</sub> = ${f5(fb.ucRel)} × ${fmt(fb.A.mean, fb.dec)} = <b>${f4(fb.uc)}</b> %Fibre</p>
-<p class="ind"><b>4.2.4.4 Expanded Uncertainty</b> &nbsp; U[Fibre] = ${f4(fb.uc)} × 2 = <b>${f4(fb.U)}</b> %Fibre</p>
-<h5>4.2.5 ค่าความไม่แน่นอนของการวัด (เครื่องชั่ง)</h5>
-<p class="ind2">%ไฟเบอร์: U = ± ${fmt(fb.Ur, fb.dec)} % (k = 2)</p>
-<h3><b>5</b>สรุปผล</h3>
-<table class="n w80"><tr><th class="lft">รายการทดสอบ</th><th>U (k = 2)</th><th>ค่าที่ใช้ (ปัดขึ้น)</th></tr>
-<tr><td class="lft">องศาบริกซ์ (Brix) ในตัวอย่างน้ำอ้อย</td><td>${f4(b.U)}</td><td><b>± ${fmt(b.Ur, b.dec)} %Brix</b></td></tr>
-<tr><td class="lft">%โพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย</td><td>${f4(p.U)}</td><td><b>± ${fmt(p.Ur, p.dec)} %Pol</b></td></tr>
-<tr><td class="lft">%เส้นใย (Fibre) ในตัวอย่างชานอ้อยย่อย</td><td>${f4(fb.U)}</td><td><b>± ${fmt(fb.Ur, fb.dec)} %</b></td></tr></table>
-<table class="sig"><tr>${sign("จัดทำโดย", rep.preparedBy)}${sign("ทบทวนโดย (TM/QM)", "")}${sign("อนุมัติโดย (Lab manager)", "")}</tr></table>
-<div class="note">ค่าความไม่แน่นอนของเครื่องมือ · ทุกองค์ประกอบแปลงเป็นค่าสัมพัทธ์ u/x̄ ก่อนรวม: Calibration = (U ของใบรับรอง ÷ k)/x̄ · Resolution = (d/(2√3))/x̄ · Repeatability = RSD/√m (m = n ครั้งที่ทดสอบซ้ำ) · u<sub>c</sub> = √Σ(u/x̄)² × x̄ · U = 2u<sub>c</sub> · ค่าที่ใช้ปัดขึ้นตามความละเอียดของผล · คำนวณโดยระบบ LabTrack (Instrument Assurance System) พิมพ์เมื่อ ${esc(new Date().toLocaleString("th-TH"))} · ฉบับที่ลงนามเก็บตามระบบเอกสาร</div>`;
-  const foot = `<div class="ft"><span>อ้างอิง ISO/IEC 17025:2017 ข้อ 7.6 · MPIR-WI-008</span><span>${LF069_DOC.code} Rev.${LF069_DOC.rev}</span></div>`;
+  const p3 = page(3, `<table class="t rd"><tr><th>ตัวอย่างซ้ำที่</th><th>Brix (บริกซ์)</th><th>% Pol (โพล)</th></tr>${readRows([b, p])}</table>
+<p class="i2">4.1.4.3&nbsp;&nbsp;&nbsp;Combined Uncertainty</p>
+<table class="t cm"><tr><th>Uncertainty Component</th><th>บริกซ์</th><th>โพล</th></tr>
+<tr><td class="l">Calibration (U ใบรับรอง)</td><td>${calU(b)}</td><td>${calU(p)}</td></tr>
+<tr><td class="l">RSD (U/Ave)</td><td>${f5(calRsd(b))}</td><td>${f5(calRsd(p))}</td></tr>
+<tr><td class="l">U/k${kLbl}</td><td>${f5(b.rCal)}</td><td>${f5(p.rCal)}</td></tr>
+<tr><td class="l">UA(x)</td><td>${f5(b.A.uArel)}</td><td>${f5(p.A.uArel)}</td></tr></table>
+<table class="eq f"><tr><td>Uc [Brix]</td><td>= √[(${f5(b.rCal)})² + (${f5(b.A.uArel)})²] × ${xbar(b)}</td></tr><tr><td></td><td>= ${f5(b.ucRel)} × ${xbar(b)} = ${f5(b.uc)}</td></tr>
+<tr><td>Uc [Pol]</td><td>= √[(${f5(p.rCal)})² + (${f5(p.A.uArel)})²] × ${xbar(p)}</td></tr><tr><td></td><td>= ${f5(p.ucRel)} × ${xbar(p)} = ${f5(p.uc)}</td></tr></table>
+<p class="i2">4.1.4.4&nbsp;&nbsp;&nbsp;Calculate Expanded Uncertainty โดยคูณค่า Combined Uncertainty ด้วย Coverage Factor<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(k)=2&nbsp;&nbsp;ที่ระดับความเชื่อมั่น 95%</p>
+<table class="eq f"><tr><td>Uc [Brix]</td><td>= ${f5(b.uc)} x 2 = ${f5(b.U)}</td></tr><tr><td>Uc [Pol]</td><td>= ${f5(p.uc)} x 2 = ${f5(p.U)}</td></tr></table>
+<h5>4.1.5&nbsp;&nbsp;การรายงานผล พร้อมค่า Uncertainty</h5>
+<table class="eq f"><tr><td>Brix ในน้ำอ้อย</td><td>= ค่าที่ได้จากการตรวจทดสอบ ± ${fmt(b.Ur, b.dec)}</td></tr><tr><td>%Pol ในน้ำอ้อย</td><td>= ค่าที่ได้จากการตรวจทดสอบ (%) ± ${fmt(p.Ur, p.dec)} (%)</td></tr></table>`);
+
+  const p4 = page(4, `<h4>4.2&nbsp;&nbsp;&nbsp;การหาค่าความไม่แน่นอนของการวัดไฟเบอร์ในชานอ้อยย่อย</h4>
+<h5>4.2.1&nbsp;&nbsp;สมการ</h5>
+<table class="eq"><tr><td>%ไฟเบอร์</td><td>= 100 * <span class="frac"><span>M2 - M0</span><span>M1</span></span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;โดยที่</td></tr></table>
+<p class="i3" style="margin-top:6pt">M0 = น้ำหนักภาชนะเปล่า</p>
+<p class="i3">M1 = น้ำหนักชานอ้อยย่อยก่อนอบ</p>
+<p class="i3">M2 = น้ำหนักชานอ้อยย่อยรวมกับน้ำหนักภาชนะเปล่า หลังอบ</p>
+<h5>4.2.2&nbsp;&nbsp;แผนภูมิก้างปลา แสดงแหล่งที่มาของความไม่แน่นอนของการวัด</h5>
+${fishbone(FISHBONES.fiber)}
+<h5>4.2.3&nbsp;&nbsp;แหล่งของ Uncertainty และสรุปการคำนวณค่า Uncertainty</h5>
+<table class="t w"><tr><th style="width:48%">หัวข้อ</th><th></th><th>หมายเหตุ</th></tr>
+<tr><td class="l">1 Standard Uncertainty of Component</td><td></td><td></td></tr>
+<tr><td class="l i">1.1 การชั่งน้ำหนัก</td><td>${f5(fb.rCal)}</td><td></td></tr>
+<tr><td class="l i">1.2 Repeatability</td><td>${f5(fb.A.uArel)}</td><td></td></tr>
+<tr><td class="l">2. Combined Uncertainty</td><td>${f5(fb.uc)}</td><td></td></tr>
+<tr><td class="l">3. Expanded Uncertainty</td><td>${f5(fb.U)}</td><td class="l">ที่ระดับความเชื่อมั่น 95%</td></tr></table>
+<h5>4.2.4&nbsp;&nbsp;รายละเอียดการคำนวณ Uncertainty</h5>
+<p class="i2">4.2.4.1&nbsp;&nbsp;แหล่งของ Uncertainty</p>
+<table class="t w"><tr><th>Uncertainty Component</th><th>Source of Uncertainty</th></tr>
+<tr><td class="l">ค่าความไม่แน่นอนของวัสดุอ้างอิงหรือมาตรฐานอ้างอิง และค่าความไม่แน่นอนจากเครื่องมือ สภาวะแวดล้อม</td><td class="l">น้ำหนักไฟเบอร์ เกิดจากการชั่งถุงไฟเบอร์ และการชั่งน้ำหนักตัวอย่าง โดย Uncertainty ของเครื่องชั่ง = ${fb.B ? esc(fb.B.U) : "–"}</td></tr>
+<tr><td class="l">การชักตัวอย่าง วิธีวิเคราะห์และผู้วิเคราะห์</td><td class="l">Uncertainty ของการวิเคราะห์ซ้ำ</td></tr></table>`);
+
+  const p5 = page(5, `<p class="i2">4.2.4.2&nbsp;&nbsp;&nbsp;Standard Uncertainty ของแต่ละ Component</p>
+<p class="i3">1)&nbsp;&nbsp;การชั่งน้ำหนักไฟเบอร์ โดยการชั่งถุงไฟเบอร์ และการชั่งน้ำหนักตัวอย่าง<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;โดยเครื่องชั่งมีค่า Uncertainty ${fb.B ? esc(fb.B.U) : "–"}</p>
+<p class="i3">2)&nbsp;&nbsp;Standard Deviation of Mean: UA(x)<br>&nbsp;&nbsp;&nbsp;&nbsp;ของการวัดไฟเบอร์ตัวอย่างเดียวกันที่เป็นตัวแทน ${fb.A.n} ซ้ำ</p>
+<table class="t rd fb"><tr><th>ตัวอย่างซ้ำที่</th><th>%ไฟเบอร์ในชานอ้อยย่อย</th></tr>${readRows([fb], true)}</table>
+<p class="i2">4.2.4.3&nbsp;&nbsp;&nbsp;Combined Uncertainty</p>
+<table class="t cm"><tr><th>Uncertainty Component</th><th>%ไฟเบอร์ในชานอ้อยย่อย</th></tr>
+<tr><td class="l">การชั่งน้ำหนักไฟเบอร์</td><td>${f5(fb.rCal)}</td></tr><tr><td class="l">UA(x)</td><td>${f5(fb.A.uArel)}</td></tr></table>
+<table class="eq f"><tr><td>Uc [Fiber]</td><td>= √[(${f5(fb.rCal)})² + (${f5(fb.A.uArel)})²] × ${xbar(fb)}</td></tr><tr><td></td><td>= ${f5(fb.ucRel)} × ${xbar(fb)} = ${f5(fb.uc)}</td></tr></table>
+<p class="i2">4.2.4.4 Expanded Uncertainty โดยคูณค่า Combined Uncertainty ด้วย Coverage Factor (k)=2 ที่ระดับความเชื่อมั่น 95%</p>
+<table class="eq f"><tr><td>U<sub>E</sub> [Fiber]</td><td>= ${f5(fb.uc)} x 2 = ${f5(fb.U)}</td></tr></table>
+<h5>4.2.5&nbsp;&nbsp;การรายงานผล พร้อมค่า Uncertainty</h5>
+<table class="eq f"><tr><td>%ไฟเบอร์ในชานอ้อยย่อย</td><td>= ค่าที่ได้จากการตรวจทดสอบ (%) ± ${fmt(fb.Ur, fb.dec)} (%)</td></tr></table>`);
+
+  const sig = (title) => `<td><u>${title}</u><div class="sg"></div><div class="nm">(${"&nbsp;".repeat(60)})</div></td>`;
+  const p6 = page(6, `<h3><span>5</span>สรุปผล</h3>
+<p class="i2">-&nbsp;&nbsp;Uncertainty ของการวิเคราะห์ค่าองศาบริกซ์ (Brix) ในตัวอย่างน้ำอ้อย คือ ± ${fmt(b.Ur, b.dec)}</p>
+<p class="i2">-&nbsp;&nbsp;Uncertainty ของการวิเคราะห์ค่า%โพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย คือ ± ${fmt(p.Ur, p.dec)}%</p>
+<p class="i2">-&nbsp;&nbsp;Uncertainty ของการวิเคราะห์ค่า%เส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย คือ ± ${fmt(fb.Ur, fb.dec)}%</p>
+<h3 style="margin-top:22pt"><span>6</span>ตัวอย่างการรายงานผล</h3>
+<p class="i2">ผลวิเคราะห์ตัวอย่าง หมายเลข ${esc(ex.sampleNo || "........")} รายงานดังนี้</p>
+<p class="i2">-&nbsp;&nbsp;ค่าบริกซ์ ${exVal(ex.brix, b, "")}</p>
+<p class="i2">-&nbsp;&nbsp;ค่าโพล ${exVal(ex.pol, p, "%")}</p>
+<p class="i2">-&nbsp;&nbsp;ค่าไฟเบอร์ ${exVal(ex.fiber, fb, "%")}</p>
+<table class="sig"><tr>${sig("จัดทำโดย")}${sig("อนุมัติโดย")}</tr>
+<tr><td><u>วันที่</u></td><td><u>วันที่</u></td></tr></table>`);
+
   return `<!doctype html><html><head><meta charset="utf-8"><title>LF-069 ประจำปี ${esc(year)}</title>
-<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
-<style>@page{size:A4;margin:10mm 12mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.8pt;color:#111;margin:0;line-height:1.4}
-table{border-collapse:collapse;width:100%;margin:3pt 0}td,th{border:.6pt solid #222;padding:2pt 5pt}th{background:#E8EEF3;font-weight:600;font-size:9pt}
-.hd td{padding:3pt 6pt}.t{text-align:center;font-weight:700;font-size:13pt}.t small{display:block;font-weight:400;font-size:9pt}
-.brand{width:30mm;text-align:center;font-weight:700;color:#1F4E6E;font-size:9pt;line-height:1.15}.brand img{height:15mm;display:block;margin:0 auto}.m{width:50mm;font-size:8.8pt}
-h3{margin:7pt 0 3pt;font-size:10.6pt}h3 b{background:#1F4E6E;color:#fff;border-radius:3pt;padding:0 5pt;margin-right:5pt;font-size:9pt}
-h4{margin:6pt 0 2pt;font-size:10.2pt}h5{margin:5pt 0 2pt 8pt;font-size:9.8pt}p{margin:1pt 0 1pt 8pt}.ind{margin-left:16pt}.ind2{margin-left:26pt}
-.n td{text-align:center}.n .lft,.lft{text-align:left}.n tr.s td{background:#F4F7F9;font-weight:600}.w60{width:62%;margin-left:26pt}.w80{width:88%;margin-left:16pt}
-.note{font-size:8pt;color:#333;margin-top:4pt}.sig{margin-top:12pt}.sig td{border:none;width:33%;height:64pt;vertical-align:bottom;text-align:center;font-size:9pt}.line{border-bottom:.6pt dotted #333;margin:0 10pt 4pt;height:26pt}
-.pg{page-break-after:always}.ft{margin-top:6pt;font-size:7.6pt;color:#444;border-top:.5pt solid #999;padding-top:2pt;display:flex;justify-content:space-between}</style></head><body>
-<div class="pg">${p1}${foot}</div><div class="pg">${p2}${foot}</div><div class="pg">${p3}${foot}</div><div class="pg">${p4}${foot}</div><div>${p5}${foot}</div>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+<style>@page{size:A4;margin:0}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.3pt;color:#000;margin:0;line-height:1.45}
+.pg{width:210mm;height:297mm;padding:9mm 12mm 10mm 13mm;page-break-after:always;overflow:hidden;display:flex;flex-direction:column}.pg:last-child{page-break-after:auto}
+.hd{position:relative;height:17mm;flex:none}.hd img{position:absolute;left:0;top:0;height:8mm}.hd .code{position:absolute;right:0;top:1mm;font-size:8.4pt}.hd .ttl{position:absolute;left:0;right:0;top:7.5mm;text-align:center;font-size:10.4pt;font-weight:700}
+.box{flex:1;border:.8pt solid #000;padding:5mm 7mm}
+p{margin:0 0 2pt}.yr{margin-bottom:8pt}h3{font-size:9.3pt;font-weight:400;margin:9pt 0 3pt}h3 span{display:inline-block;width:8mm}
+h4{font-size:9.3pt;font-weight:400;margin:6pt 0 2pt 3mm}h5{font-size:9.3pt;font-weight:400;margin:6pt 0 3pt 6mm}
+.i1{margin-left:8mm}.i2{margin-left:10mm;margin-top:3pt}.i3{margin-left:16mm}.blt{padding-left:5mm;text-indent:-5mm}
+table{border-collapse:collapse}.t{margin:3pt 0 5pt 6mm;width:calc(100% - 6mm)}.t.w{margin-left:10mm;width:calc(100% - 10mm)}
+.t td,.t th{border:.6pt solid #000;padding:1.5pt 5pt;text-align:center;font-weight:400;vertical-align:top}.t .l{text-align:left}.t .i{padding-left:16pt}
+.rd{width:62%!important;margin-left:16mm!important}.rd td:first-child{text-align:center}.rd .l{text-align:left!important}.fb{width:45%!important;margin-left:30mm!important}.fb th{background:#FFF2CC}
+.cm{width:62%!important;margin-left:16mm!important}
+.eqbox{border:.8pt solid #000;display:inline-block;padding:7pt 12pt;margin:4pt 0 4pt 12mm;min-width:95mm}
+.eq{margin:3pt 0 3pt 16mm}.eq td{padding:1pt 6pt 1pt 0;vertical-align:middle}.eq td:first-child{white-space:nowrap;min-width:22mm}.eq.f{margin-left:18mm}
+.frac{display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle}.frac span:first-child{border-bottom:.6pt solid #000;padding:0 3pt}
+.sig{width:84%;margin:26pt 0 0 6mm}.sig td{border:.6pt solid #000;width:50%;padding:3pt 6pt;vertical-align:top}.sig .sg{height:26pt}.sig tr:last-child td{height:30pt}.sig .nm{text-align:center}
+.nt{margin-top:16pt;font-size:7.6pt;color:#333}</style></head><body>
+${p1}${p2}${p3}${p4}${p5}${p6}
 <script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
 }
 

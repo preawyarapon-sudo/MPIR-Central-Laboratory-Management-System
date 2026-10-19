@@ -5,13 +5,14 @@
 import { useState, useMemo } from "react";
 import { ChevronLeft, Plus, FileDown, Check, X, Pencil, Trash2, AlertTriangle } from "lucide-react";
 import { num, fmt, fmtDate, todayISO, beYear, mpirCodes } from "./calc.js";
-import { TESTS, calcReport, roundsFor, printLf069, DEFAULT_REPEATS, MAX_REPEATS, resolutionOf } from "./uncertainty.js";
+import { TESTS, calcReport, roundsFor, printLf069, DEFAULT_REPEATS, MIN_REPEATS, MAX_REPEATS, verifyRefOf } from "./uncertainty.js";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const DEFAULT_OBJECTIVE = "ประเมินค่าความไม่แน่นอนของการวัดของเครื่องมือที่ใช้ตรวจทดสอบค่าบริกซ์และโพลในน้ำอ้อย และไฟเบอร์ในชานอ้อยย่อย";
 const DEFAULT_REFS = ["MPIR-WI-002 วิธีวัดค่าองศาบริกซ์ (Brix) และโพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย",
-  "MPIR-WI-003 การวิเคราะห์ค่าเส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย", "MPIR-WI-008 การประเมินค่าความไม่แน่นอนของการวัด",
-  "รายงานผลการทวนสอบเครื่องมือ (LF-068) ของ Refractometer, Polarimeter และเครื่องชั่ง 2 ตำแหน่ง"].join("\n");
+  "MPIR-WI-003 การวิเคราะห์ค่าเส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย", "MPIR-WI-008 การประเมินค่าความไม่แน่นอนของการวัด"].join("\n");
+// the yearly verification report line is added automatically (verifyRefOf)
+const ownRefs = (txt) => mpirCodes(txt || "").split(/\n/).filter(l => !/^\s*รายงาน(ผลการ)?ทวนสอบเครื่องมือ/.test(l)).join("\n");
 const normNo = (s) => String(s || "").toUpperCase().replace(/\s+/g, "");
 
 function guessInstrument(T, equipment) {
@@ -26,8 +27,8 @@ export function newReport(prev, equipment, certificates, me) {
   const date = todayISO();
   const rep = {
     id: uid(), reportDate: date, testDate: "", year: String(beYear(date)),
-    objective: prev?.objective || DEFAULT_OBJECTIVE, testers: prev?.testers || "", supervisor: prev?.supervisor || "",
-    sampleNote: "", references: prev?.references ? mpirCodes(prev.references) : DEFAULT_REFS, preparedBy: me || "", example: {},
+    objective: prev?.objective || DEFAULT_OBJECTIVE, testers: prev?.testers || "", supervisor: prev?.supervisor || "", supervisorRole: prev?.supervisorRole || "ผู้จัดการด้านวิชาการ",
+    sampleNote: "", references: prev?.references ? ownRefs(prev.references) : DEFAULT_REFS, preparedBy: me || "", example: {},
   };
   for (const T of TESTS) {
     const instrumentId = prev?.[T.key]?.instrumentId || guessInstrument(T, equipment);
@@ -109,7 +110,7 @@ export function UncertaintyList({ reports, certificates, equipment, onNew, onOpe
           </section>
         );
       })}
-      <p className="ca-small ca-muted">วิธีคำนวณ (ค่าความไม่แน่นอนของเครื่องมือ · แบบสัมพัทธ์ทั้งชุด): ทุกองค์ประกอบหารด้วยค่าเฉลี่ย (u/x̄) ก่อนรวม — Calibration = (U ของใบรับรอง ÷ k)/x̄, Resolution = (d/(2√3))/x̄ (Pol แปลง °Z → %Pol ด้วย 26/(100ρ) · Fibre รวมการชั่ง M0, M1, M2), Repeatability = RSD/√m (m = จำนวนครั้งที่ทดสอบซ้ำ n) · u_c = √Σ(u/x̄)² × x̄ · U = 2u_c · ปัดขึ้นตามความละเอียดของผล</p>
+      <p className="ca-small ca-muted">วิธีคำนวณ (ค่าความไม่แน่นอนของเครื่องมือ · แบบสัมพัทธ์ทั้งชุด): ทุกองค์ประกอบหารด้วยค่าเฉลี่ย (u/x̄) ก่อนรวม — Calibration = (U ของใบรับรอง ÷ k)/x̄ (Pol แปลง °Z → %Pol ด้วย 26/(100ρ) · Fibre การชั่ง M0, M1, M2) · Repeatability = RSD/√m (m = จำนวนครั้งที่ทดสอบซ้ำ n) · u_c = √Σ(u/x̄)² × x̄ · U = 2u_c · ปัดขึ้นตามความละเอียดของผล</p>
     </div>
   );
 }
@@ -124,17 +125,39 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
     setD(x => ({ ...x, [k]: v, ...(k === "reportDate" && v ? { year: String(beYear(v)) } : {}) }));
   };
   const setT = (tk, patch) => setD(x => ({ ...x, [tk]: { ...x[tk], ...patch } }));
+  const setEx = (k) => (ev) => setD(x => ({ ...x, example: { ...(x.example || {}), [k]: ev.target.value } }));
   const eqLabel = (e) => `${e.code || ""} — ${e.name || ""}${e.serialNo ? ` (S/N ${e.serialNo})` : ""}`;
   const sortedEq = useMemo(() => [...equipment].sort((a, b) => String(a.code || "").localeCompare(String(b.code || ""), "th", { numeric: true })), [equipment]);
 
-  function setReading(tk, i, val) {
-    const parts = String(val).split(/[\s\t\n,;]+/).filter(Boolean);
+  // Grids of verification readings: rows = repeats, columns = tests.
+  // Card 2 = Brix + Pol, card 3 = Fibre; each grows on its own.
+  // Pasting from Excel fills down (one column) or across (tab-separated).
+  const GROUPS = [
+    { title: "ค่าที่วัดได้จากการทวนสอบเครื่องมือ — บริกซ์ และ โพล", tests: TESTS.filter(T => T.key !== "fiber"), cols: ["%Brix (บริกซ์)", "% Pol (โพล)"] },
+    { title: "ค่าที่วัดได้จากการทวนสอบเครื่องมือ — ไฟเบอร์", tests: TESTS.filter(T => T.key === "fiber"), cols: ["%ไฟเบอร์ในชานอ้อยย่อย"] },
+  ];
+  const rowsOf = (g) => Math.max(MIN_REPEATS, ...g.tests.map(T => (d[T.key]?.readings || []).length));
+  function setCell(g, row, col, val) {
+    const lines = String(val).replace(/\r/g, "").split("\n").filter((l, i, arr) => l.trim() !== "" || i < arr.length - 1);
+    const grid = lines.length > 1 || /\t/.test(val) ? lines.map(l => l.split("\t")) : [[val]];
     setD(x => {
-      const reads = [...(x[tk].readings || [])];
-      if (parts.length > 1) {
-        parts.forEach((p, j) => { if (i + j < MAX_REPEATS) reads[i + j] = p; });
-      } else reads[i] = val;
-      return { ...x, [tk]: { ...x[tk], readings: reads } };
+      const next = { ...x };
+      grid.forEach((cells, r) => cells.forEach((v, c) => {
+        const T = g.tests[col + c], i = row + r;
+        if (!T || i >= MAX_REPEATS) return;
+        const reads = [...(next[T.key].readings || [])];
+        while (reads.length <= i) reads.push("");
+        reads[i] = v.trim();
+        next[T.key] = { ...next[T.key], readings: reads };
+      }));
+      return next;
+    });
+  }
+  function resize(g, n) {
+    setD(x => {
+      const next = { ...x };
+      g.tests.forEach(T => { const r = [...(x[T.key].readings || [])]; while (r.length < n) r.push(""); next[T.key] = { ...x[T.key], readings: r.slice(0, n) }; });
+      return next;
     });
   }
 
@@ -162,22 +185,47 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
         <div className="ca-grid3">
           <label className="ca-field"><span>วันที่รายงาน *</span><input type="date" value={d.reportDate} onChange={set("reportDate")} /></label>
           <label className="ca-field"><span>ประจำปี (พ.ศ.)</span><input value={d.year} onChange={set("year")} inputMode="numeric" /></label>
-          <label className="ca-field"><span>วันที่ทดสอบซ้ำ</span><input type="date" value={d.testDate || ""} onChange={set("testDate")} /></label>
         </div>
         <label className="ca-field"><span>1 วัตถุประสงค์</span><textarea rows={2} value={d.objective} onChange={set("objective")} /></label>
+        <h3 style={{ margin: "4px 0 0" }}>2 ผู้ดำเนินการ</h3>
+        <label className="ca-field"><span>ทดสอบซ้ำ โดย เจ้าหน้าที่วิเคราะห์ — ชื่อ</span><input value={d.testers} onChange={set("testers")} placeholder="เช่น นายชัชวาล แก่นภูเขียว และนายเจษฎาภรณ์ ฮุยสูงเนิน" /></label>
         <div className="ca-grid3">
-          <label className="ca-field"><span>2 ผู้ทดสอบซ้ำ (เจ้าหน้าที่วิเคราะห์)</span><input value={d.testers} onChange={set("testers")} placeholder="เช่น นายชัชวาล แก่นภูเขียว และนางสาวเมขลา ผางสา" /></label>
-          <label className="ca-field"><span>ผู้ดูแลการทดสอบและประเมิน</span><input value={d.supervisor} onChange={set("supervisor")} placeholder="ชื่อ / ตำแหน่ง" /></label>
-          <label className="ca-field"><span>จัดทำโดย (พิมพ์ในช่องลงนาม)</span><input value={d.preparedBy} onChange={set("preparedBy")} /></label>
+          <label className="ca-field"><span>ดูแลการทดสอบและประเมิน โดย (ตำแหน่ง)</span><input value={d.supervisorRole ?? "ผู้จัดการด้านวิชาการ"} onChange={set("supervisorRole")} /></label>
+          <label className="ca-field ca-span2"><span>ชื่อผู้ดูแลการทดสอบและประเมิน</span><input value={d.supervisor} onChange={set("supervisor")} placeholder="เช่น นางสาวพิสิทธินี ชาปัญญา" /></label>
         </div>
-        <label className="ca-field"><span>หมายเหตุเกี่ยวกับตัวอย่าง</span><input value={d.sampleNote} onChange={set("sampleNote")} placeholder="เช่น ใช้น้ำอ้อย/ชานอ้อยแช่แข็ง เนื่องจากไม่มีอ้อยเข้าหีบ" /></label>
-        <label className="ca-field"><span>3 เอกสารอ้างอิง (บรรทัดละ 1 รายการ)</span><textarea rows={4} value={d.references} onChange={set("references")} /></label>
+        <label className="ca-field"><span>3 เอกสารอ้างอิง (บรรทัดละ 1 รายการ)</span><textarea rows={3} value={ownRefs(d.references)} onChange={set("references")} /></label>
+        <p className="ca-small ca-muted" style={{ marginTop: -6 }}>บรรทัดสุดท้ายใส่ให้อัตโนมัติตามปีของรายงาน: <b>- {verifyRefOf(d)}</b></p>
       </section>
+
+      {GROUPS.map(g => { const nRows = rowsOf(g); return (
+      <section key={g.title} className="ca-card ca-stack-sm">
+        <div className="ca-sub-head ca-pad0" style={{ marginTop: 0 }}>
+          <h2>{g.title}</h2>
+          <span className="ca-small ca-muted">ขั้นต่ำ {MIN_REPEATS} ซ้ำ · วางค่าจาก Excel ได้ทั้งคอลัมน์หรือทั้งตาราง</span>
+        </div>
+        <div className="ca-scroll">
+          <table className="ca-table ca-edit ca-reads" style={{ maxWidth: g.tests.length > 1 ? 520 : 340 }}>
+            <thead><tr><th style={{ width: 90 }}>ซ้ำที่</th>{g.cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>
+              {Array.from({ length: nRows }, (_, i) => (
+                <tr key={i}><td className="ca-muted" style={{ textAlign: "center" }}>{i + 1}</td>
+                  {g.tests.map((T, ci) => <td key={T.key}><input className="w-r" aria-label={`${T.short} ซ้ำที่ ${i + 1}`} value={d[T.key]?.readings?.[i] ?? ""} inputMode="decimal"
+                    onChange={ev => setCell(g, i, ci, ev.target.value)}
+                    onPaste={ev => { const txt = ev.clipboardData.getData("text"); if (/[\t\n]/.test(txt.trim())) { ev.preventDefault(); setCell(g, i, ci, txt); } }} /></td>)}
+                </tr>))}
+              <tr className="ca-muted"><td>ค่าเฉลี่ย</td>{g.tests.map(T => <td key={T.key} style={{ textAlign: "center" }}>{fmt(R[T.key].A.mean, R[T.key].dec)} <span className="ca-small">(n = {R[T.key].A.n})</span></td>)}</tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="ca-row ca-wrap">
+          <button className="ca-btn" disabled={nRows >= MAX_REPEATS} onClick={() => resize(g, nRows + 1)}><Plus size={15} /> เพิ่มซ้ำ</button>
+          <button className="ca-btn" disabled={nRows <= MIN_REPEATS} onClick={() => resize(g, nRows - 1)}><X size={15} /> ลบซ้ำสุดท้าย</button>
+        </div>
+      </section>); })}
 
       {TESTS.map((T, ti) => {
         const t = d[T.key] || {}, r = R[T.key];
         const rounds = t.instrumentId ? roundsFor(certificates, t.instrumentId, d.reportDate) : [];
-        const reads = t.readings || [];
         return (
           <section key={T.key} className="ca-card ca-stack-sm">
             <h2>4.{T.key === "fiber" ? "2" : "1"} {T.label} <span className="ca-muted ca-small">({T.unit})</span></h2>
@@ -204,46 +252,38 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
                   <label className="ca-field ca-span2"><span>หมายเหตุที่มา</span><input value={t.manualNote || ""} onChange={ev => setT(T.key, { manualNote: ev.target.value })} /></label>
                 </div>
               )}
-              <label className="ca-field"><span>ตัวหาร m ของ RSD/√m</span><input value={t.mRep ?? ""} onChange={ev => setT(T.key, { mRep: ev.target.value })} inputMode="numeric" placeholder={`${r.A.n || reads.length} (= จำนวนซ้ำ n)`} /></label>
-              <label className="ca-field"><span>ความละเอียด d ({T.instUnit})</span><input value={t.res ?? ""} onChange={ev => setT(T.key, { res: ev.target.value })} inputMode="decimal" placeholder={`${resolutionOf(t, T, equipment)} (จากทะเบียน)`} /></label>
-              {T.key === "fiber" && <label className="ca-field"><span>น้ำหนักชานก่อนอบ m = M1 − M0 (g) · WI: 200 ± 10</span><input value={t.m1 || ""} onChange={ev => setT(T.key, { m1: ev.target.value })} inputMode="decimal" /></label>}
+              <label className="ca-field"><span>ตัวหาร m ของ RSD/√m</span><input value={t.mRep ?? ""} onChange={ev => setT(T.key, { mRep: ev.target.value })} inputMode="numeric" placeholder={`${r.A.n || "n"} (= จำนวนซ้ำ n)`} /></label>
+              {T.key === "fiber" && <label className="ca-field"><span>น้ำหนักชานอ้อยย่อยก่อนอบ M1 (g) · WI: 200 ± 10</span><input value={t.m1 || ""} onChange={ev => setT(T.key, { m1: ev.target.value })} inputMode="decimal" /></label>}
             </div>
             {t.source === "cert" && t.instrumentId && !rounds.length && <p className="ca-warn">เครื่องนี้ยังไม่มีใบรับรองในระบบ — บันทึกรอบสอบเทียบก่อน หรือเลือก “กรอกเอง”</p>}
 
-            <div className="ca-sub-head"><h3>ผลทดสอบซ้ำ ({T.unit})</h3><span className="ca-small ca-muted">วางค่าหลายค่าจาก Excel ลงช่องแรกได้</span></div>
-            <div className="ca-scroll">
-              <table className="ca-table ca-edit ca-reads">
-                <thead><tr>{reads.map((_, i) => <th key={i}>ซ้ำ {i + 1}</th>)}<th></th></tr></thead>
-                <tbody><tr>
-                  {reads.map((x, i) => <td key={i}><input className="w-r" aria-label={`${T.short} ซ้ำที่ ${i + 1}`} value={x} inputMode="decimal"
-                    onChange={ev => setReading(T.key, i, ev.target.value)}
-                    onPaste={ev => { const txt = ev.clipboardData.getData("text"); if (/[\s\t\n,;]/.test(txt.trim())) { ev.preventDefault(); setReading(T.key, i, txt); } }} /></td>)}
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    {reads.length < MAX_REPEATS && <button className="ca-icon" aria-label="เพิ่มซ้ำ" onClick={() => setT(T.key, { readings: [...reads, ""] })}><Plus size={15} /></button>}
-                    {reads.length > 2 && <button className="ca-icon" aria-label="ลดซ้ำ" onClick={() => setT(T.key, { readings: reads.slice(0, -1) })}><X size={15} /></button>}
-                  </td>
-                </tr></tbody>
-              </table>
-            </div>
             <div className="ca-scroll">
               <table className="ca-table ca-num ca-calcbox">
-                <thead><tr><th>n</th><th>ค่าเฉลี่ย x̄</th><th>SD</th><th>RSD</th><th>RSD/√m</th><th>Calibration u/x̄</th><th>Resolution u/x̄</th>{T.key === "pol" && <th>Pol factor u/x̄</th>}<th>u_c,rel</th><th>u_c = u_c,rel × x̄</th><th>U = 2u_c</th><th>ค่าที่ใช้ ±</th></tr></thead>
-                <tbody><tr><td>{r.A.n}</td><td>{fmt(r.A.mean, r.dec)}</td><td>{fmt(r.A.sd, 4)}</td><td>{fmt(r.A.rsd, 5)}</td><td>{fmt(r.A.uArel, 5)}</td><td>{fmt(r.rCal, 5)}</td><td>{fmt(r.rRes, 5)}</td>{T.key === "pol" && <td>{fmt(r.rPF, 5)}</td>}<td>{fmt(r.ucRel, 5)}</td><td>{fmt(r.uc, 4)}</td><td>{fmt(r.U, 4)}</td>
+                <thead><tr><th>n</th><th>ค่าเฉลี่ย x̄</th><th>SD</th><th>RSD</th><th>RSD/√m</th><th>Calibration u/x̄</th><th>u_c,rel</th><th>u_c = u_c,rel × x̄</th><th>U = 2u_c</th><th>ค่าที่ใช้ ±</th></tr></thead>
+                <tbody><tr><td>{r.A.n}</td><td>{fmt(r.A.mean, r.dec)}</td><td>{fmt(r.A.sd, 4)}</td><td>{fmt(r.A.rsd, 5)}</td><td>{fmt(r.A.uArel, 5)}</td><td>{fmt(r.rCal, 5)}</td><td>{fmt(r.ucRel, 5)}</td><td>{fmt(r.uc, 4)}</td><td>{fmt(r.U, 4)}</td>
                   <td className="ca-strong">{r.complete ? `${fmt(r.Ur, r.dec)} ${T.unit}` : "–"}</td></tr></tbody>
               </table>
             </div>
             <p className="ca-small ca-muted">
               {r.B ? <>Calibration: {r.B.text} → U/k = {fmt(r.B.u, 4)} {T.instUnit}</> : "Calibration: ยังไม่ได้เลือกใบรับรอง"}
               {T.key === "pol" && r.B && <> · × c = 26/(100 × {fmt(r.rho, 5)}) = {fmt(r.c, 4)} (ρ ที่ {fmt(r.brixUsed, 2)} %Brix)</>}
-              {T.key === "fiber" && <> · ชั่ง 3 ครั้ง (ถุงผ้า M0, ก่อนอบ M1, หลังอบ M2): u·√[(100/m)² + (%F/m)² + ((100−%F)/m)²]</>}
-              <> · Resolution: d/(2√3) = {r.d}/3.4641 = {fmt(r.uR, 4)} {T.instUnit}</>
-              {T.key === "pol" && <> · Pol factor: %Pol × (dρ/dBrix)/ρ × u_c[Brix]</>}
+              {T.key === "fiber" && <> · ชั่ง 3 ครั้ง (ภาชนะ M0, ก่อนอบ M1, หลังอบ M2): u·√[(100/M1)² + (100/M1)² + (%F/M1)²]</>}
             </p>
             {d.paperU && <p className="ca-small ca-muted">รายงานเดิม (กระดาษ): ± {d.paperU[T.short === "Fibre" ? "Fiber" : T.short] || "–"}</p>}
             {ti === 0 && r.A.n > 1 && r.A.sd === 0 && <p className="ca-warn"><AlertTriangle size={14} /> ค่าซ้ำทุกค่าเท่ากัน (SD = 0) — ตรวจว่าความละเอียดของการอ่านค่าเพียงพอหรือไม่</p>}
           </section>
         );
       })}
+
+      <section className="ca-card ca-stack-sm">
+        <h2>6 ตัวอย่างการรายงานผล <span className="ca-muted ca-small">(ไม่บังคับ · ถ้าเว้นว่าง รายงานจะพิมพ์เป็นช่องว่างให้เขียน)</span></h2>
+        <div className="ca-grid4">
+          <label className="ca-field"><span>หมายเลขตัวอย่าง</span><input value={d.example?.sampleNo || ""} onChange={setEx("sampleNo")} /></label>
+          <label className="ca-field"><span>Brix</span><input value={d.example?.brix || ""} onChange={setEx("brix")} inputMode="decimal" /></label>
+          <label className="ca-field"><span>%Pol</span><input value={d.example?.pol || ""} onChange={setEx("pol")} inputMode="decimal" /></label>
+          <label className="ca-field"><span>%Fibre</span><input value={d.example?.fiber || ""} onChange={setEx("fiber")} inputMode="decimal" /></label>
+        </div>
+      </section>
 
       <div className="ca-savebar">
         <span className={problems.length ? "ca-warn" : "ca-muted"}>{problems.length ? `ยังขาด: ${problems.join(" · ")}` : "ข้อมูลครบ บันทึกและดาวน์โหลดได้"}</span>
