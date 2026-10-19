@@ -90,7 +90,7 @@ export function UncertaintyList({ reports, certificates, equipment, onNew, onOpe
             <div className="ca-sub-head ca-pad0" style={{ marginTop: 0 }}>
               <div>
                 <h2>ประจำปี {rep.year || beYear(rep.reportDate)} <span className="ca-muted ca-small">· ลงวันที่ {fmtDate(rep.reportDate)}</span></h2>
-                <div className="ca-small ca-muted">{rep.legacyLabel ? `นำเข้าจาก ${mpirCodes(rep.legacyLabel)} · คำนวณใหม่` : rep.downloadedAt ? `ดาวน์โหลดล่าสุด ${fmtDate(rep.downloadedAt.slice(0, 10))}${rep.downloadedBy ? ` โดย ${rep.downloadedBy}` : ""}${rep.reprintNeeded ? " · มีการแก้ไขหลังดาวน์โหลด ต้องพิมพ์ใหม่" : ""}` : "ยังไม่ได้ดาวน์โหลด"}</div>
+                <div className="ca-small ca-muted">{rep.legacyLabel ? `นำเข้าจาก ${mpirCodes(rep.legacyLabel)} · คำนวณใหม่` : rep.reprintNeeded ? "มีการแก้ไขหลังดาวน์โหลด ต้องพิมพ์ใหม่" : ""}</div>
               </div>
               <div className="ca-row ca-wrap">
                 <button className="ca-btn" onClick={() => onOpen(rep.id)}><Pencil size={15} /> เปิด / แก้ไข</button>

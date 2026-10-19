@@ -701,7 +701,6 @@ function RoundView({ round, instrument: e, isLatest, readOnly = false, onEdit, o
         <div className="ca-stack-sm" style={{ flex: 1, minWidth: 240 }}>
           <h3>ดาวน์โหลดรายงาน LF-068</h3>
           <p className="ca-small ca-muted">รายงานมีช่องลงนามผู้ทวนสอบ ผู้ประเมิน (TM/QM) และผู้อนุมัติ (Lab manager) ว่างไว้ ลงนามบนเอกสารแล้วเก็บตามระบบเอกสาร</p>
-          {v?.downloadedAt && !v.reprintNeeded && <p className="ca-small" style={{ color: "#187A52" }}>ดาวน์โหลดแล้ว {new Date(v.downloadedAt).toLocaleString("th-TH")}{v.downloadedBy ? ` โดย ${v.downloadedBy}` : ""}</p>}
           {v?.reprintNeeded && <p className="ca-warn">ข้อมูลถูกแก้หลังดาวน์โหลด — ดาวน์โหลดใหม่และลงนามฉบับใหม่</p>}
           {isLatest && (
             <label className="ca-field" style={{ maxWidth: 440 }}><span>สถานะการใช้งานของเครื่อง</span>
@@ -739,7 +738,7 @@ function draftFrom(instrument, rounds, roundKeyToEdit, me) {
     id: uid(), reason: "cal", returnedDate: "", condition: "ok", conditionNote: "", verifyDate: todayISO(), environment: "",
     stdName: pv?.stdName || "", stdCert: pv?.stdCert || "", stdDue: pv?.stdDue || "", stdU: pv?.stdU || "", readingCorrection: "",
     resolution: pv?.resolution || String(instrument.resolution ?? "").match(/\d*\.?\d+/)?.[0] || "", wi: pv?.wi || "",
-    fewReason: "", ncNo: "", remark: "", wiReview: "", verifiedBy: me,
+    fewReason: "", ncNo: "", remark: "", wiReview: "", verifiedBy: pv?.verifiedBy || "",
     points: (pv?.points?.length ? pv.points.map(p => ({ reference: p.reference, stdU: p.stdU || "", readings: emptyReads() })) : [{ reference: "", stdU: "", readings: emptyReads() }]),
   };
   return {
@@ -880,6 +879,7 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
         {d.doVerify && (<>
           <div className="ca-grid4">
             <label className="ca-field"><span>วันที่ทวนสอบ *</span><input type="date" value={d.v.verifyDate} onChange={setV("verifyDate")} /></label>
+            <label className="ca-field"><span>ผู้ดำเนินการทดสอบ (พิมพ์ในรายงานข้อ 3)</span><input value={d.v.verifiedBy || ""} onChange={setV("verifiedBy")} placeholder="เช่น นางสาวพิสิทธินี ชาปัญญา" /></label>
             <label className="ca-field"><span>เหตุที่ทวนสอบ</span><select value={d.v.reason} onChange={setV("reason")}>{VERIFY_REASONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
             <label className="ca-field"><span>วันที่รับเครื่องคืน</span><input type="date" value={d.v.returnedDate} onChange={setV("returnedDate")} /></label>
             <label className="ca-field"><span>สภาพเครื่อง</span><select value={d.v.condition} onChange={setV("condition")}><option value="ok">สมบูรณ์</option><option value="abnormal">พบความผิดปกติ</option></select></label>

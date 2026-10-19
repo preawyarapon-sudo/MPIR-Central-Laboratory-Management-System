@@ -62,7 +62,7 @@ ${v ? `<p class="i1 hg">2.2 ${method22}</p>` : ""}
 <table class="t"><tr><th>Reference (${unit})</th><th>UUC Reading (${unit})</th><th>Correction (${unit})</th><th>Uncertainty (±${unit})</th><th>Error (${unit})</th><th>Error + U (${unit})</th></tr>${certRows}</table>
 <p class="i2">สรุปผล: ค่าความผิดพลาดรวม (Error+U) ${le(certOk)} เกณฑ์การยอมรับ (${tolTxt})</p>`;
 
-  const body2 = `${v ? `<p class="i1">5.2 ผลการทวนสอบค่าการวัดของเครื่องมือ เทียบกับค่ามาตรฐาน โดยใช้ ${std} (ทวนสอบวันที่ ${esc(longDate(v.verifyDate))})${v.wi ? ` [${esc(v.wi)}]` : ""}</p>
+  const body2 = `${v ? `<p class="i1">5.2 ผลการทวนสอบค่าการวัดของเครื่องมือ เทียบกับค่ามาตรฐาน โดยใช้ ${std} (ทวนสอบวันที่ ${"&nbsp;.".repeat(18)})${v.wi ? ` [${esc(v.wi)}]` : ""}</p>
 <table class="t rd"><tr><th rowspan="2">Reference</th><th colspan="${R}">UUC (${unit})</th><th rowspan="2">SD</th><th rowspan="2">U</th><th rowspan="2">Error</th><th rowspan="2">Error+U (${unit})</th></tr>
 <tr>${Array.from({ length: R }, (_, i) => `<th>R${i + 1}</th>`).join("")}</tr>${readRows}</table>
 <p class="i2">สรุปผล: ค่าความผิดพลาดรวม (Error+U) ${le(verOk)} เกณฑ์การยอมรับ${inRange ? " และอยู่ในช่วงค่าความผิดพลาดรวม ตามรายงานผลการสอบเทียบ" : ""}</p>` : ""}
