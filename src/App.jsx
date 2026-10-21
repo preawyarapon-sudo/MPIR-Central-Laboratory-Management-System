@@ -115,6 +115,7 @@ const ACCOUNTS = [
   { username: "thidarati", password: "mpir1234", role: "approver", name: "Thidarat Intakham" },
   { username: "panitk", password: "mpir1234", role: "booking", name: "Panit Kitsubun" },
   { username: "phatthariyap", password: "mpir1234", role: "booking", name: "Phatthariya Phromngulueam" },
+  { username: "kachaporns", password: "mpir1234", role: "booking", name: "Kachaporn Saenluang" },
   { username: "suteek", password: "mpir1234", role: "booking", name: "Sutee Kiddee" },
 ];
 
