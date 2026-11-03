@@ -46,6 +46,13 @@ const TONE = {
 };
 const isAircon = (e) => e.type === "เครื่องปรับอากาศ" || /แอร์|เครื่องปรับอากาศ|air ?con/i.test(`${e.name || ""} ${e.type || ""}`);
 const isCalibrated = (e, rounds) => !isAircon(e) && (rounds.length > 0 || num(e.intervalMonths) != null || !!e.nextDue || num(e.tolerance) != null);
+// LF-068 item 3 must carry the tester's name in Thai.
+const testerProblem = (name) => {
+  const t = String(name || "").trim();
+  if (!t) return "ผู้ดำเนินการทดสอบ";
+  if (/[A-Za-z]/.test(t)) return "ชื่อผู้ดำเนินการทดสอบเป็นภาษาไทย";
+  return null;
+};
 
 /* =================================================================== */
 const KEYS = ["equipment", "certificates", "verifications", "dailyChecks", "intermediateChecks", "uncertaintyReports"];
@@ -646,6 +653,7 @@ function RoundView({ round, instrument: e, isLatest, readOnly = false, onEdit, o
   const dg = digitsFor(v?.resolution || e.resolution);
   const passAll = cs.pass && (!v || (vs && vs.measOk && !vs.tooFew));
   const [usage, setUsage] = useState(v?.usage || (passAll ? USAGE[0] : USAGE[3]));
+  const testerIssue = v ? testerProblem(v.verifiedBy) : null;
   const head = round.points[0] || {};
   const steps = [
     { t: "บันทึกใบรับรอง", done: round.points.length > 0 && !cs.incomplete },
@@ -683,7 +691,7 @@ function RoundView({ round, instrument: e, isLatest, readOnly = false, onEdit, o
 
       <div className="ca-sub-head"><h3>ทวนสอบก่อนใช้งาน</h3>{vs ? <Pill tone={vs.measOk ? "green" : "red"}>{vs.measOk ? `ผ่าน ${vs.pts.length}/${vs.pts.length} จุด` : "ไม่ผ่าน"}</Pill> : <Pill tone={required ? "blue" : "grey"}>{required ? "ยังไม่ได้ทวนสอบ" : "ไม่มีข้อมูล"}</Pill>}</div>
       {vs ? (<>
-        <p className="ca-muted ca-small">{fmtDate(v.verifyDate)} · {v.stdName || "–"}{v.stdCert ? ` (${v.stdCert})` : ""} · d = {v.resolution || "–"}{v.legacyApprover ? ` · รายงานเดิมลงนามโดย ${v.legacyApprover}` : ""}</p>
+        <p className="ca-muted ca-small">{fmtDate(v.verifyDate)} · ผู้ทดสอบ {v.verifiedBy || "–"} · {v.stdName || "–"}{v.stdCert ? ` (${v.stdCert})` : ""} · d = {v.resolution || "–"}{v.legacyApprover ? ` · รายงานเดิมลงนามโดย ${v.legacyApprover}` : ""}</p>
         <div className="ca-scroll">
           <table className="ca-table ca-num">
             <thead><tr><th>ค่าอ้างอิง</th><th>n</th><th className="calc">ค่าเฉลี่ย</th><th className="calc">SD</th><th className="calc">u_rep</th><th className="calc">u_std</th><th className="calc">u_res</th><th className="calc">U = 2u_c</th><th className="calc">Error</th><th className="calc">|Error| + U</th><th className="calc">ผล</th></tr></thead>
@@ -702,13 +710,14 @@ function RoundView({ round, instrument: e, isLatest, readOnly = false, onEdit, o
           <h3>ดาวน์โหลดรายงาน LF-068</h3>
           <p className="ca-small ca-muted">รายงานมีช่องลงนามผู้ทวนสอบ ผู้ประเมิน (TM/QM) และผู้อนุมัติ (Lab manager) ว่างไว้ ลงนามบนเอกสารแล้วเก็บตามระบบเอกสาร</p>
           {v?.reprintNeeded && <p className="ca-warn">ข้อมูลถูกแก้หลังดาวน์โหลด — ดาวน์โหลดใหม่และลงนามฉบับใหม่</p>}
+          {testerIssue && <p className="ca-warn">ต้องระบุ{testerIssue === "ผู้ดำเนินการทดสอบ" ? "ผู้ดำเนินการทดสอบ" : testerIssue} — กด "แก้ไข" ก่อนดาวน์โหลด</p>}
           {isLatest && (
             <label className="ca-field" style={{ maxWidth: 440 }}><span>สถานะการใช้งานของเครื่อง</span>
               <select value={usage} onChange={ev => setUsage(ev.target.value)}>{USAGE.map(u => <option key={u}>{u}</option>)}</select>
             </label>
           )}
         </div>
-        <button className="ca-btn ca-btn-primary" disabled={required && !v} onClick={() => onDownload(round, usage)}><FileDown size={16} /> ดาวน์โหลด LF-068 (PDF)</button>
+        <button className="ca-btn ca-btn-primary" disabled={(required && !v) || !!testerIssue} onClick={() => onDownload(round, usage)}><FileDown size={16} /> ดาวน์โหลด LF-068 (PDF)</button>
       </div>}
     </section>
   );
@@ -784,6 +793,8 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
   if (!preview.points.some(c => !isBefore(c))) problems.push("ตารางผลสอบเทียบอย่างน้อย 1 แถว (ค่าอ้างอิง ค่าที่อ่านได้ และ U)");
   if (d.doVerify) {
     if (!d.v.verifyDate) problems.push("วันที่ทวนสอบ");
+    const tp = testerProblem(d.v.verifiedBy);
+    if (tp) problems.push(tp);
     if (!vs || !vs.pts.length) problems.push("ค่าที่อ่านได้จากการทวนสอบ");
     else if (vs.tooFew) problems.push(`ค่าที่อ่านได้อย่างน้อย ${VERIFY_MIN_READS} ครั้งต่อจุด`);
     else if (!vs.reasonOk) problems.push("เหตุผลที่ทวนสอบน้อยกว่า 10 ครั้ง");
@@ -878,8 +889,8 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
         {!d.doVerify && <p className="ca-muted">{(d.calibrationDate || "") >= VERIFICATION_REQUIRED_FROM ? "รอบที่สอบเทียบตั้งแต่ 9 ต.ค. 2569 ต้องทวนสอบก่อนใช้งาน — บันทึกภายหลังได้ แต่จะดาวน์โหลดรายงานไม่ได้จนกว่าจะทวนสอบ" : "ไม่บังคับสำหรับรอบก่อน 9 ต.ค. 2569"}</p>}
         {d.doVerify && (<>
           <div className="ca-grid4">
-            <label className="ca-field"><span>วันที่ทวนสอบ *</span><input type="date" value={d.v.verifyDate} onChange={setV("verifyDate")} /></label>
-            <label className="ca-field"><span>ผู้ดำเนินการทดสอบ (พิมพ์ในรายงานข้อ 3)</span><input value={d.v.verifiedBy || ""} onChange={setV("verifiedBy")} placeholder="เช่น นางสาวพิสิทธินี ชาปัญญา" /></label>
+            <label className="ca-field"><span>วันที่ทวนสอบ * (พิมพ์ในรายงานข้อ 5.2)</span><input type="date" value={d.v.verifyDate} onChange={setV("verifyDate")} /></label>
+            <label className="ca-field"><span>ผู้ดำเนินการทดสอบ * (ชื่อภาษาไทย · พิมพ์ในรายงานข้อ 3)</span><input value={d.v.verifiedBy || ""} onChange={setV("verifiedBy")} placeholder="เช่น นางสาวพิสิทธินี ชาปัญญา" /></label>
             <label className="ca-field"><span>เหตุที่ทวนสอบ</span><select value={d.v.reason} onChange={setV("reason")}>{VERIFY_REASONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
             <label className="ca-field"><span>วันที่รับเครื่องคืน</span><input type="date" value={d.v.returnedDate} onChange={setV("returnedDate")} /></label>
             <label className="ca-field"><span>สภาพเครื่อง</span><select value={d.v.condition} onChange={setV("condition")}><option value="ok">สมบูรณ์</option><option value="abnormal">พบความผิดปกติ</option></select></label>
@@ -969,6 +980,7 @@ function buildRecords(d, instrument, roundKeyToEdit, final = false) {
   const v = d.v;
   const verification = {
     ...v, instrumentId: instrument.id, certificateNo: certNo, calibrationDate: d.calibrationDate,
+    verifiedBy: String(v.verifiedBy || "").trim(),
     reportNo: v.reportNo || `VR-${Number((d.calibrationDate || todayISO()).slice(0, 4)) + 543}-${(instrument.code || "").replace(/\s+/g, "")}`,
     points: (v.points || []).filter(p => num(p.reference) != null || (final ? false : true)).map(p => ({ ...p, readings: (p.readings || []).slice(0, VERIFY_MAX_READS) })),
   };
