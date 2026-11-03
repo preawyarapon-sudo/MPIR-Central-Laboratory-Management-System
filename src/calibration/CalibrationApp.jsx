@@ -373,8 +373,8 @@ function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId
       || (rounds.length ? { key: "none", label: "ไม่มีข้อมูลทวนสอบ", tone: "grey", sort: 4 }
                         : { key: "none", label: "ยังไม่มีรอบสอบเทียบ", tone: "grey", sort: 5 });
     return { e, rounds, st, todo: states.filter(x => groups.todo.includes(x.key)).length, verified: rounds.filter(x => x.r.verification).length };
-  // every instrument that needs calibration (same list as the overview), even before its first certificate
-  }).filter(x => isCalibrated(x.e, roundsById[x.e.id] || [])), [equipment, roundsById]);
+  // every instrument in the registry (except air conditioners), even before its first certificate
+  }).filter(x => !isAircon(x.e)), [equipment, roundsById]);
   const inGroup = (x, k) => !groups[k] || (k === "todo" ? x.todo > 0 : x.todo === 0 && x.verified > 0);
   // open on "ต้องดำเนินการ" when there is work, otherwise on "ทั้งหมด"
   const filter = filterSel || (rows.some(x => x.todo > 0) ? "todo" : "all");
