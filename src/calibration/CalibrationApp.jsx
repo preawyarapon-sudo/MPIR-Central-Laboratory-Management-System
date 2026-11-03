@@ -369,9 +369,12 @@ function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId
   const rows = useMemo(() => equipment.map(e => {
     const rounds = (roundsById[e.id] || []).map((r, i) => ({ r, latest: i === 0, st: verifyState(r, e) }));
     const states = rounds.filter(x => x.st).map(x => x.st);
-    const st = states.sort((a, b) => a.sort - b.sort)[0] || { key: "none", label: "ไม่มีข้อมูลทวนสอบ", tone: "grey", sort: 4 };
+    const st = states.sort((a, b) => a.sort - b.sort)[0]
+      || (rounds.length ? { key: "none", label: "ไม่มีข้อมูลทวนสอบ", tone: "grey", sort: 4 }
+                        : { key: "none", label: "ยังไม่มีรอบสอบเทียบ", tone: "grey", sort: 5 });
     return { e, rounds, st, todo: states.filter(x => groups.todo.includes(x.key)).length, verified: rounds.filter(x => x.r.verification).length };
-  }).filter(x => x.rounds.length && !isAircon(x.e)), [equipment, roundsById]);
+  // every instrument that needs calibration (same list as the overview), even before its first certificate
+  }).filter(x => isCalibrated(x.e, roundsById[x.e.id] || [])), [equipment, roundsById]);
   const inGroup = (x, k) => !groups[k] || (k === "todo" ? x.todo > 0 : x.todo === 0 && x.verified > 0);
   // open on "ต้องดำเนินการ" when there is work, otherwise on "ทั้งหมด"
   const filter = filterSel || (rows.some(x => x.todo > 0) ? "todo" : "all");
@@ -431,14 +434,14 @@ function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId
             <table className="ca-table ca-rowlink">
               <thead><tr><th>เครื่องมือ</th><th>รอบสอบเทียบล่าสุด</th><th>ทวนสอบล่าสุด</th><th>สถานะ</th><th></th></tr></thead>
               <tbody>{shown.map(({ e, rounds, st, todo }) => {
-                const last = rounds[0].r, lastV = rounds.find(x => x.r.verification)?.r.verification;
+                const last = rounds[0]?.r, lastV = rounds.find(x => x.r.verification)?.r.verification;
                 return (
                   <tr key={e.id} tabIndex={0} onClick={() => onSelect(e.id)} onKeyDown={ev => { if (ev.key === "Enter") onSelect(e.id); }}>
                     <td><b>{e.code}</b> {e.name}<div className="ca-small ca-muted">{[e.brand, e.model].filter(Boolean).join(" ")}{e.serialNo ? ` · S/N ${e.serialNo}` : ""}</div></td>
-                    <td>{fmtDate(last.calibrationDate)}<div className="ca-small ca-muted">{last.certificateNo || "–"} · ทั้งหมด {rounds.length} รอบ</div></td>
+                    <td>{last ? <>{fmtDate(last.calibrationDate)}<div className="ca-small ca-muted">{last.certificateNo || "–"} · ทั้งหมด {rounds.length} รอบ</div></> : <span className="ca-muted">–</span>}</td>
                     <td>{lastV ? fmtDate(lastV.verifyDate) : "–"}</td>
                     <td><Pill tone={st.tone}>{st.label}</Pill>{todo > 1 ? <span className="ca-small ca-muted"> +{todo - 1}</span> : null}</td>
-                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><span className="ca-link">เลือกรอบ ›</span></td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><span className="ca-link">{last ? "เลือกรอบ ›" : "บันทึกรอบแรก ›"}</span></td>
                   </tr>);
               })}</tbody>
             </table>
