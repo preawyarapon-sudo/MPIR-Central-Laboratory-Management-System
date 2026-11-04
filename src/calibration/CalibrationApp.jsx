@@ -783,7 +783,7 @@ function RoundView({ round, instrument: e, isLatest, readOnly = false, onEdit, o
 
       <div className="ca-sub-head"><h3>ทวนสอบก่อนใช้งาน</h3>{vs ? <Pill tone={vs.measOk ? "green" : "red"}>{vs.measOk ? `ผ่าน ${vs.pts.length}/${vs.pts.length} จุด` : "ไม่ผ่าน"}</Pill> : <Pill tone={required ? "blue" : "grey"}>{required ? "ยังไม่ได้ทวนสอบ" : "ไม่มีข้อมูล"}</Pill>}</div>
       {vs ? (<>
-        <p className="ca-muted ca-small">{fmtDate(v.verifyDate)} · ผู้ทดสอบ {v.verifiedBy || "–"} · {v.stdName || "–"}{v.stdCert ? ` (${v.stdCert})` : ""} · d = {v.resolution || "–"}{(v.points || []).some(p => p.uutUUsed !== undefined) ? ` · U อ้างอิง (k=2): ${(v.points || []).filter(p => num(p.reference) != null).map(p => `${p.reference} → เครื่อง ${p.uutUUsed === "" ? "–" : p.uutUUsed}${p.refUUsed !== "" && p.refUUsed != null ? ` + มาตรฐานวัด ${p.refUUsed}` : ""} = ${p.stdU || "–"}`).join(" · ")}` : ""}{v.legacyApprover ? ` · รายงานเดิมลงนามโดย ${v.legacyApprover}` : ""}</p>
+        <p className="ca-muted ca-small">{fmtDate(v.verifyDate)} · ผู้ทดสอบ {v.verifiedBy || "–"} · {v.stdName || "–"}{v.stdCert ? ` (${v.stdCert})` : ""} · d = {v.resolution || "–"}{(v.points || []).some(p => p.uutUUsed !== undefined) ? ` · U อ้างอิง (k=2): ${(v.points || []).filter(p => num(p.reference) != null).map(p => `${p.reference} → เครื่อง ${p.uutUUsed === "" ? "–" : p.uutUUsed}${p.refUUsed !== "" && p.refUUsed != null ? ` + เครื่องอ่านค่า ${p.refUUsed}` : ""} = ${p.stdU || "–"}`).join(" · ")}` : ""}{v.legacyApprover ? ` · รายงานเดิมลงนามโดย ${v.legacyApprover}` : ""}</p>
         <div className="ca-scroll">
           <table className="ca-table ca-num">
             <thead><tr><th>ค่าอ้างอิง</th><th>n</th><th className="calc">ค่าเฉลี่ย</th><th className="calc">SD</th><th className="calc">u_rep</th><th className="calc">u_std</th><th className="calc">u_res</th><th className="calc">U = 2u_c</th><th className="calc">Error</th><th className="calc">|Error| + U</th><th className="calc">ผล</th></tr></thead>
@@ -816,9 +816,11 @@ function RoundView({ round, instrument: e, isLatest, readOnly = false, onEdit, o
 }
 
 /* =================================================================== */
-// Reference U of a verification point (RDI-WI-08 ข้อ 2.2–2.3): root-sum-square
-// of the instrument's own calibration-certificate U and the U of the measuring
-// standard used (thermometer, weights …), both at k = 2.
+// Type B of a verification point, after the NIMT booklet "ระบบมาตรวิทยา"
+// (example 4): the calibration-certificate U of the instrument that READS the
+// values R1–R10. Normally that is this instrument (refractometer, polarimeter,
+// balance). For an oven or bath the reading comes from a thermometer, so its
+// certificate U is entered instead and the oven's own U is not added.
 const combineU = (...xs) => {
   const v = xs.map(num).filter(x => x != null);
   return v.length ? String(+Math.sqrt(v.reduce((s, x) => s + x * x, 0)).toFixed(6)) : "";
@@ -1024,8 +1026,8 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
             {d.v.condition === "abnormal" && <label className="ca-field ca-span2"><span>ความผิดปกติที่พบ</span><input value={d.v.conditionNote} onChange={setV("conditionNote")} /></label>}
             <label className="ca-field ca-span2"><span>มาตรฐานอ้างอิง</span><input value={d.v.stdName} onChange={setV("stdName")} placeholder="เช่น ตุ้มน้ำหนัก MPIR-023" /></label>
             <label className="ca-field"><span>เลขที่ใบรับรองมาตรฐาน</span><input value={d.v.stdCert} onChange={setV("stdCert")} /></label>
-            <label className="ca-field"><span>U จากใบสอบเทียบของเครื่องนี้ (k=2)</span><input value={d.v.uutU} onChange={setV("uutU")} inputMode="decimal" placeholder="ว่าง = ใช้ U จุดใกล้สุดในใบสอบเทียบ" /></label>
-            <label className="ca-field"><span>U ของมาตรฐานที่ใช้วัด (k=2, ถ้ามี)</span><input value={d.v.refU} onChange={setV("refU")} inputMode="decimal" placeholder="เช่น เทอร์โมมิเตอร์ ตุ้มน้ำหนัก" /></label>
+            <label className="ca-field"><span>U จากใบสอบเทียบของเครื่องนี้ (k=2)</span><input value={d.v.uutU} onChange={setV("uutU")} inputMode="decimal" placeholder="ว่าง = ดึงจากใบสอบเทียบเครื่องนี้" /></label>
+            <label className="ca-field"><span>U เครื่องที่อ่านค่า ถ้าไม่ใช่เครื่องนี้ (k=2)</span><input value={d.v.refU} onChange={setV("refU")} inputMode="decimal" placeholder="เฉพาะตู้อบ/อ่างน้ำ: U เทอร์โมมิเตอร์" /></label>
             <label className="ca-field"><span>ความละเอียด d ({unit})</span><input value={d.v.resolution} onChange={setV("resolution")} inputMode="decimal" /></label>
             <label className="ca-field"><span>ค่าแก้ของมาตรฐาน</span><input value={d.v.readingCorrection} onChange={setV("readingCorrection")} inputMode="decimal" placeholder="เมื่ออ่านค่าจากมาตรฐาน" /></label>
             <label className="ca-field"><span>วิธีปฏิบัติ (WI)</span><input value={d.v.wi} onChange={setV("wi")} /></label>
@@ -1033,13 +1035,13 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
           </div>
           <div className="ca-scroll">
             <table className="ca-table ca-edit ca-reads">
-              <thead><tr><th>ค่าอ้างอิง</th><th>U เครื่อง</th><th>U มาตรฐานวัด</th><th className="calc">U รวม</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i}>R{i + 1}</th>)}<th></th></tr></thead>
+              <thead><tr><th>ค่าอ้างอิง</th><th>U เครื่อง</th><th>U เครื่องอ่านค่า</th><th className="calc">U ที่ใช้</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i}>R{i + 1}</th>)}<th></th></tr></thead>
               <tbody>{d.v.points.map((p, i) => (
                 <tr key={i}>
                   <td><input aria-label={`ค่าอ้างอิงทวนสอบ แถว ${i + 1}`} value={p.reference} onChange={ev => setVP(i, "reference", ev.target.value)} inputMode="decimal" /></td>
-                  <td><input aria-label={`U จากใบสอบเทียบเครื่อง แถว ${i + 1}`} value={p.uutU} onChange={ev => setVP(i, "uutU", ev.target.value)} placeholder={d.v.uutU || String(nearestCertU(preview.points, p.reference) ?? "")} inputMode="decimal" /></td>
-                  <td><input aria-label={`U มาตรฐานที่ใช้วัด แถว ${i + 1}`} value={p.refU} onChange={ev => setVP(i, "refU", ev.target.value)} placeholder={d.v.refU || ""} inputMode="decimal" /></td>
-                  <td className="calc">{preview.verification.points[i]?.stdU || "–"}</td>
+                  <td><input aria-label={`U จากใบสอบเทียบเครื่อง แถว ${i + 1}`} value={p.uutU} onChange={ev => setVP(i, "uutU", ev.target.value)} placeholder={d.v.uutU || ((num(p.refU) ?? num(d.v.refU)) == null ? String(nearestCertU(preview.points, p.reference) ?? "") : "")} inputMode="decimal" /></td>
+                  <td><input aria-label={`U เครื่องที่อ่านค่า แถว ${i + 1}`} value={p.refU} onChange={ev => setVP(i, "refU", ev.target.value)} placeholder={d.v.refU || ""} inputMode="decimal" /></td>
+                  <td className="calc">{preview.verification.points[i]?.stdU ? +Number(preview.verification.points[i].stdU).toPrecision(3) : "–"}</td>
                   {p.readings.map((x, j) => <td key={j}><input aria-label={`R${j + 1} แถว ${i + 1}`} value={x} onChange={ev => setRead(i, j, ev.target.value)} inputMode="decimal" className="w-r" /></td>)}
                   <td><button className="ca-icon" aria-label={`ลบจุดทวนสอบ ${i + 1}`} onClick={() => setD({ ...d, v: { ...d.v, points: d.v.points.filter((_, j) => j !== i) } })}><Trash2 size={15} /></button></td>
                 </tr>
@@ -1058,7 +1060,7 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
               </table>
             </div>
           )}
-          <p className="ca-small ca-muted">u_rep = SD/√n · U รวม = √(U เครื่อง² + U มาตรฐานวัด²) ตาม RDI-WI-08 ข้อ 2.2–2.3 (ช่องว่างในตาราง = ใช้ค่าด้านบน; U เครื่องว่างทั้งหมด = ใช้ U จุดใกล้สุดในใบสอบเทียบ) · u_std = U รวม/2 · u_res = d/(2√3) · U = 2√(u_rep² + u_std² + u_res²) · ผ่านเมื่อ |Error| + U ≤ เกณฑ์</p>
+          <p className="ca-small ca-muted">ตามเอกสาร "ระบบมาตรวิทยา" (สมว.) ตัวอย่างที่ 4: u_rep = SD/√n (Type A) · u_std = U จากใบสอบเทียบของเครื่องที่อ่านค่า/2 (Type B) — เว้นว่างทั้งสองช่อง = ใช้ U จุดใกล้สุดในใบสอบเทียบเครื่องนี้; กรอก "U เครื่องอ่านค่า" (เช่น เทอร์โมมิเตอร์ที่วัดตู้อบ) = ใช้ค่านั้นแทน · u_res = d/(2√3) · U = 2√(u_rep² + u_std² + u_res²) · ผ่านเมื่อ |Error| + U ≤ เกณฑ์</p>
           {vs?.fewReads && <label className="ca-field"><span>เหตุผลที่ทวนสอบน้อยกว่า 10 ครั้ง *</span><input value={d.v.fewReason} onChange={setV("fewReason")} placeholder="เช่น ใช้เวลาทดสอบนาน / ใช้สารมาก" /></label>}
           <div className="ca-grid3">
             <label className="ca-field"><span>ทบทวน WI ที่เกี่ยวข้อง</span><input value={d.v.wiReview} onChange={setV("wiReview")} /></label>
@@ -1114,8 +1116,8 @@ function buildRecords(d, instrument, roundKeyToEdit, final = false) {
     stdU: combineU(v.uutU, v.refU),
     reportNo: v.reportNo || `VR-${Number((d.calibrationDate || todayISO()).slice(0, 4)) + 543}-${(instrument.code || "").replace(/\s+/g, "")}`,
     points: (v.points || []).filter(p => num(p.reference) != null || (final ? false : true)).map(p => {
-      const uut = num(p.uutU) ?? num(v.uutU) ?? nearestCertU(points, p.reference);
       const ref = num(p.refU) ?? num(v.refU);
+      const uut = num(p.uutU) ?? num(v.uutU) ?? (ref == null ? nearestCertU(points, p.reference) : null);
       return { ...p, uutUUsed: uut ?? "", refUUsed: ref ?? "", stdU: combineU(uut, ref), readings: (p.readings || []).slice(0, VERIFY_MAX_READS) };
     }),
   };
