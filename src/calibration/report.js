@@ -77,7 +77,7 @@ ${v ? `<p class="i1 hg">2.2 ${method22}</p>` : ""}
   const page = (n, body) => `<section class="pg"><div class="hd"><img src="${LOGO_DATA_URI}" alt="MITR PHOL"><span class="code">${LF068_DOC.code} Rev.:${LF068_DOC.rev} Page <b>${n}</b> of ${pages.length}</span><div class="ttl">รายงานผลการทวนสอบเครื่องมือ</div></div><div class="box">${body}</div></section>`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>LF-068 ${esc(e.code)} ${esc(round.certificateNo)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
-<style>@page{size:A4;margin:0}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#000;margin:0;line-height:1.5}
+<style>@page{size:A4 portrait;margin:0}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#000;margin:0;line-height:1.5}
 .pg{width:210mm;min-height:297mm;padding:9mm 12mm 10mm 13mm;page-break-after:always;display:flex;flex-direction:column}.pg:last-child{page-break-after:auto}
 .hd{position:relative;height:17mm;flex:none}.hd img{position:absolute;left:0;top:0;height:8mm}.hd .code{position:absolute;right:0;top:1mm;font-size:8.4pt}.hd .ttl{position:absolute;left:0;right:0;top:7.5mm;text-align:center;font-size:10.4pt;font-weight:700}
 .box{flex:1;border:.8pt solid #000;padding:5mm 7mm}
@@ -114,7 +114,7 @@ export function checkLogHtml({ instrument, monthLabel, kind, rows }) {
   const nFail = rows.filter(r => r.pass === false || r.result === "FAIL").length;
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(instrument.code || instrument.name)} ${esc(monthLabel)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
-<style>@page{size:A4;margin:10mm 12mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#111;margin:0}
+<style>@page{size:A4 portrait;margin:10mm 12mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#111;margin:0}
 table{border-collapse:collapse;width:100%}td,th{border:.6pt solid #222;padding:2.5pt 4pt;text-align:center}th{background:#E8EEF3;font-weight:600;font-size:8.8pt}
 .hd td{text-align:left}.t{text-align:center !important;font-weight:700;font-size:13pt}.t small{display:block;font-weight:400;font-size:9pt}.lg{width:30mm;text-align:center !important}.lg img{height:14mm}.dc{width:58mm;font-size:8.8pt}.l{background:#F4F7F9;font-weight:600;width:28mm}
 .p{color:#1E7A4A;font-weight:700}.f{color:#B42318;font-weight:700}.sig{margin-top:14pt}.sig td{border:none;width:50%;height:56pt;vertical-align:bottom}
