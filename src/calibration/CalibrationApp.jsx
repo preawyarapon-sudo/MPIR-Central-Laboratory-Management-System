@@ -816,6 +816,15 @@ function RoundView({ round, instrument: e, isLatest, readOnly = false, onEdit, o
 }
 
 /* =================================================================== */
+function VField({ label, hint, wide = false, children }) {
+  return (
+    <label className={`ca-field ca-vfield${wide ? " wide" : ""}`}>
+      <span className="ca-vlabel">{label}</span>
+      {children}
+      {hint && <span className="ca-hint">{hint}</span>}
+    </label>
+  );
+}
 // Type B of a verification point, after the NIMT booklet "ระบบมาตรวิทยา"
 // (example 4): the calibration-certificate U of the instrument that READS the
 // values R1–R10. Normally that is this instrument (refractometer, polarimeter,
@@ -1037,34 +1046,48 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
           <label className="ca-check"><input type="checkbox" checked={d.doVerify} onChange={set("doVerify")} /> บันทึกผลทวนสอบในรอบนี้</label></div>
         {!d.doVerify && <p className="ca-muted">{(d.calibrationDate || "") >= VERIFICATION_REQUIRED_FROM ? "รอบที่สอบเทียบตั้งแต่ 9 ต.ค. 2569 ต้องทวนสอบก่อนใช้งาน — บันทึกภายหลังได้ แต่จะดาวน์โหลดรายงานไม่ได้จนกว่าจะทวนสอบ" : "ไม่บังคับสำหรับรอบก่อน 9 ต.ค. 2569"}</p>}
         {d.doVerify && (<>
-          <div className="ca-grid4">
-            <label className="ca-field"><span>วันที่ทวนสอบ * (พิมพ์ในรายงานข้อ 5.2)</span><input type="date" value={d.v.verifyDate} onChange={setV("verifyDate")} /></label>
-            <label className="ca-field"><span>ผู้ดำเนินการทดสอบ * (ชื่อภาษาไทย · พิมพ์ในรายงานข้อ 3)</span><input value={d.v.verifiedBy || ""} onChange={setV("verifiedBy")} placeholder="เช่น นางสาวพิสิทธินี ชาปัญญา" /></label>
-            <label className="ca-field"><span>เหตุที่ทวนสอบ</span><select value={d.v.reason} onChange={setV("reason")}>{VERIFY_REASONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
-            <label className="ca-field"><span>วันที่รับเครื่องคืน</span><input type="date" value={d.v.returnedDate} onChange={setV("returnedDate")} /></label>
-            <label className="ca-field"><span>สภาพเครื่อง</span><select value={d.v.condition} onChange={setV("condition")}><option value="ok">สมบูรณ์</option><option value="abnormal">พบความผิดปกติ</option></select></label>
-            {d.v.condition === "abnormal" && <label className="ca-field ca-span2"><span>ความผิดปกติที่พบ</span><input value={d.v.conditionNote} onChange={setV("conditionNote")} /></label>}
-            <label className="ca-field ca-span2"><span>มาตรฐานอ้างอิง</span><input value={d.v.stdName} onChange={setV("stdName")} placeholder="เช่น ตุ้มน้ำหนัก MPIR-023" /></label>
-            <label className="ca-field"><span>เลขที่ใบรับรองมาตรฐาน</span><input value={d.v.stdCert} onChange={setV("stdCert")} /></label>
-            <label className="ca-field"><span>U เครื่องที่อ่านค่า ถ้าไม่ใช่เครื่องนี้ (k=2)</span><input value={d.v.refU} onChange={setV("refU")} inputMode="decimal" placeholder="เฉพาะตู้อบ/อ่างน้ำ: U เทอร์โมมิเตอร์" /></label>
-            <label className="ca-field"><span>ความละเอียด d ({unit})</span><input value={d.v.resolution} onChange={setV("resolution")} inputMode="decimal" /></label>
-            <label className="ca-field"><span>ค่าแก้ของมาตรฐาน</span><input value={d.v.readingCorrection} onChange={setV("readingCorrection")} inputMode="decimal" placeholder="เมื่ออ่านค่าจากมาตรฐาน" /></label>
-            <label className="ca-field"><span>วิธีปฏิบัติ (WI)</span><input value={d.v.wi} onChange={setV("wi")} /></label>
-            <label className="ca-field"><span>สภาวะแวดล้อม</span><input value={d.v.environment} onChange={setV("environment")} placeholder="เช่น 25 °C · 55 %RH" /></label>
+          {/* grouped, one-line labels; hints sit under the input so fields line up */}
+          <div className="ca-vgroup">
+            <h3 className="ca-vgroup-h">การทวนสอบ</h3>
+            <div className="ca-fgrid">
+              <VField label="วันที่ทวนสอบ *" hint="พิมพ์ในรายงานข้อ 5.2"><input type="date" value={d.v.verifyDate} onChange={setV("verifyDate")} /></VField>
+              <VField label="ผู้ดำเนินการทดสอบ *" hint="ชื่อภาษาไทย · พิมพ์ในรายงานข้อ 3"><input value={d.v.verifiedBy || ""} onChange={setV("verifiedBy")} placeholder="เช่น นางสาวพิสิทธินี ชาปัญญา" /></VField>
+              <VField label="เหตุที่ทวนสอบ"><select value={d.v.reason} onChange={setV("reason")}>{VERIFY_REASONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></VField>
+              <VField label="วันที่รับเครื่องคืน"><input type="date" value={d.v.returnedDate} onChange={setV("returnedDate")} /></VField>
+              <VField label="สภาพเครื่อง"><select value={d.v.condition} onChange={setV("condition")}><option value="ok">สมบูรณ์</option><option value="abnormal">พบความผิดปกติ</option></select></VField>
+              {d.v.condition === "abnormal" && <VField label="ความผิดปกติที่พบ" wide><input value={d.v.conditionNote} onChange={setV("conditionNote")} /></VField>}
+            </div>
+          </div>
+          <div className="ca-vgroup">
+            <h3 className="ca-vgroup-h">มาตรฐานและวิธีทวนสอบ</h3>
+            <div className="ca-fgrid">
+              <VField label="มาตรฐานอ้างอิง" wide hint="พิมพ์ในรายงานข้อ 2.2 และ 5.2"><input value={d.v.stdName} onChange={setV("stdName")} placeholder="เช่น สารมาตรฐาน 20.00 %Brix, ตุ้มน้ำหนัก MPIR-023" /></VField>
+              <VField label="เลขที่ใบรับรองมาตรฐาน"><input value={d.v.stdCert} onChange={setV("stdCert")} /></VField>
+              <VField label="วิธีปฏิบัติ (WI)" wide><input value={d.v.wi} onChange={setV("wi")} placeholder="เช่น MPIR-WI-02" /></VField>
+              <VField label="สภาวะแวดล้อม"><input value={d.v.environment} onChange={setV("environment")} placeholder="เช่น 25 °C · 55 %RH" /></VField>
+            </div>
+          </div>
+          <div className="ca-vgroup">
+            <h3 className="ca-vgroup-h">ค่าที่ใช้คำนวณ</h3>
+            <div className="ca-fgrid">
+              <VField label={`ความละเอียด d${unit ? ` (${unit})` : ""}`} hint="ค่าละเอียดสุดที่เครื่องอ่านค่าแสดงได้"><input value={d.v.resolution} onChange={setV("resolution")} inputMode="decimal" /></VField>
+              <VField label="ค่าแก้ของมาตรฐาน" hint="เว้นว่างถ้าไม่มี"><input value={d.v.readingCorrection} onChange={setV("readingCorrection")} inputMode="decimal" /></VField>
+              <VField label="U เครื่องที่อ่านค่า (k=2)" hint="เฉพาะตู้อบ/อ่างน้ำ: U เทอร์โมมิเตอร์ · เว้นว่าง = ใช้ U จากใบสอบเทียบเครื่องนี้"><input value={d.v.refU} onChange={setV("refU")} inputMode="decimal" /></VField>
+            </div>
           </div>
           <div className="ca-scroll">
             <table className="ca-table ca-edit ca-reads">
-              <thead><tr><th>ค่าอ้างอิง</th>{num(d.v.refU) == null && <th>U จากจุดในใบสอบเทียบ</th>}<th className="calc">U ที่ใช้ (k=2)</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i}>R{i + 1}</th>)}<th></th></tr></thead>
+              <thead><tr><th>ค่าอ้างอิง</th>{num(d.v.refU) == null && <th>U จากจุดในใบสอบเทียบ</th>}<th className="calc">{num(d.v.refU) == null ? "U ที่ใช้ (k=2)" : "U เครื่องอ่านค่า (k=2)"}</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i}>R{i + 1}</th>)}<th></th></tr></thead>
               <tbody>{d.v.points.map((p, i) => (
                 <tr key={i}>
-                  <td><input aria-label={`ค่าอ้างอิงทวนสอบ แถว ${i + 1}`} value={p.reference} onChange={ev => setVP(i, "reference", ev.target.value)} inputMode="decimal" /></td>
+                  <td><input aria-label={`ค่าอ้างอิงทวนสอบ แถว ${i + 1}`} value={p.reference} onChange={ev => setVP(i, "reference", ev.target.value)} inputMode="decimal" className="w-ref" /></td>
                   {num(d.v.refU) == null && <td>{(() => { const cur = certRowFor(preview.points, p); return (
                     <select aria-label={`จุดในใบสอบเทียบที่ใช้ U แถว ${i + 1}`} value={cur ? cur.key : ""} onChange={ev => setVP(i, "certKey", ev.target.value)}
-                      style={{ minWidth: 190, minHeight: 40, border: "1px solid var(--line)", borderRadius: 8, padding: "0 8px", fontFamily: "inherit", fontSize: 13.5, background: "#fff" }}>
+                      className="ca-rowsel">
                       {!cur && <option value="">— ไม่มีข้อมูลในใบสอบเทียบ —</option>}
                       {rowsForU.map(r => <option key={r.key} value={r.key}>{[r.range, `${r.x}`].filter(Boolean).join(" · ")} → U {r.u}</option>)}
                     </select>); })()}</td>}
-                  <td className="calc">{(() => { const q = preview.verification.points[i]; return q?.stdU ? <>{+Number(q.stdU).toPrecision(3)}<div className="ca-small ca-muted" style={{ fontFamily: "inherit" }}>{q.refUUsed !== "" && q.refUUsed != null ? "เครื่องอ่านค่า" : "ใบสอบเทียบ"}</div></> : <span className="ca-warn" style={{ fontFamily: "inherit" }}>ไม่พบ U</span>; })()}</td>
+                  <td className="calc ca-uused">{(() => { const q = preview.verification.points[i]; return q?.stdU ? +Number(q.stdU).toPrecision(3) : <span className="ca-warn" style={{ fontFamily: "inherit" }}>ไม่พบ U</span>; })()}</td>
                   {p.readings.map((x, j) => <td key={j}><input aria-label={`R${j + 1} แถว ${i + 1}`} value={x} onChange={ev => setRead(i, j, ev.target.value)} inputMode="decimal" className="w-r" /></td>)}
                   <td><button className="ca-icon" aria-label={`ลบจุดทวนสอบ ${i + 1}`} onClick={() => setD({ ...d, v: { ...d.v, points: d.v.points.filter((_, j) => j !== i) } })}><Trash2 size={15} /></button></td>
                 </tr>
@@ -1205,7 +1228,17 @@ const CSS = `
 .ca-table th.calc{background:#E3EFFA}.ca-table td.calc{background:#F3F8FD}
 .ca-found td{color:var(--muted);font-style:italic}
 .ca-edit td{padding:3px 4px}.ca-edit input{width:100%;min-width:84px;border:1px solid var(--line);border-radius:8px;padding:8px 8px;font-size:14px;font-family:'JetBrains Mono',monospace;min-height:40px;background:#fff}
-.ca-edit input.w-s{min-width:90px;font-family:inherit}.ca-reads input.w-r{min-width:64px;text-align:center}
+.ca-edit input.w-s{min-width:90px;font-family:inherit}.ca-edit input.w-ref{min-width:80px;width:90px}
+.ca-rowsel{width:100%;min-width:250px;min-height:40px;border:1px solid var(--line);border-radius:8px;padding:0 8px;font-family:inherit;font-size:13.5px;background:#fff;color:var(--ink)}
+.ca-uused{white-space:nowrap;min-width:96px;text-align:center}
+.ca-vgroup{display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:1px solid #E6EEF6}
+.ca-vgroup-h{font-size:13.5px !important;font-weight:600;color:var(--teal-dark)}
+.ca-fgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 16px;align-items:start}
+.ca-vfield.wide{grid-column:span 2}
+.ca-vlabel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ca-hint{font-size:12px;color:var(--muted);line-height:1.45}
+@media (max-width:900px){.ca-fgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.ca-fgrid{grid-template-columns:1fr}.ca-vfield.wide{grid-column:auto}}.ca-reads input.w-r{min-width:64px;text-align:center}
 .ca-calcbox{background:var(--paper);border-radius:10px}.ca-calcbox th{background:#E3EFFA}
 .ca-pill{display:inline-block;font-size:12.5px;font-weight:600;border-radius:999px;padding:3px 10px;white-space:nowrap}
 .ca-empty{text-align:center;color:var(--muted);padding:28px}
