@@ -28,6 +28,7 @@ export function lf068Html(round, instrument) {
   const vs = v0 ? verifySummary(v0, e, round.points) : null;
   const dg = digitsFor(v?.resolution || e.resolution);
   const unit = esc(e.calUnit || round.points[0]?.unit || "");
+  const uP = unit ? ` (${unit})` : "";
   const crit = vs?.crit || (cs.current[0] && { tolerance: cs.current[0].tol });
   const tolTxt = crit?.tolerance != null ? `± ${esc(crit.tolerance)} ${unit}` : "–";
   const ident = `${esc(e.name || "")} [${esc([e.brand, e.model, e.serialNo ? `Serial number ${e.serialNo}` : ""].filter(Boolean).join(", "))}]`;
@@ -59,11 +60,11 @@ ${v ? `<p class="i1 hg">2.2 ${method22}</p>` : ""}
 <h3>5 ผลการทวนสอบ:</h3>
 <p class="i1">5.1 ทวนสอบผลการสอบเทียบของเครื่องมือ</p>
 <p class="i2">รายงานผลการสอบเทียบ ${esc(longDate(round.calibrationDate))} อ้างอิง Certificate No.: ${esc(round.certificateNo || "")} แสดงดังตาราง</p>
-<table class="t"><tr><th>Reference (${unit})</th><th>UUC Reading (${unit})</th><th>Correction (${unit})</th><th>Uncertainty (±${unit})</th><th>Error (${unit})</th><th>Error + U (${unit})</th></tr>${certRows}</table>
+<table class="t"><tr><th>Reference${uP}</th><th>UUC Reading${uP}</th><th>Correction${uP}</th><th>Uncertainty${unit ? ` (±${unit})` : ""}</th><th>Error${uP}</th><th>Error + U${uP}</th></tr>${certRows}</table>
 <p class="i2">สรุปผล: ค่าความผิดพลาดรวม (Error+U) ${le(certOk)} เกณฑ์การยอมรับ (${tolTxt})</p>`;
 
   const body2 = `${v ? `<p class="i1">5.2 ผลการทวนสอบค่าการวัดของเครื่องมือ เทียบกับค่ามาตรฐาน โดยใช้ ${std} (ทวนสอบวันที่ ${esc(longDate(v.verifyDate)) || "&nbsp;.".repeat(18)})${v.wi ? ` [${esc(v.wi)}]` : ""}</p>
-<table class="t rd"><tr><th rowspan="2">Reference</th><th colspan="${R}">UUC (${unit})</th><th rowspan="2">SD</th><th rowspan="2">U</th><th rowspan="2">Error</th><th rowspan="2">Error+U (${unit})</th></tr>
+<table class="t rd"><colgroup><col style="width:8%">${`<col style="width:${(66 / R).toFixed(2)}%">`.repeat(R)}${'<col style="width:6.5%">'.repeat(4)}</colgroup><tr><th rowspan="2">Reference</th><th colspan="${R}">UUC${uP}</th><th rowspan="2">SD</th><th rowspan="2">U</th><th rowspan="2">Error</th><th rowspan="2">Error+U${uP}</th></tr>
 <tr>${Array.from({ length: R }, (_, i) => `<th>R${i + 1}</th>`).join("")}</tr>${readRows}</table>
 <p class="i2">สรุปผล: ค่าความผิดพลาดรวม (Error+U) ${le(verOk)} เกณฑ์การยอมรับ${inRange ? " และอยู่ในช่วงค่าความผิดพลาดรวม ตามรายงานผลการสอบเทียบ" : ""}</p>` : ""}
 <h3 style="margin-top:12pt">6 สรุปผลการทวนสอบ</h3>
@@ -83,7 +84,7 @@ ${v ? `<p class="i1 hg">2.2 ${method22}</p>` : ""}
 p{margin:0 0 2pt}h3{font-size:9.6pt;font-weight:400;margin:8pt 0 2pt}.nmh{text-align:center;font-weight:700;text-decoration:underline;margin-bottom:4pt}
 .i1{margin-left:6mm}.i2{margin-left:10mm;margin-top:3pt}.hg{padding-left:6mm;text-indent:-6mm;margin-left:12mm}
 table{border-collapse:collapse}.t{width:100%;margin:4pt 0 6pt}.t td,.t th{border:.6pt solid #000;padding:2pt 4pt;text-align:center;font-weight:400;font-size:9pt}.t th{font-weight:700}
-.rd td,.rd th{font-size:8.2pt;padding:2pt 2pt}
+.rd{table-layout:fixed}.rd td,.rd th{font-size:7pt;padding:2pt 1pt;overflow-wrap:anywhere;letter-spacing:-.1pt}
 .sig{width:84%;margin:20pt 0 0 6mm}.sig td{border:.6pt solid #000;width:50%;padding:3pt 6pt;vertical-align:top}.sig .sg{height:26pt}.sig .nm{text-align:center}.sig tr:last-child td{height:30pt}</style></head><body>
 ${pages.map((b, i) => page(i + 1, b)).join("")}
 <script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
