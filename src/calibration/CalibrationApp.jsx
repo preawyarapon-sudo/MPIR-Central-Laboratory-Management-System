@@ -209,7 +209,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                 dailyChecks={data.dailyChecks} setDailyChecks={(l) => setListSmart("dailyChecks", l)}
                 intermediateChecks={data.intermediateChecks} setIntermediateChecks={null}
                 notify={notify} initialCheckId={page.instrumentId} focusRequest={page.instrumentId ? { id: page.instrumentId, at: 1 } : null}
-                guestMode={guest} canApprove={false} currentUsername={currentUsername} currentDisplayName={guest ? "ผู้เยี่ยมชม (สแกน QR)" : currentDisplayName} /></div>
+                guestMode={guest} canApprove={!guest} currentUsername={currentUsername} currentDisplayName={guest ? "ผู้เยี่ยมชม (สแกน QR)" : currentDisplayName} /></div>
             </div>
           )}
           {page.name === "instrument" && instrument && (
@@ -576,7 +576,7 @@ function InstrumentPage({ instrument: e, rounds, onBack, onOpenVerify,
         <div className="ca-lt"><DailyCheckTab equipment={[e]} certificates={certificates}
           dailyChecks={dailyChecks} setDailyChecks={setDailyChecks} intermediateChecks={intermediateChecks} setIntermediateChecks={null}
           notify={notify} initialCheckId={openDaily ? e.id : undefined} focusRequest={{ id: e.id, at: 1 }} guestMode={guest}
-          canApprove={false} currentUsername={currentUsername} currentDisplayName={guest ? "ผู้เยี่ยมชม (สแกน QR)" : me} /></div>
+          canApprove={!guest} currentUsername={currentUsername} currentDisplayName={guest ? "ผู้เยี่ยมชม (สแกน QR)" : me} /></div>
       </>)}
 
       {tab === "ic" && (<>
