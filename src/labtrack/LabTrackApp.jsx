@@ -8919,22 +8919,25 @@ function checkLogRows(dailyChecks, icChecks, instrument) {
       const h = checkHeadline(c);
       return { kind: "daily", key: c.id, rec: c, date: c.date || "", time: c.time || "", value: h.value, unit: h.unit,
         result: c.result === true ? "PASS" : c.result === false ? "FAIL" : "-", by: c.checkedBy || "",
-        approval: !IN_APP_APPROVAL ? "" : c.approved ? `อนุมัติแล้ว${c.approvedByName ? ` · ${c.approvedByName}` : ""}` : "รออนุมัติ", approved: !!c.approved, note: c.remarks || "" };
+        approval: !IN_APP_APPROVAL ? "" : c.approved ? `อนุมัติแล้ว${c.approvedByName ? ` · ${c.approvedByName}` : ""}` : "รออนุมัติ", approved: !!c.approved, note: c.remarks || "",
+        approver: c.approved ? (c.approvedByName || "-") : "", approvedAt: c.approved ? (c.approvedAt || "").slice(0, 10) : "" };
     }),
     ...icChecks.map(c => {
       const calc = calcIntermediateCheck(c, instrument);
       return { kind: "ic", key: c.id, rec: c, date: c.checkDate || "", time: "",
         value: calc.correctedMean != null ? calc.correctedMean.toFixed(4) : null, unit: c.unit || instrument?.calUnit || "",
         result: calc.result in RESULT_STYLE ? calc.result : "-", by: c.checkedBy || "",
-        approval: c.reviewedBy ? `ทบทวน · ${c.reviewedBy}` : "", approved: !!c.reviewedBy, note: c.remarks || "" };
+        approval: c.reviewedBy ? `ทบทวน · ${c.reviewedBy}` : "", approved: !!c.reviewedBy, note: c.remarks || "",
+        approver: c.reviewedBy || "", approvedAt: "" };
     }),
   ];
 }
-function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll, mobile = false }) {
+function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll, mobile = false, canApprove = false, onApprove = null }) {
   const [sort, setSort] = useState({ key: "date", dir: -1 });
   const keyOf = {
     date: r => r.date + " " + r.time, kind: r => r.kind, value: r => numOrNull(r.value) ?? -Infinity,
     result: r => ["FAIL", "WARNING", "PASS", "-"].indexOf(r.result), by: r => r.by, note: r => r.note,
+    approver: r => (r.approver ? "1" + r.approver : "0"),
   };
   const sorted = rows.slice().sort((a, b) => {
     const x = keyOf[sort.key](a), y = keyOf[sort.key](b);
@@ -8960,6 +8963,14 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: bg, color: fg, border: `1px solid ${line}`, borderRadius: 999, padding: "4px 14px", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", ...extra }}>{text}</span>
   );
   const actBtn = { width: 36, height: 36, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff", border: "1px solid var(--line)", borderRadius: 10, cursor: "pointer", color: "var(--ink)" };
+  // Approver column (Daily check): name + date once approved, otherwise an
+  // "อนุมัติ" button for users allowed to approve.
+  const askApprove = (r) => { if (window.confirm(`อนุมัติผล Daily check วันที่ ${fmtDate(r.date)}${r.time ? ` ${r.time}` : ""}${r.by ? ` (ผู้ตรวจ ${r.by})` : ""}?`)) onApprove(r.rec); };
+  const approverCell = (r, small = false) => r.approver
+    ? <span style={{ color: "#1E8A57", fontSize: small ? 12 : 13 }}><CheckCircle2 size={small ? 13 : 14} style={{ verticalAlign: "-2px", marginRight: 4 }} />{r.approver}{r.approvedAt ? <span style={{ color: "var(--muted)", fontSize: 12 }}> · {fmtDate(r.approvedAt)}</span> : null}</span>
+    : r.kind === "daily" && canApprove && onApprove
+      ? <button type="button" onClick={() => askApprove(r)} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--teal)", color: "#fff", border: "none", borderRadius: 10, padding: small ? "6px 12px" : "8px 14px", fontSize: small ? 12.5 : 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}><CheckCircle2 size={small ? 13 : 14} /> อนุมัติ</button>
+      : <span style={{ color: r.kind === "daily" ? "#A86A00" : "var(--muted)", fontSize: small ? 12 : 13 }}>{r.kind === "daily" ? "รออนุมัติ" : "-"}</span>;
   const askDelete = (r) => { if (window.confirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) onDelete(r); };
   const empty = (
     <>{emptyText}{onShowAll && <> · <button type="button" onClick={onShowAll} style={{ background: "none", border: "none", padding: 0, color: "var(--teal)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}>ดูทั้งหมด</button></>}</>
@@ -8991,6 +9002,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
                 <div style={{ flex: 1, minWidth: 0, fontSize: 12.5 }}>
                   <div>{r.by || "-"}{r.approval && <span style={{ color: r.approved ? "#1E8A57" : "#A86A00" }}> · {r.approval}</span>}</div>
                   {r.note && <div style={{ color: "var(--muted)", marginTop: 2, wordBreak: "break-word" }}>{r.note}</div>}
+                  <div style={{ marginTop: 6 }} onClick={e => e.stopPropagation()}>{approverCell(r, true)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                   <button type="button" style={{ ...actBtn, width: 34, height: 34 }} title="แก้ไข" aria-label="แก้ไข" onClick={() => onEdit(r)}><Pencil size={14} /></button>
@@ -9009,10 +9021,10 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
   return (
     <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 16, overflow: "hidden" }}>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
           <thead><tr>
             {head("date", "วันที่ / เวลา")}{head("kind", "ประเภท")}{head("value", `ผลการตรวจ${unitLabel ? ` (${unitLabel})` : ""}`)}
-            {head("result", "สถานะ")}{head("by", IN_APP_APPROVAL ? "ผู้ตรวจ / อนุมัติ" : "ผู้ตรวจ")}{head("note", "หมายเหตุ")}{head(null, "การจัดการ")}
+            {head("result", "สถานะ")}{head("by", IN_APP_APPROVAL ? "ผู้ตรวจ / อนุมัติ" : "ผู้ตรวจ")}{head("note", "หมายเหตุ")}{head("approver", "ผู้อนุมัติ")}{head(null, "การจัดการ")}
           </tr></thead>
           <tbody>
             {sorted.map(r => {
@@ -9035,6 +9047,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
                     {r.approval && <div style={{ fontSize: 12, marginTop: 2, color: r.approved ? "#1E8A57" : "#A86A00" }}>{r.approval}</div>}
                   </td>
                   <td style={{ ...td, color: r.note ? "var(--ink)" : "var(--muted)", maxWidth: 220 }}>{r.note || "-"}</td>
+                  <td style={td} onClick={e => e.stopPropagation()}>{approverCell(r)}</td>
                   <td style={td} onClick={e => e.stopPropagation()}>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button type="button" style={actBtn} title="แก้ไข" onClick={() => onEdit(r)}><Pencil size={15} /></button>
@@ -9045,7 +9058,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
               );
             })}
             {sorted.length === 0 && (
-              <tr><td colSpan={7} style={{ ...td, textAlign: "center", color: "var(--muted)", padding: "28px 18px" }}>
+              <tr><td colSpan={8} style={{ ...td, textAlign: "center", color: "var(--muted)", padding: "28px 18px" }}>
                 {empty}
               </td></tr>
             )}
@@ -9368,6 +9381,7 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
                   onDelete={r => (r.kind === "daily" ? remove(r.rec.id) : canIc ? removeIc(r.rec.id) : null)}
                   emptyText={allRows.length ? `ไม่มีรายการในช่วง ${rg.label}` : "ยังไม่มีบันทึกการตรวจเช็คของเครื่องนี้"}
                   onShowAll={allRows.length && range !== "all" ? () => setRange("all") : null}
+                  canApprove={canApprove && !guestMode} onApprove={approve}
                 />
               </>)}
             </>);
