@@ -783,7 +783,7 @@ function RoundView({ round, instrument: e, isLatest, readOnly = false, onEdit, o
 
       <div className="ca-sub-head"><h3>ทวนสอบก่อนใช้งาน</h3>{vs ? <Pill tone={vs.measOk ? "green" : "red"}>{vs.measOk ? `ผ่าน ${vs.pts.length}/${vs.pts.length} จุด` : "ไม่ผ่าน"}</Pill> : <Pill tone={required ? "blue" : "grey"}>{required ? "ยังไม่ได้ทวนสอบ" : "ไม่มีข้อมูล"}</Pill>}</div>
       {vs ? (<>
-        <p className="ca-muted ca-small">{fmtDate(v.verifyDate)} · ผู้ทดสอบ {v.verifiedBy || "–"} · {v.stdName || "–"}{v.stdCert ? ` (${v.stdCert})` : ""} · d = {v.resolution || "–"}{(v.points || []).some(p => p.uutUUsed !== undefined) ? ` · U อ้างอิง (k=2): ${(v.points || []).filter(p => num(p.reference) != null).map(p => `${p.reference} → เครื่อง ${p.uutUUsed === "" ? "–" : p.uutUUsed}${p.refUUsed !== "" && p.refUUsed != null ? ` + เครื่องอ่านค่า ${p.refUUsed}` : ""} = ${p.stdU || "–"}`).join(" · ")}` : ""}{v.legacyApprover ? ` · รายงานเดิมลงนามโดย ${v.legacyApprover}` : ""}</p>
+        <p className="ca-muted ca-small">{fmtDate(v.verifyDate)} · ผู้ทดสอบ {v.verifiedBy || "–"} · {v.stdName || "–"}{v.stdCert ? ` (${v.stdCert})` : ""} · d = {v.resolution || "–"}{(v.points || []).some(p => p.uutUUsed !== undefined) ? ` · U อ้างอิง (k=2): ${(v.points || []).filter(p => num(p.reference) != null).map(p => `${p.reference} → เครื่อง ${p.uutUUsed === "" ? "–" : p.uutUUsed}${p.uutFrom ? ` (${p.uutFrom})` : ""}${p.refUUsed !== "" && p.refUUsed != null ? ` + เครื่องอ่านค่า ${p.refUUsed}` : ""} = ${p.stdU || "–"}`).join(" · ")}` : ""}{v.legacyApprover ? ` · รายงานเดิมลงนามโดย ${v.legacyApprover}` : ""}</p>
         <div className="ca-scroll">
           <table className="ca-table ca-num">
             <thead><tr><th>ค่าอ้างอิง</th><th>n</th><th className="calc">ค่าเฉลี่ย</th><th className="calc">SD</th><th className="calc">u_rep</th><th className="calc">u_std</th><th className="calc">u_res</th><th className="calc">U = 2u_c</th><th className="calc">Error</th><th className="calc">|Error| + U</th><th className="calc">ผล</th></tr></thead>
@@ -826,16 +826,33 @@ const combineU = (...xs) => {
   return v.length ? String(+Math.sqrt(v.reduce((s, x) => s + x * x, 0)).toFixed(6)) : "";
 };
 // U on the calibration certificate at the point nearest to `ref`.
-function nearestCertU(points, ref) {
+// Within one range (wavelength, scale …) only: U differs between ranges.
+function nearestCertRow(points, ref, range = "") {
   const r = num(ref);
   if (r == null) return null;
   let best = null;
-  points.filter(c => !isBefore(c)).forEach(c => {
+  points.filter(c => !isBefore(c) && (!range || String(c.rangeId || "") === String(range))).forEach(c => {
     const x = refOf(c), u = uOf(c);
     if (x == null || u == null) return;
-    if (!best || Math.abs(x - r) < best.d) best = { d: Math.abs(x - r), u };
+    if (!best || Math.abs(x - r) < best.d) best = { d: Math.abs(x - r), u, x, range: c.rangeId || "" };
   });
-  return best ? best.u : null;
+  return best;
+}
+const nearestCertU = (points, ref, range = "") => nearestCertRow(points, ref, range)?.u ?? null;
+// Ranges named in the certificate table (after-adjustment rows).
+// Certificate rows a verification point can take its U from (after-adjustment
+// rows with a reference value and a U). key = "range|reference" so it stays the
+// same before and after saving.
+const certRowKey = (c) => `${c.rangeId || ""}|${refOf(c)}`;
+const certRows = (points) => points.filter(c => !isBefore(c) && refOf(c) != null && uOf(c) != null)
+  .map(c => ({ key: certRowKey(c), range: c.rangeId || "", x: refOf(c), u: uOf(c) }));
+// The row chosen for a point, or (until one is chosen) the nearest row.
+function certRowFor(points, p) {
+  const rows = certRows(points);
+  const chosen = p.certKey && rows.find(r => r.key === p.certKey);
+  if (chosen) return chosen;
+  const n = nearestCertRow(points, p.reference);
+  return n ? rows.find(r => r.key === `${n.range}|${n.x}`) || null : null;
 }
 // Older records stored one combined "stdU"; read it as the instrument's U.
 function splitLegacyU(v) {
@@ -877,7 +894,7 @@ function draftFrom(instrument, rounds, roundKeyToEdit, me) {
     stdName: pv?.stdName || "", stdCert: pv?.stdCert || "", stdDue: pv?.stdDue || "", uutU: "", refU: pvs?.refU || "", stdU: "", readingCorrection: "",
     resolution: pv?.resolution || String(instrument.resolution ?? "").match(/\d*\.?\d+/)?.[0] || "", wi: pv?.wi || "",
     fewReason: "", ncNo: "", remark: "", wiReview: "", verifiedBy: pv?.verifiedBy || "",
-    points: (pvs?.points?.length ? pvs.points.map(p => ({ reference: p.reference, uutU: "", refU: p.refU || "", stdU: "", readings: emptyReads() })) : [{ reference: "", uutU: "", refU: "", stdU: "", readings: emptyReads() }]),
+    points: (pvs?.points?.length ? pvs.points.map(p => ({ reference: p.reference, certKey: p.certKey || "", uutU: "", refU: p.refU || "", stdU: "", readings: emptyReads() })) : [{ reference: "", uutU: "", refU: "", stdU: "", readings: emptyReads() }]),
   };
   return {
     certificateNo: r ? r.certificateNo : "", calibrationDate: r ? r.calibrationDate : "",
@@ -914,6 +931,7 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
     return p ? cs.current.find(x => x.c === p) : null;
   };
 
+  const rowsForU = certRows(preview.points);
   const problems = [];
   if (!d.certificateNo.trim()) problems.push("เลขที่ใบรับรอง");
   if (!d.calibrationDate) problems.push("วันที่สอบเทียบ");
@@ -926,6 +944,8 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
     if (tp) problems.push(tp);
     if (!vs || !vs.pts.length) problems.push("ค่าที่อ่านได้จากการทวนสอบ");
     else if (vs.tooFew) problems.push(`ค่าที่อ่านได้อย่างน้อย ${VERIFY_MIN_READS} ครั้งต่อจุด`);
+    if (num(d.v.refU) == null && preview.verification.points.some(p => num(p.reference) != null && p.uutUUsed === ""))
+      problems.push("จุดในใบสอบเทียบที่ใช้ U (กรอก U ในตารางใบสอบเทียบด้านบน)");
     else if (!vs.reasonOk) problems.push("เหตุผลที่ทวนสอบน้อยกว่า 10 ครั้ง");
   }
 
@@ -1026,7 +1046,6 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
             {d.v.condition === "abnormal" && <label className="ca-field ca-span2"><span>ความผิดปกติที่พบ</span><input value={d.v.conditionNote} onChange={setV("conditionNote")} /></label>}
             <label className="ca-field ca-span2"><span>มาตรฐานอ้างอิง</span><input value={d.v.stdName} onChange={setV("stdName")} placeholder="เช่น ตุ้มน้ำหนัก MPIR-023" /></label>
             <label className="ca-field"><span>เลขที่ใบรับรองมาตรฐาน</span><input value={d.v.stdCert} onChange={setV("stdCert")} /></label>
-            <label className="ca-field"><span>U จากใบสอบเทียบของเครื่องนี้ (k=2)</span><input value={d.v.uutU} onChange={setV("uutU")} inputMode="decimal" placeholder="ว่าง = ดึงจากใบสอบเทียบเครื่องนี้" /></label>
             <label className="ca-field"><span>U เครื่องที่อ่านค่า ถ้าไม่ใช่เครื่องนี้ (k=2)</span><input value={d.v.refU} onChange={setV("refU")} inputMode="decimal" placeholder="เฉพาะตู้อบ/อ่างน้ำ: U เทอร์โมมิเตอร์" /></label>
             <label className="ca-field"><span>ความละเอียด d ({unit})</span><input value={d.v.resolution} onChange={setV("resolution")} inputMode="decimal" /></label>
             <label className="ca-field"><span>ค่าแก้ของมาตรฐาน</span><input value={d.v.readingCorrection} onChange={setV("readingCorrection")} inputMode="decimal" placeholder="เมื่ออ่านค่าจากมาตรฐาน" /></label>
@@ -1035,13 +1054,17 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
           </div>
           <div className="ca-scroll">
             <table className="ca-table ca-edit ca-reads">
-              <thead><tr><th>ค่าอ้างอิง</th><th>U เครื่อง</th><th>U เครื่องอ่านค่า</th><th className="calc">U ที่ใช้</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i}>R{i + 1}</th>)}<th></th></tr></thead>
+              <thead><tr><th>ค่าอ้างอิง</th>{num(d.v.refU) == null && <th>U จากจุดในใบสอบเทียบ</th>}<th className="calc">U ที่ใช้ (k=2)</th>{Array.from({ length: VERIFY_MAX_READS }, (_, i) => <th key={i}>R{i + 1}</th>)}<th></th></tr></thead>
               <tbody>{d.v.points.map((p, i) => (
                 <tr key={i}>
                   <td><input aria-label={`ค่าอ้างอิงทวนสอบ แถว ${i + 1}`} value={p.reference} onChange={ev => setVP(i, "reference", ev.target.value)} inputMode="decimal" /></td>
-                  <td><input aria-label={`U จากใบสอบเทียบเครื่อง แถว ${i + 1}`} value={p.uutU} onChange={ev => setVP(i, "uutU", ev.target.value)} placeholder={d.v.uutU || ((num(p.refU) ?? num(d.v.refU)) == null ? String(nearestCertU(preview.points, p.reference) ?? "") : "")} inputMode="decimal" /></td>
-                  <td><input aria-label={`U เครื่องที่อ่านค่า แถว ${i + 1}`} value={p.refU} onChange={ev => setVP(i, "refU", ev.target.value)} placeholder={d.v.refU || ""} inputMode="decimal" /></td>
-                  <td className="calc">{preview.verification.points[i]?.stdU ? +Number(preview.verification.points[i].stdU).toPrecision(3) : "–"}</td>
+                  {num(d.v.refU) == null && <td>{(() => { const cur = certRowFor(preview.points, p); return (
+                    <select aria-label={`จุดในใบสอบเทียบที่ใช้ U แถว ${i + 1}`} value={cur ? cur.key : ""} onChange={ev => setVP(i, "certKey", ev.target.value)}
+                      style={{ minWidth: 190, minHeight: 40, border: "1px solid var(--line)", borderRadius: 8, padding: "0 8px", fontFamily: "inherit", fontSize: 13.5, background: "#fff" }}>
+                      {!cur && <option value="">— ไม่มีข้อมูลในใบสอบเทียบ —</option>}
+                      {rowsForU.map(r => <option key={r.key} value={r.key}>{[r.range, `${r.x}`].filter(Boolean).join(" · ")} → U {r.u}</option>)}
+                    </select>); })()}</td>}
+                  <td className="calc">{(() => { const q = preview.verification.points[i]; return q?.stdU ? <>{+Number(q.stdU).toPrecision(3)}<div className="ca-small ca-muted" style={{ fontFamily: "inherit" }}>{q.refUUsed !== "" && q.refUUsed != null ? "เครื่องอ่านค่า" : "ใบสอบเทียบ"}</div></> : <span className="ca-warn" style={{ fontFamily: "inherit" }}>ไม่พบ U</span>; })()}</td>
                   {p.readings.map((x, j) => <td key={j}><input aria-label={`R${j + 1} แถว ${i + 1}`} value={x} onChange={ev => setRead(i, j, ev.target.value)} inputMode="decimal" className="w-r" /></td>)}
                   <td><button className="ca-icon" aria-label={`ลบจุดทวนสอบ ${i + 1}`} onClick={() => setD({ ...d, v: { ...d.v, points: d.v.points.filter((_, j) => j !== i) } })}><Trash2 size={15} /></button></td>
                 </tr>
@@ -1060,7 +1083,7 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
               </table>
             </div>
           )}
-          <p className="ca-small ca-muted">ตามเอกสาร "ระบบมาตรวิทยา" (สมว.) ตัวอย่างที่ 4: u_rep = SD/√n (Type A) · u_std = U จากใบสอบเทียบของเครื่องที่อ่านค่า/2 (Type B) — เว้นว่างทั้งสองช่อง = ใช้ U จุดใกล้สุดในใบสอบเทียบเครื่องนี้; กรอก "U เครื่องอ่านค่า" (เช่น เทอร์โมมิเตอร์ที่วัดตู้อบ) = ใช้ค่านั้นแทน · u_res = d/(2√3) · U = 2√(u_rep² + u_std² + u_res²) · ผ่านเมื่อ |Error| + U ≤ เกณฑ์</p>
+          <p className="ca-small ca-muted">ตามเอกสาร "ระบบมาตรวิทยา" (สมว.) ตัวอย่างที่ 4: u_rep = SD/√n (Type A) · u_std = U จากใบสอบเทียบของเครื่องที่อ่านค่า/2 (Type B) — ระบบดึงจากจุดใกล้สุดในตารางใบสอบเทียบด้านบนให้ — ถ้าค่าอ่านจากเครื่องอื่น (เช่น เทอร์โมมิเตอร์ที่วัดตู้อบ) กรอก "U เครื่องที่อ่านค่า" ด้านบนแทน · u_res = d/(2√3) · U = 2√(u_rep² + u_std² + u_res²) · ผ่านเมื่อ |Error| + U ≤ เกณฑ์</p>
           {vs?.fewReads && <label className="ca-field"><span>เหตุผลที่ทวนสอบน้อยกว่า 10 ครั้ง *</span><input value={d.v.fewReason} onChange={setV("fewReason")} placeholder="เช่น ใช้เวลาทดสอบนาน / ใช้สารมาก" /></label>}
           <div className="ca-grid3">
             <label className="ca-field"><span>ทบทวน WI ที่เกี่ยวข้อง</span><input value={d.v.wiReview} onChange={setV("wiReview")} /></label>
@@ -1113,12 +1136,15 @@ function buildRecords(d, instrument, roundKeyToEdit, final = false) {
   const verification = {
     ...v, instrumentId: instrument.id, certificateNo: certNo, calibrationDate: d.calibrationDate,
     verifiedBy: String(v.verifiedBy || "").trim(),
-    stdU: combineU(v.uutU, v.refU),
+    stdU: combineU(v.refU),
     reportNo: v.reportNo || `VR-${Number((d.calibrationDate || todayISO()).slice(0, 4)) + 543}-${(instrument.code || "").replace(/\s+/g, "")}`,
     points: (v.points || []).filter(p => num(p.reference) != null || (final ? false : true)).map(p => {
-      const ref = num(p.refU) ?? num(v.refU);
-      const uut = num(p.uutU) ?? num(v.uutU) ?? (ref == null ? nearestCertU(points, p.reference) : null);
-      return { ...p, uutUUsed: uut ?? "", refUUsed: ref ?? "", stdU: combineU(uut, ref), readings: (p.readings || []).slice(0, VERIFY_MAX_READS) };
+      // U of the reading instrument: this instrument's certificate (looked up
+      // from the table above), or the thermometer's U when one is entered.
+      const ref = num(v.refU);
+      const row = ref == null ? certRowFor(points, p) : null;
+      const uut = row ? row.u : null;
+      return { ...p, certKey: row ? row.key : (p.certKey || ""), uutUUsed: uut ?? "", refUUsed: ref ?? "", uutFrom: row ? `${row.range ? `${row.range} · ` : ""}จุด ${row.x}` : "", stdU: combineU(uut, ref), readings: (p.readings || []).slice(0, VERIFY_MAX_READS) };
     }),
   };
   return { points, verification };
