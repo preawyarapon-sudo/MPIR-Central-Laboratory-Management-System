@@ -8920,7 +8920,7 @@ function checkLogRows(dailyChecks, icChecks, instrument) {
       return { kind: "daily", key: c.id, rec: c, date: c.date || "", time: c.time || "", value: h.value, unit: h.unit,
         result: c.result === true ? "PASS" : c.result === false ? "FAIL" : "-", by: c.checkedBy || "",
         approval: !IN_APP_APPROVAL ? "" : c.approved ? `อนุมัติแล้ว${c.approvedByName ? ` · ${c.approvedByName}` : ""}` : "รออนุมัติ", approved: !!c.approved, note: c.remarks || "",
-        approver: c.approved ? (c.approvedByName || "-") : "", approvedAt: c.approved ? (c.approvedAt || "").slice(0, 10) : "" };
+        approver: c.approved ? (c.approvedByName || "-") : "", approvedAt: c.approved && c.approvedAt && !isNaN(new Date(c.approvedAt)) ? localISO(new Date(c.approvedAt)) : "" };
     }),
     ...icChecks.map(c => {
       const calc = calcIntermediateCheck(c, instrument);
@@ -8965,12 +8965,33 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
   const actBtn = { width: 36, height: 36, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff", border: "1px solid var(--line)", borderRadius: 10, cursor: "pointer", color: "var(--ink)" };
   // Approver column (Daily check): name + date once approved, otherwise an
   // "อนุมัติ" button for users allowed to approve.
-  const askApprove = (r) => { if (window.confirm(`อนุมัติผล Daily check วันที่ ${fmtDate(r.date)}${r.time ? ` ${r.time}` : ""}${r.by ? ` (ผู้ตรวจ ${r.by})` : ""}?`)) onApprove(r.rec); };
+  // Approval date is chosen in a dialog (default today) and can be changed later.
+  const [apDlg, setApDlg] = useState(null); // { r, date, edit }
+  const askApprove = (r) => setApDlg({ r, date: todayISO(), edit: false });
+  const askEditDate = (r) => setApDlg({ r, date: r.approvedAt || todayISO(), edit: true });
+  const apErr = !apDlg ? "" : !apDlg.date ? "เลือกวันที่อนุมัติ"
+    : apDlg.r.date && apDlg.date < apDlg.r.date ? "วันที่อนุมัติต้องไม่ก่อนวันที่ตรวจ"
+    : apDlg.date > todayISO() ? "วันที่อนุมัติต้องไม่เกินวันนี้" : "";
   const approverCell = (r, small = false) => r.approver
-    ? <span style={{ color: "#1E8A57", fontSize: small ? 12 : 13 }}><CheckCircle2 size={small ? 13 : 14} style={{ verticalAlign: "-2px", marginRight: 4 }} />{r.approver}{r.approvedAt ? <span style={{ color: "var(--muted)", fontSize: 12 }}> · {fmtDate(r.approvedAt)}</span> : null}</span>
+    ? <span style={{ color: "#1E8A57", fontSize: small ? 12 : 13, display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}><CheckCircle2 size={small ? 13 : 14} />{r.approver}{r.approvedAt ? <span style={{ color: "var(--muted)", fontSize: 12 }}> · {fmtDate(r.approvedAt)}</span> : null}
+        {r.kind === "daily" && canApprove && onApprove && <button type="button" title="แก้วันที่อนุมัติ" aria-label="แก้วันที่อนุมัติ" onClick={() => askEditDate(r)} style={{ background: "none", border: "none", padding: "2px 4px", cursor: "pointer", color: "var(--muted)", display: "inline-flex" }}><Pencil size={12} /></button>}</span>
     : r.kind === "daily" && canApprove && onApprove
       ? <button type="button" onClick={() => askApprove(r)} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--teal)", color: "#fff", border: "none", borderRadius: 10, padding: small ? "6px 12px" : "8px 14px", fontSize: small ? 12.5 : 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}><CheckCircle2 size={small ? 13 : 14} /> อนุมัติ</button>
       : <span style={{ color: r.kind === "daily" ? "#A86A00" : "var(--muted)", fontSize: small ? 12 : 13 }}>{r.kind === "daily" ? "รออนุมัติ" : "-"}</span>;
+  const approveDialog = apDlg && (
+    <Modal title={apDlg.edit ? "แก้วันที่อนุมัติ" : "อนุมัติผล Daily check"} onClose={() => setApDlg(null)}>
+      <div style={{ fontSize: 13.5, color: "var(--muted)", marginBottom: 12, lineHeight: 1.6 }}>
+        วันที่ตรวจ {fmtDate(apDlg.r.date)}{apDlg.r.time ? ` ${apDlg.r.time}` : ""}{apDlg.r.by ? ` · ผู้ตรวจ ${apDlg.r.by}` : ""}
+        {apDlg.edit && apDlg.r.approver ? <><br />อนุมัติโดย {apDlg.r.approver}</> : null}
+      </div>
+      <Field label="วันที่อนุมัติ">
+        <input type="date" style={S.input} value={apDlg.date} min={apDlg.r.date || undefined} max={todayISO()} onChange={e => setApDlg({ ...apDlg, date: e.target.value })} />
+      </Field>
+      {apErr && <div style={{ color: "#C6493B", fontSize: 13, marginTop: 8 }}>{apErr}</div>}
+      <ModalFooter onCancel={() => setApDlg(null)} disabled={!!apErr}
+        onSave={() => { onApprove(apDlg.r.rec, apDlg.date, apDlg.edit); setApDlg(null); }} />
+    </Modal>
+  );
   const askDelete = (r) => { if (window.confirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) onDelete(r); };
   const empty = (
     <>{emptyText}{onShowAll && <> · <button type="button" onClick={onShowAll} style={{ background: "none", border: "none", padding: 0, color: "var(--teal)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}>ดูทั้งหมด</button></>}</>
@@ -8979,6 +9000,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
   if (mobile) {
     return (
       <div style={{ display: "grid", gap: 10 }}>
+        {approveDialog}
         {sorted.map(r => {
           const st = RESULT_STYLE[r.result];
           return (
@@ -9020,6 +9042,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
   }
   return (
     <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 16, overflow: "hidden" }}>
+      {approveDialog}
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
           <thead><tr>
@@ -9150,14 +9173,18 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
     setIntermediateChecks(intermediateChecks.map(c => (c.instrumentId === equipId && !c.criteriaAt ? { ...c, criteriaAt: snapshotCriteria(equip, c.checkDate) } : c)));
     notify(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการแล้ว`);
   }
-  function approve(entry) {
+  // date: "YYYY-MM-DD" chosen in the approval dialog (default: now).
+  // keepApprover: only the date is being corrected — the approver stays.
+  function approve(entry, date, keepApprover = false) {
+    const now = new Date();
+    const at = date && date !== todayISO() ? new Date(`${date}T12:00:00`).toISOString() : now.toISOString();
     upsert({
       ...entry,
       approved: true,
-      approvedByName: currentDisplayName || currentUsername,
-      approvedByUsername: currentUsername,
-      approvedAt: new Date().toISOString(),
-    }, "อนุมัติรายการเรียบร้อยแล้ว");
+      ...(keepApprover && entry.approved ? {} : { approvedByName: currentDisplayName || currentUsername, approvedByUsername: currentUsername }),
+      approvedAt: at,
+      approvalLog: [...(entry.approvalLog || []), { at: now.toISOString(), by: currentDisplayName || currentUsername, action: keepApprover ? "แก้วันที่อนุมัติ" : "อนุมัติ", from: entry.approvedAt || "", to: at }],
+    }, keepApprover ? "แก้วันที่อนุมัติแล้ว" : "อนุมัติรายการเรียบร้อยแล้ว");
   }
 
   return (
