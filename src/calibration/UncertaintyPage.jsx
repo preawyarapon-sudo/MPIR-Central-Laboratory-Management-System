@@ -276,12 +276,12 @@ export function UncertaintyEditor({ report, certificates, equipment, onCancel, o
       })}
 
       <section className="ca-card ca-stack-sm">
-        <h2>6 ตัวอย่างการรายงานผล <span className="ca-muted ca-small">(ไม่บังคับ · ถ้าเว้นว่าง รายงานจะพิมพ์เป็นช่องว่างให้เขียน)</span></h2>
+        <h2>6 ตัวอย่างการรายงานผล <span className="ca-muted ca-small">(ไม่บังคับ · ถ้าเว้นว่าง ใช้ค่าเฉลี่ยจากการทดสอบซ้ำ และหมายเลข 0001)</span></h2>
         <div className="ca-grid4">
-          <label className="ca-field"><span>หมายเลขตัวอย่าง</span><input value={d.example?.sampleNo || ""} onChange={setEx("sampleNo")} /></label>
-          <label className="ca-field"><span>Brix</span><input value={d.example?.brix || ""} onChange={setEx("brix")} inputMode="decimal" /></label>
-          <label className="ca-field"><span>%Pol</span><input value={d.example?.pol || ""} onChange={setEx("pol")} inputMode="decimal" /></label>
-          <label className="ca-field"><span>%Fibre</span><input value={d.example?.fiber || ""} onChange={setEx("fiber")} inputMode="decimal" /></label>
+          <label className="ca-field"><span>หมายเลขตัวอย่าง</span><input value={d.example?.sampleNo || ""} onChange={setEx("sampleNo")} placeholder="0001" /></label>
+          <label className="ca-field"><span>Brix</span><input value={d.example?.brix || ""} onChange={setEx("brix")} inputMode="decimal" placeholder={fmt(R.brix.A.mean, R.brix.dec)} /></label>
+          <label className="ca-field"><span>%Pol</span><input value={d.example?.pol || ""} onChange={setEx("pol")} inputMode="decimal" placeholder={fmt(R.pol.A.mean, R.pol.dec)} /></label>
+          <label className="ca-field"><span>%Fibre</span><input value={d.example?.fiber || ""} onChange={setEx("fiber")} inputMode="decimal" placeholder={fmt(R.fiber.A.mean, R.fiber.dec)} /></label>
         </div>
       </section>
 
