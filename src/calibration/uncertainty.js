@@ -213,7 +213,8 @@ export function lf069Html(rep, certificates, equipment) {
   const calRsd = (r) => (r.B && r.A.mean ? calUconv(r) / Math.abs(r.A.mean) : null);
   const kLbl = b.B && p.B && b.B.k === p.B.k ? ` (k = ${esc(b.B.k)})` : "";
   const ex = rep.example || {};
-  const exVal = (v, r, unit) => `${num(v) != null ? esc(v) : "........"}${unit} ± ${fmt(r.Ur, r.dec)}${unit} ที่ระดับความเชื่อมั่น 95%`;
+  // Example values: typed in the editor, otherwise the mean of the repeats.
+  const exVal = (v, r, unit) => `${num(v) != null ? esc(v) : fmt(r.A.mean, r.dec)}${unit} ± ${fmt(r.Ur, r.dec)}${unit} ที่ระดับความเชื่อมั่น 95%`;
 
   const p1 = page(1, `<p class="yr">ประจำปี ${esc(year)}</p>
 <h3><span>1</span>วัตถุประสงค์</h3><p class="i1">${esc(rep.objective)}</p>
@@ -261,7 +262,7 @@ ${fishbone(FISHBONES.pol)}
 <p class="i2">4.1.4.4&nbsp;&nbsp;&nbsp;Calculate Expanded Uncertainty โดยคูณค่า Combined Uncertainty ด้วย Coverage Factor<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(k)=2&nbsp;&nbsp;ที่ระดับความเชื่อมั่น 95%</p>
 <table class="eq f"><tr><td>Uc [Brix]</td><td>= ${f5(b.uc)} x 2 = ${f5(b.U)}</td></tr><tr><td>Uc [Pol]</td><td>= ${f5(p.uc)} x 2 = ${f5(p.U)}</td></tr></table>
 <h5>4.1.5&nbsp;&nbsp;การรายงานผล พร้อมค่า Uncertainty</h5>
-<table class="eq f"><tr><td>Brix ในน้ำอ้อย</td><td>= ค่าที่ได้จากการตรวจทดสอบ ± ${fmt(b.Ur, b.dec)}</td></tr><tr><td>%Pol ในน้ำอ้อย</td><td>= ค่าที่ได้จากการตรวจทดสอบ (%) ± ${fmt(p.Ur, p.dec)} (%)</td></tr></table>`);
+<table class="eq f"><tr><td>Brix ในน้ำอ้อย</td><td>= ค่าที่ได้จากการตรวจทดสอบ (°Brix) ± ${fmt(b.Ur, b.dec)} (°Brix)</td></tr><tr><td>%Pol ในน้ำอ้อย</td><td>= ค่าที่ได้จากการตรวจทดสอบ (%) ± ${fmt(p.Ur, p.dec)} (%)</td></tr></table>`);
 
   const p4 = page(4, `<h4>4.2&nbsp;&nbsp;&nbsp;การหาค่าความไม่แน่นอนของการวัดไฟเบอร์ในชานอ้อยย่อย</h4>
 <h5>4.2.1&nbsp;&nbsp;สมการ</h5>
@@ -299,12 +300,12 @@ ${fishbone(FISHBONES.fiber)}
 
   const sig = (title) => `<td><u>${title}</u><div class="sg"></div><div class="nm">(${"&nbsp;".repeat(60)})</div></td>`;
   const p6 = page(6, `<h3><span>5</span>สรุปผล</h3>
-<p class="i2">-&nbsp;&nbsp;Uncertainty ของการวิเคราะห์ค่าองศาบริกซ์ (Brix) ในตัวอย่างน้ำอ้อย คือ ± ${fmt(b.Ur, b.dec)}</p>
+<p class="i2">-&nbsp;&nbsp;Uncertainty ของการวิเคราะห์ค่าองศาบริกซ์ (Brix) ในตัวอย่างน้ำอ้อย คือ ± ${fmt(b.Ur, b.dec)} °Brix</p>
 <p class="i2">-&nbsp;&nbsp;Uncertainty ของการวิเคราะห์ค่า%โพลาไรเซชัน (Pol) ในตัวอย่างน้ำอ้อย คือ ± ${fmt(p.Ur, p.dec)}%</p>
 <p class="i2">-&nbsp;&nbsp;Uncertainty ของการวิเคราะห์ค่า%เส้นใยไฟเบอร์ (Fibre) ในตัวอย่างชานอ้อยย่อย คือ ± ${fmt(fb.Ur, fb.dec)}%</p>
 <h3 style="margin-top:22pt"><span>6</span>ตัวอย่างการรายงานผล</h3>
-<p class="i2">ผลวิเคราะห์ตัวอย่าง หมายเลข ${esc(ex.sampleNo || "........")} รายงานดังนี้</p>
-<p class="i2">-&nbsp;&nbsp;ค่าบริกซ์ ${exVal(ex.brix, b, "")}</p>
+<p class="i2">ผลวิเคราะห์ตัวอย่าง หมายเลข ${esc(ex.sampleNo || "0001")} รายงานดังนี้</p>
+<p class="i2">-&nbsp;&nbsp;ค่าบริกซ์ ${exVal(ex.brix, b, " °Brix")}</p>
 <p class="i2">-&nbsp;&nbsp;ค่าโพล ${exVal(ex.pol, p, "%")}</p>
 <p class="i2">-&nbsp;&nbsp;ค่าไฟเบอร์ ${exVal(ex.fiber, fb, "%")}</p>
 <table class="sig"><tr>${sig("จัดทำโดย")}${sig("อนุมัติโดย")}</tr>
