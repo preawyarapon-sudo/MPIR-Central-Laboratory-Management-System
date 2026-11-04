@@ -54,6 +54,30 @@ const testerProblem = (name) => {
   return null;
 };
 
+/* ---------- page <-> browser history ----------
+   Every screen change is a browser history entry, so the browser's Back /
+   Forward buttons move between screens of this app and a refresh (or a
+   copied link) reopens the same screen. Own query names (view, vid, vround,
+   vtab) so the existing ?app=calibration and QR parameters are untouched. */
+const URL_KEYS = { name: "view", instrumentId: "vid", roundKey: "vround", tab: "vtab" };
+const DRAFT_PAGES = ["equipEdit", "uncEdit"];
+function pageToUrl(p) {
+  const u = new URL(window.location.href);
+  Object.values(URL_KEYS).forEach(k => u.searchParams.delete(k));
+  if (p.name && p.name !== "overview" && !(DRAFT_PAGES.includes(p.name) && p.draft)) {
+    Object.entries(URL_KEYS).forEach(([f, k]) => { if (p[f]) u.searchParams.set(k, p[f]); });
+  }
+  return u.pathname + u.search + u.hash;
+}
+function pageFromUrl() {
+  const q = new URLSearchParams(window.location.search);
+  const name = q.get(URL_KEYS.name);
+  if (!name) return null;
+  const p = { name };
+  Object.entries(URL_KEYS).forEach(([f, k]) => { if (f !== "name" && q.get(k)) p[f] = q.get(k); });
+  return p;
+}
+
 /* =================================================================== */
 const KEYS = ["equipment", "certificates", "verifications", "dailyChecks", "intermediateChecks", "uncertaintyReports"];
 // guest: opened from a scanned QR code without a staff login — Daily check
@@ -61,7 +85,8 @@ const KEYS = ["equipment", "certificates", "verifications", "dailyChecks", "inte
 export default function CalibrationApp({ currentUsername = "", currentDisplayName = "", guest = false, initial = null, onLogin = null }) {
   const [data, setData] = useState({ equipment: [], certificates: [], verifications: [], dailyChecks: [], intermediateChecks: [], uncertaintyReports: [] });
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(() => initial?.name === "equipNew" ? { name: "equipEdit", draft: blankInstrument() } : (initial || { name: "overview" }));
+  const [page, setPage] = useState(() => window.history.state?.caPage || pageFromUrl()
+    || (initial?.name === "equipNew" ? { name: "equipEdit", draft: blankInstrument() } : (initial || { name: "overview" })));
   const [toast, setToastState] = useState({ text: "", ms: 3500 });
   const setToast = (text, ms = 3500) => setToastState({ text, ms });
   const me = currentDisplayName || currentUsername || "";
@@ -110,10 +135,31 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
   // A guest (QR scan, no staff login) only ever sees the Daily check form or
   // one instrument read-only.
   useEffect(() => {
-    if (guest && !["guestDaily", "instrument"].includes(page.name)) setPage({ name: "guestDaily" });
+    if (guest && !["guestDaily", "instrument"].includes(page.name)) go({ name: "guestDaily" }, { replace: true });
   }, [guest, page.name]);
   const instrument = page.instrumentId ? data.equipment.find(e => e.id === page.instrumentId) : null;
-  const go = (p) => { setPage(p); window.scrollTo(0, 0); };
+  // go(p) adds a history entry; go(p, { replace: true }) swaps the current one
+  // (after saving a form, so Back does not reopen the form).
+  function go(p, { replace = false, keepScroll = false } = {}) {
+    const depth = (window.history.state?.caDepth || 0) + (replace ? 0 : 1);
+    const state = { ...(window.history.state || {}), caPage: p, caDepth: depth };
+    try { window.history[replace ? "replaceState" : "pushState"](state, "", pageToUrl(p)); } catch { /* drafts too large for history: still navigate */ }
+    setPage(p);
+    if (!keepScroll) window.scrollTo(0, 0);
+  }
+  // Back inside the app; falls back to a given screen when opened directly.
+  function goBack(fallback) {
+    if ((window.history.state?.caDepth || 0) > 0) window.history.back();
+    else go(fallback, { replace: true });
+  }
+  useEffect(() => {
+    // record the first screen so Back from the next one returns here
+    const first = window.history.state?.caPage || page;
+    try { window.history.replaceState({ ...(window.history.state || {}), caPage: first, caDepth: window.history.state?.caDepth || 0 }, "", pageToUrl(first)); } catch { /* ignore */ }
+    const onPop = (ev) => { setPage(ev.state?.caPage || pageFromUrl() || { name: "overview" }); window.scrollTo(0, 0); };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   async function downloadRound(inst, round, usage) {
     if (!printLf068({ ...round, verification: round.verification ? { ...round.verification, usage } : null }, inst)) return;
     const at = new Date().toISOString();
@@ -185,7 +231,8 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
               onNew={(id) => go({ name: "edit", instrumentId: id, roundKey: null })}
               onVerify={(id, k) => go({ name: "edit", instrumentId: id, roundKey: k })}
               onOpen={(id, k) => go({ name: "verifyRound", instrumentId: id, roundKey: k })}
-              onDeleteRound={(id, r) => deleteRound(data.equipment.find(x => x.id === id), r)} />
+              onDeleteRound={(id, r) => deleteRound(data.equipment.find(x => x.id === id), r)}
+              onOpenInstrument={(id) => go({ name: "instrument", instrumentId: id })} />
           )}
           {page.name === "verifyRound" && instrument && (() => {
             const rounds = roundsById[instrument.id] || [];
@@ -196,7 +243,11 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                 <nav className="ca-crumb" aria-label="ตำแหน่งหน้า"><button className="ca-link" onClick={() => go({ name: "verifyList" })}>ทวนสอบเครื่องมือ</button><span>›</span>
                   <button className="ca-link" onClick={() => go({ name: "verifyList", instrumentId: instrument.id })}>{instrument.code}</button><span>›</span><span>รอบ {fmtDate(round.calibrationDate)}</span></nav>
                 <header className="ca-head"><div><h1>{instrument.code} {instrument.name}</h1>
-                  <p className="ca-muted">{[instrument.brand, instrument.model].filter(Boolean).join(" ")}{instrument.serialNo ? ` · S/N ${instrument.serialNo}` : ""}</p></div></header>
+                  <p className="ca-muted">{[instrument.brand, instrument.model].filter(Boolean).join(" ")}{instrument.serialNo ? ` · S/N ${instrument.serialNo}` : ""}</p></div>
+                  <div className="ca-row ca-wrap">
+                    <button className="ca-btn" onClick={() => go({ name: "instrument", instrumentId: instrument.id })}><Gauge size={15} /> ข้อมูลเครื่องและแนวโน้ม</button>
+                    {hasDailyForm(instrument) && <button className="ca-btn" onClick={() => go({ name: "instrument", instrumentId: instrument.id, tab: "daily" })}><ClipboardCheck size={15} /> Daily check</button>}
+                  </div></header>
                 <RoundView key={round.key} round={round} instrument={instrument} isLatest={rounds[0]?.key === round.key}
                   onEdit={() => go({ name: "edit", instrumentId: instrument.id, roundKey: round.key })}
                   onDownload={(r, usage) => downloadRound(instrument, r, usage)} />
@@ -218,9 +269,12 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
               certificates={data.certificates} dailyChecks={data.dailyChecks} intermediateChecks={data.intermediateChecks}
               setDailyChecks={(l) => setListSmart("dailyChecks", l)} setIntermediateChecks={(l) => setListSmart("intermediateChecks", l)}
               onSaveInstrument={async (id, patch) => { await mutate("equipment", list => list.map(x => x.id === id ? { ...x, ...patch } : x)); setToast("บันทึกเกณฑ์แล้ว"); }}
-              onBack={guest ? null : () => go({ name: "overview" })}
+              onBack={guest ? null : () => goBack({ name: "overview" })}
+              onTabChange={(t) => go({ ...page, tab: t }, { replace: true, keepScroll: true })}
               onEditInstrument={() => go({ name: "equipEdit", instrumentId: instrument.id })}
-              onOpenVerify={() => go({ name: "verifyList", instrumentId: instrument.id })} />
+              onOpenVerify={() => go({ name: "verifyList", instrumentId: instrument.id })}
+              onOpenRound={(k) => go({ name: "verifyRound", instrumentId: instrument.id, roundKey: k })}
+              onEditRound={(k) => go({ name: "edit", instrumentId: instrument.id, roundKey: k })} />
           )}
           {page.name === "equipEdit" && (page.draft || data.equipment.find(x => x.id === page.instrumentId)) && (() => {
             const inst = page.draft || data.equipment.find(x => x.id === page.instrumentId);
@@ -229,7 +283,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
               || data.dailyChecks.some(c => c.equipmentId === id) || data.intermediateChecks.some(c => c.instrumentId === id);
             return (
               <EquipmentEditor key={id} instrument={inst} equipment={data.equipment} hasRecords={hasRecords} due={instrumentStatus(inst, roundsById[id] || []).due}
-                onCancel={() => go(data.equipment.some(x => x.id === id) ? { name: "instrument", instrumentId: id, tab: "info" } : { name: "overview" })}
+                onCancel={() => goBack(data.equipment.some(x => x.id === id) ? { name: "instrument", instrumentId: id } : { name: "overview" })}
                 onSave={async (rec, isNew) => {
                   const at = new Date().toISOString();
                   await mutate("equipment", list => {
@@ -239,12 +293,12 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                     return prev ? list.map(x => x.id === rec.id ? out : x) : [out, ...list];
                   });
                   setToast(isNew ? "เพิ่มเครื่องมือแล้ว" : "บันทึกข้อมูลเครื่องแล้ว");
-                  go({ name: "instrument", instrumentId: rec.id, tab: "info" });
+                  go({ name: "instrument", instrumentId: rec.id }, { replace: true });
                   return true;
                 }}
                 onDelete={async (delId) => {
                   await mutate("equipment", list => list.filter(x => x.id !== delId));
-                  setToast("ลบเครื่องมือแล้ว"); go({ name: "overview" });
+                  setToast("ลบเครื่องมือแล้ว"); go({ name: "overview" }, { replace: true });
                 }} />
             );
           })()}
@@ -275,7 +329,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
           )}
           {page.name === "uncEdit" && page.draft && (
             <UncertaintyEditor key={page.draft.id} report={page.draft} certificates={data.certificates} equipment={data.equipment}
-              onCancel={() => go({ name: "uncList" })}
+              onCancel={() => goBack({ name: "uncList" })}
               onSave={async (rep, download) => {
                 const at = new Date().toISOString();
                 let saved = rep;
@@ -288,13 +342,13 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                 });
                 if (download) printLf069(saved, data.certificates, data.equipment);
                 setToast(download ? "บันทึกและดาวน์โหลดแล้ว · นำไปลงนามและเก็บตามระบบเอกสาร" : "บันทึกรายงานแล้ว");
-                go({ name: "uncList" });
+                go({ name: "uncList" }, { replace: true });
                 return true;
               }} />
           )}
           {page.name === "edit" && instrument && (
             <RoundEditor instrument={instrument} rounds={roundsById[instrument.id] || []} roundKeyToEdit={page.roundKey} me={me}
-              onCancel={() => go(page.roundKey ? { name: "verifyRound", instrumentId: instrument.id, roundKey: page.roundKey } : { name: "verifyList", instrumentId: instrument.id })}
+              onCancel={() => goBack(page.roundKey ? { name: "verifyRound", instrumentId: instrument.id, roundKey: page.roundKey } : { name: "verifyList", instrumentId: instrument.id })}
               onSave={async ({ points, verification, oldKey, newKey, calDate }) => {
                 const at = new Date().toISOString();
                 const clash = (roundsById[instrument.id] || []).some(r => r.key === newKey && r.key !== oldKey);
@@ -330,7 +384,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                     ? { ...e, lastCalibration: calDate, nextDue: addMonthsISO(calDate, num(e.intervalMonths) || 12) } : e));
                 }
                 setToast("บันทึกแล้ว · ดาวน์โหลด LF-068 ได้ด้านล่าง");
-                go({ name: "verifyRound", instrumentId: instrument.id, roundKey: newKey });
+                go({ name: "verifyRound", instrumentId: instrument.id, roundKey: newKey }, { replace: true });
                 return true;
               }} />
           )}
@@ -361,7 +415,7 @@ function verifyState(round, e) {
   if (!v.downloadedAt) return { key: "report", label: "รอดาวน์โหลด LF-068", tone: "amber", sort: 2, vs };
   return { key: "done", label: "ทวนสอบแล้ว", tone: "green", sort: 3, vs };
 }
-function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId, onSelect, onDeleteRound }) {
+function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId, onSelect, onDeleteRound, onOpenInstrument }) {
   const [q, setQ] = useState("");
   const [filterSel, setFilter] = useState(null);
   const groups = { todo: ["todo", "fail", "report", "reprint"], done: ["done"], all: null };
@@ -388,7 +442,8 @@ function VerifyList({ equipment, roundsById, onVerify, onOpen, onNew, selectedId
         <header className="ca-head"><div>
           <h1>{e.code} {e.name}</h1>
           <p className="ca-muted">{[e.brand, e.model].filter(Boolean).join(" ")}{e.serialNo ? ` · S/N ${e.serialNo}` : ""} · เลือกรอบสอบเทียบที่ต้องการทวนสอบ</p>
-        </div></header>
+        </div>
+        {onOpenInstrument && <button className="ca-btn" onClick={() => onOpenInstrument(e.id)}><Gauge size={15} /> ข้อมูลเครื่องและแนวโน้ม</button>}</header>
         <div className="ca-vgrid">
           {sel.rounds.map(({ r, latest, st }) => {
             const v = r.verification;
@@ -526,7 +581,7 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null, onDelete = null
 }
 
 /* =================================================================== */
-function InstrumentPage({ instrument: e, rounds, onBack, onOpenVerify,
+function InstrumentPage({ instrument: e, rounds, onBack, onOpenVerify, onOpenRound, onEditRound, onTabChange,
   guest = false, me = "", currentUsername = "", notify, initialTab, openDaily,
   certificates, dailyChecks, intermediateChecks, setDailyChecks, setIntermediateChecks, onSaveInstrument, onEditInstrument }) {
   const st = instrumentStatus(e, rounds);
@@ -535,11 +590,17 @@ function InstrumentPage({ instrument: e, rounds, onBack, onOpenVerify,
   const myDaily = dailyChecks.filter(c => c.equipmentId === e.id);
   const myIc = intermediateChecks.filter(c => c.instrumentId === e.id);
   const tabs = [["main", "แนวโน้มและข้อมูลเครื่อง"], ...(hasDaily ? [["daily", `Daily check (${myDaily.length})`]] : []), ...(!guest ? [["ic", `Intermediate check (${myIc.length})`]] : [])];
-  const [tab, setTab] = useState(() => tabs.some(t => t[0] === initialTab) ? initialTab : "main");
+  const [tab, setTabState] = useState(() => tabs.some(t => t[0] === initialTab) ? initialTab : "main");
+  const setTab = (t) => { setTabState(t); onTabChange?.(t); };
+  useEffect(() => { if (initialTab && tabs.some(t => t[0] === initialTab)) setTabState(initialTab); }, [initialTab]);
+  const latest = rounds[0] || null;
+  const latestSt = latest ? verifyState(latest, e) : null;
+  const today = todayISO();
+  const dailyToday = myDaily.filter(c => c.date === today).length;
   const [editingIc, setEditingIc] = useState(null);
   return (
     <div className="ca-stack">
-      {onBack && <nav className="ca-crumb" aria-label="ตำแหน่งหน้า"><button className="ca-link" onClick={onBack}>เครื่องมือ</button><span>›</span><span>{e.code || e.name}</span></nav>}
+      {onBack && <button className="ca-link ca-back" onClick={onBack}><ChevronLeft size={16} /> กลับ</button>}
       <header className="ca-hero">
         <InstrumentPhoto e={e} size={104} />
         <div className="ca-hero-main">
@@ -560,6 +621,34 @@ function InstrumentPage({ instrument: e, rounds, onBack, onOpenVerify,
           {!guest && onOpenVerify && <button className="ca-btn" onClick={onOpenVerify}><ShieldCheck size={15} /> รอบสอบเทียบและทวนสอบ ({rounds.length})</button>}
         </div>
       </header>
+      {!guest && (
+        <div className="ca-hub">
+          <div className="ca-hub-item">
+            <div className="ca-small ca-muted">สอบเทียบ / ทวนสอบล่าสุด</div>
+            {latest ? (<>
+              <div className="ca-strong">{fmtDate(latest.calibrationDate)} · {latest.certificateNo || "–"}</div>
+              <div className="ca-row ca-wrap" style={{ gap: 8 }}>
+                <Pill tone={latestSt ? latestSt.tone : "grey"}>{latestSt ? latestSt.label : "ไม่บังคับทวนสอบ"}</Pill>
+                {latest.verification
+                  ? <button className="ca-link" onClick={() => onOpenRound?.(latest.key)}>ดูผลและ LF-068 ›</button>
+                  : <button className="ca-link" onClick={() => onEditRound?.(latest.key)}>กรอกผลทวนสอบ ›</button>}
+              </div>
+            </>) : <div className="ca-row ca-wrap" style={{ gap: 8 }}><span className="ca-muted">ยังไม่มีรอบสอบเทียบ</span><button className="ca-link" onClick={onOpenVerify}>บันทึกรอบแรก ›</button></div>}
+          </div>
+          {hasDaily && (
+            <div className="ca-hub-item">
+              <div className="ca-small ca-muted">Daily check วันนี้</div>
+              <div className="ca-strong">{dailyToday ? `บันทึกแล้ว ${dailyToday} ครั้ง` : "ยังไม่ได้บันทึก"}</div>
+              <button className="ca-link" onClick={() => setTab("daily")}>{dailyToday ? "ดูบันทึก ›" : "บันทึก Daily check ›"}</button>
+            </div>
+          )}
+          <div className="ca-hub-item">
+            <div className="ca-small ca-muted">Intermediate check</div>
+            <div className="ca-strong">{myIc.length ? `ล่าสุด ${fmtDate([...myIc].sort((a, b) => (b.checkDate || "").localeCompare(a.checkDate || ""))[0].checkDate)}` : "ยังไม่มีบันทึก"}</div>
+            <button className="ca-link" onClick={() => setTab("ic")}>ดู / บันทึก ›</button>
+          </div>
+        </div>
+      )}
       <div className="ca-tabs" role="tablist">
         {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
       </div>
@@ -1090,6 +1179,9 @@ div.ca-tl{cursor:default}.ca-tl.on{background:#E3EFFA}
 .ca-codecell{gap:10px;white-space:nowrap}.ca-codecell .ca-photo{border-radius:8px}
 .ca-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 20px;margin:0}.ca-dl div{border-bottom:1px solid #EEF3F8;padding-bottom:6px}
 .ca-dl dt{font-size:12.5px;color:var(--muted)}.ca-dl dd{margin:2px 0 0;font-size:14.5px;word-break:break-word}
+.ca-hub{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.ca-hub-item{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 16px;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.ca-hub-item .ca-link{min-height:32px;padding:2px 0}
 .ca-hide-sm{}
 @media (max-width:640px){.ca-hide-sm{display:none}.ca-pill{white-space:normal}}
 @media (max-width:760px){.ca-side{border-right:none;border-bottom:1px solid var(--line);flex-direction:row;flex-wrap:wrap;padding:10px}.ca-brand{padding:0 8px 0 0}.ca-nav-group,.ca-side-foot{display:none}.ca-main{padding:16px 12px 64px}.ca-steps{grid-template-columns:1fr}.ca-span2{grid-column:auto}}
