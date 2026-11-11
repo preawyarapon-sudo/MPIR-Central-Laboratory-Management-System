@@ -2759,7 +2759,7 @@ function EquipmentForm({ item, equipment = [], groupOptions = [], onCancel, onSa
         <Field label="Version ซอฟต์แวร์/เฟิร์มแวร์ (ถ้ามี)"><input style={S.input} value={f.softwareVersion || ""} onChange={set("softwareVersion")} placeholder="เช่น ND v2.1, Firmware 1.04" /></Field>
         <Field label="รอบบำรุงรักษา (เดือน)"><input type="number" min="0" style={S.input} value={f.maintenanceIntervalMonths || ""} onChange={set("maintenanceIntervalMonths")} placeholder="เช่น 6" /></Field>
         <Field label="แผนบำรุงรักษา"><input style={S.input} value={f.maintenancePlan || ""} onChange={set("maintenancePlan")} placeholder="เช่น ทำความสะอาดเลนส์ทุก 6 เดือน, เปลี่ยนหลอดตามคู่มือ" /></Field>
-        <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder='เช่น เครื่องชั่ง, pH Meter, EC Meter, Polarimeter, Oven, เครื่องควบคุมความชื้น, Cooling Bath, Refractometer, Glass Thermometer' /></Field>
+        <Field label="ประเภท"><input style={S.input} value={f.type} onChange={set("type")} placeholder='เช่น เครื่องชั่ง, pH Meter, EC Meter, Polarimeter, Oven, เครื่องควบคุมความชื้น, Cooling Bath, Refractometer, Glass Thermometer, สภาพแวดล้อมห้อง' /></Field>
         {f.type === "Polarimeter" && (
           <>
             <Field label="แผ่นควอตซ์มาตรฐาน (Quartz Control Plate No.)">
@@ -3134,7 +3134,7 @@ function EquipmentDetail({ item, certificates = [], activities, dailyChecks = []
   const isCoolingBath = item.type === "Cooling Bath";
   const isRefractometer = item.type === "Refractometer";
   const isGlassThermometer = item.type === "Glass Thermometer";
-  const isMeter = isPhMeter || isEcMeter || isPolarimeter || isOven || isHumidity || isCoolingBath || isRefractometer || isGlassThermometer;
+  const isMeter = isPhMeter || isEcMeter || isPolarimeter || isOven || isHumidity || isCoolingBath || isRefractometer || isGlassThermometer || item.type === ROOM_ENV_TYPE;
   const showDailyCheckBtn = item.type === "เครื่องชั่ง" || isMeter;
   const days = daysUntil(item.nextDue);
   const st = statusOf(days);
@@ -3800,6 +3800,32 @@ function computeRefractometerResult(equip, reading) {
     pass: (hasRange && hasRead) ? (read >= min && read <= max) : null,
   };
 }
+/* ================= ROOM ENVIRONMENT DAILY CHECK ================= */
+// "สภาพแวดล้อมห้อง": the room's temperature and %RH read once a day (only these two
+// values, no pre-use checklist). Default criteria 20 ± 2 °C and 50 ± 2 %RH;
+// a room's equipment record can override them (roomTempMin/Max,
+// roomRhMin/Max) if a different room needs other limits.
+const ROOM_ENV_TYPE = "สภาพแวดล้อมห้อง";
+const ROOM_ENV_DEFAULT = { tempStd: 20, tempTol: 2, rhStd: 50, rhTol: 2 };
+function roomEnvLimits(equip) {
+  const n = (v) => (v === "" || v === undefined || v === null || isNaN(Number(v)) ? null : Number(v));
+  const d = ROOM_ENV_DEFAULT;
+  return {
+    tempMin: n(equip?.roomTempMin) ?? d.tempStd - d.tempTol, tempMax: n(equip?.roomTempMax) ?? d.tempStd + d.tempTol,
+    rhMin: n(equip?.roomRhMin) ?? d.rhStd - d.rhTol, rhMax: n(equip?.roomRhMax) ?? d.rhStd + d.rhTol,
+  };
+}
+function computeRoomEnvResult(equip, tempReading, rhReading) {
+  const L = roomEnvLimits(equip);
+  const one = (raw, min, max, standard) => {
+    const v = Number(raw);
+    const has = raw !== "" && raw !== undefined && raw !== null && !isNaN(v);
+    return { standard, min, max, reading: has ? v : null, pass: has ? (v >= min && v <= max) : null };
+  };
+  const temp = one(tempReading, L.tempMin, L.tempMax, (L.tempMin + L.tempMax) / 2);
+  const rh = one(rhReading, L.rhMin, L.rhMax, (L.rhMin + L.rhMax) / 2);
+  return { temp, rh, pass: temp.pass === null || rh.pass === null ? null : (temp.pass && rh.pass) };
+}
 /* ================= GLASS THERMOMETER DAILY CHECK ================= */
 // Simple condition checklist — no numeric reading, just confirming the
 // thermometer is intact and its mercury/alcohol column reads normally.
@@ -3900,6 +3926,15 @@ function CheckPointsMini({ c }) {
       </span>
     );
   }
+  if (c.roomEnvResult) {
+    const r = c.roomEnvResult;
+    const bit = (x, u) => (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: x?.pass === false ? "var(--red)" : "var(--ink)" }}>
+        {x?.pass ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}{x?.reading ?? "-"}{u}
+      </span>
+    );
+    return <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, fontFamily: "var(--font-mono)" }}>{bit(r.temp, "°C")}{bit(r.rh, "%RH")}</span>;
+  }
   // Fallback for any daily-check shape without a dedicated mini-view above.
   if (c.result !== undefined && c.result !== null) {
     return (
@@ -3924,6 +3959,7 @@ function blankMeterCheckEntry(equipmentId) {
     humidityReading: "",
     sucroseWeight: "", weightAfterWater: "", preparedBy: "", brixReading: "",
     coolingBathReading: "",
+    roomTempReading: "", roomRhReading: "",
     checkedBy: "", remarks: "",
     approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
   };
@@ -3941,7 +3977,8 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
   const isCoolingBath = equip?.type === "Cooling Bath";
   const isRefractometer = equip?.type === "Refractometer";
   const isGlassThermometer = equip?.type === "Glass Thermometer";
-  const preUseItems = isPolarimeter ? POLARIMETER_PREUSE_ITEMS
+  const isRoomEnv = equip?.type === ROOM_ENV_TYPE;
+  const preUseItems = isRoomEnv ? [] : isPolarimeter ? POLARIMETER_PREUSE_ITEMS
     : isOven ? OVEN_PREUSE_ITEMS
     : isHumidity ? HUMIDITY_PREUSE_ITEMS
     : isCoolingBath ? COOLING_BATH_PREUSE_ITEMS
@@ -3960,6 +3997,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
   const refractometerResult = isRefractometer ? computeRefractometerResult(criteriaAsOf(equip, f.date || f.checkDate || ""), f.brixReading) : null;
   const coolingBathResult = isCoolingBath ? computeCoolingBathTempResult(equip, f.coolingBathReading) : null;
   const humidityResult = isHumidity ? computeHumidityResult(equip, f.humidityReading) : null;
+  const roomEnvResult = isRoomEnv ? computeRoomEnvResult(equip, f.roomTempReading, f.roomRhReading) : null;
   // Link back to the calibration record: warn when the instrument is past its
   // calibration due date or its newest certificate failed the Sheet 03 check.
   const calSummary = latestCalibrationSummary(equip, certificates);
@@ -3971,6 +4009,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
     : isRefractometer ? refractometerResult.reading !== null
     : isCoolingBath ? coolingBathResult.reading !== null
     : isHumidity ? humidityResult.reading !== null
+    : isRoomEnv ? (roomEnvResult.temp.reading !== null && roomEnvResult.rh.reading !== null)
     : isEc ? (ecResult.standard !== null && ecResult.reading !== null)
     : true;
   const preUseChosen = meterPreUseChosen(f.preUse, preUseItems);
@@ -3982,6 +4021,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
       : isRefractometer ? refractometerResult.pass
       : isCoolingBath ? coolingBathResult.pass
       : isHumidity ? humidityResult.pass
+      : isRoomEnv ? roomEnvResult.pass
       : isEc ? ecResult.pass
       : true));
   const canSave = readingsComplete && preUseChosen && f.checkedBy.trim().length > 0;
@@ -4098,6 +4138,23 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
               </div>
             </Field>
           </>
+        ) : isRoomEnv ? (
+          <>
+            <Field label="อุณหภูมิห้อง (°C)"><input type="number" step="any" inputMode="decimal" style={S.input} value={f.roomTempReading} onChange={set("roomTempReading")} placeholder="เช่น 20.5" /></Field>
+            <Field label="เกณฑ์อุณหภูมิ" plain><div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{`${roomEnvResult.temp.min} – ${roomEnvResult.temp.max} °C`}</div></Field>
+            <Field label="ผลอุณหภูมิ" plain><div style={{ ...S.input, display: "flex", alignItems: "center" }}>
+                {roomEnvResult.temp.pass === null ? <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                  : roomEnvResult.temp.pass ? <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--green)", fontSize: 12, fontWeight: 600 }}><CheckCircle2 size={13} /> ผ่าน</span>
+                  : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
+              </div></Field>
+            <Field label="ความชื้นสัมพัทธ์ (%RH)"><input type="number" step="any" inputMode="decimal" style={S.input} value={f.roomRhReading} onChange={set("roomRhReading")} placeholder="เช่น 50.2" /></Field>
+            <Field label="เกณฑ์ความชื้น" plain><div style={{ ...S.input, background: "#F5F8F7", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{`${roomEnvResult.rh.min} – ${roomEnvResult.rh.max} %RH`}</div></Field>
+            <Field label="ผลความชื้น" plain><div style={{ ...S.input, display: "flex", alignItems: "center" }}>
+                {roomEnvResult.rh.pass === null ? <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                  : roomEnvResult.rh.pass ? <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--green)", fontSize: 12, fontWeight: 600 }}><CheckCircle2 size={13} /> ผ่าน</span>
+                  : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
+              </div></Field>
+          </>
         ) : isHumidity ? (
           <>
             <Field label="ค่าความชื้นสัมพัทธ์จากหน้าจอเครื่อง (%RH)"><input type="number" step="any" style={S.input} value={f.humidityReading} onChange={set("humidityReading")} /></Field>
@@ -4181,13 +4238,13 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
         onCancel={onCancel}
         onSave={() => {
           const resetApproval = f.approved ? { approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "" } : {};
-          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity ? humidityResult : undefined, result, ...resetApproval });
+          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity ? humidityResult : undefined, roomEnvResult: isRoomEnv ? roomEnvResult : undefined, result, ...resetApproval });
         }}
         disabled={!canSave}
         extra={showApproveButton && (
           <button
             style={{ ...S.primaryBtn, background: "var(--green)", boxShadow: "none" }}
-            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity ? humidityResult : undefined, result })}
+            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity ? humidityResult : undefined, roomEnvResult: isRoomEnv ? roomEnvResult : undefined, result })}
           >
             <CheckCircle2 size={15} /> อนุมัติรายการนี้
           </button>
@@ -8736,7 +8793,7 @@ function InstrumentStatusCard({ instrument, certificates, intermediateChecks, da
 
 // ---- Shared by the "ตรวจเช็คเครื่องมือ" page and the calibration hub ----
 // Types that have a dedicated daily-check form.
-const DAILY_CHECK_TYPES = ["เครื่องชั่ง", "pH Meter", "EC Meter", "Polarimeter", "Oven", "เครื่องควบคุมความชื้น", "Cooling Bath", "Refractometer", "Glass Thermometer"];
+const DAILY_CHECK_TYPES = ["เครื่องชั่ง", "pH Meter", "EC Meter", "Polarimeter", "Oven", "เครื่องควบคุมความชื้น", "Cooling Bath", "Refractometer", "Glass Thermometer", "สภาพแวดล้อมห้อง"];
 const hasDailyForm = (e) => !!e && DAILY_CHECK_TYPES.includes(e.type);
 // New Intermediate check: carries the set-up over from the instrument's
 // previous check (or its Sheet 01 parameter/unit the first time); if a newer
@@ -8892,6 +8949,11 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
 // The one number that sums up a check, for the "ผลล่าสุด" card and the log.
 const CHECK_RESULT_UNIT = { refractometerResult: "°Brix", polarimeterResult: "°", ovenResult: "°C", coolingBathResult: "°C", humidityResult: "%RH", ecResult: "µS/cm" };
 function checkHeadline(c) {
+  if (c?.roomEnvResult) {
+    const r = c.roomEnvResult;
+    return { value: r.temp?.reading != null || r.rh?.reading != null ? `${r.temp?.reading ?? "-"} °C / ${r.rh?.reading ?? "-"} %RH` : null, unit: "",
+      ref: `ช่วงยอมรับ: ${r.temp?.min} – ${r.temp?.max} °C · ${r.rh?.min} – ${r.rh?.max} %RH`, pass: r.pass ?? c.result ?? null };
+  }
   for (const k of Object.keys(CHECK_RESULT_UNIT)) {
     if (!c?.[k]) continue;
     const r = c[k], unit = CHECK_RESULT_UNIT[k];
@@ -9092,90 +9154,6 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
   );
 }
 
-/* ---------- ข้อมูลทดลอง Daily check (กลุ่ม ISO) ----------
-   สร้างบันทึก Daily check ทดลองให้เครื่องมือกลุ่ม ISO ตามวันที่เดียวกับ
-   Refractometer (04 ก.ย. – 10 พ.ย. 2569) ค่าที่สุ่มอยู่ในเกณฑ์ของแต่ละเครื่อง
-   ทุกรายการติดธง isTestData และหมายเหตุ "ข้อมูลทดลอง" และไม่อนุมัติให้อัตโนมัติ
-   ลบออกทั้งหมดได้ด้วยปุ่ม "ลบข้อมูลทดลอง" */
-const TEST_DAILY_DATES = [
-  ["2026-09-04", "08:27"], ["2026-09-17", "07:51"], ["2026-10-01", "08:00"], ["2026-10-06", "07:52"],
-  ["2026-10-07", "09:31"], ["2026-10-16", "07:41"], ["2026-10-27", "08:33"], ["2026-11-03", "08:36"],
-  ["2026-11-04", "08:04"], ["2026-11-05", "09:23"], ["2026-11-06", "07:53"], ["2026-11-07", "08:41"],
-  ["2026-11-08", "08:43"], ["2026-11-10", "08:04"],
-];
-const TEST_DAILY_TYPES = ["Polarimeter", "Oven", "เครื่องชั่ง", "Cooling Bath", "เครื่องควบคุมความชื้น"];
-const TEST_DAILY_REMARK = "ข้อมูลทดลอง (สร้างอัตโนมัติ)";
-const isIsoGroup = (e) => /iso/i.test(resolveEquipGroup(e));
-// Seeded random so pressing the button again gives the same numbers.
-function testRand(seedStr) {
-  let h = 2166136261;
-  for (let i = 0; i < seedStr.length; i++) { h ^= seedStr.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return ((h >>> 0) % 100000) / 100000;
-}
-// Value near the middle of [min, max] (within ±35% of the half-width).
-function testValueIn(min, max, decimals, seed) {
-  const mid = (min + max) / 2, half = (max - min) / 2;
-  const v = mid + (testRand(seed) * 2 - 1) * half * 0.35;
-  return Math.min(max, Math.max(min, Number(v.toFixed(decimals)))).toFixed(decimals);
-}
-function addMinutes(hhmm, mins) {
-  const [h, m] = hhmm.split(":").map(Number);
-  const t = h * 60 + m + mins;
-  return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
-}
-// Returns { entries, skipped } — skipped lists instruments whose acceptance
-// range isn't set on the equipment record (can't make a passing value).
-function buildTestDailyChecks(equipment, dailyChecks, checkedByFallback) {
-  const targets = equipment.filter(e => isIsoGroup(e) && TEST_DAILY_TYPES.includes(e.type) && e.status !== "retired");
-  // Use the refractometer's checker on the same date, if there is one.
-  const refrIds = new Set(equipment.filter(e => e.type === "Refractometer").map(e => e.id));
-  const checkerOn = (date) => dailyChecks.find(c => refrIds.has(c.equipmentId) && c.date === date)?.checkedBy || checkedByFallback;
-  const entries = [], skipped = [];
-  targets.forEach((e, idx) => {
-    const rangeOf = {
-      Polarimeter: [e.quartzMin, e.quartzMax, 2],
-      Oven: [e.ovenMin, e.ovenMax, 1],
-      "Cooling Bath": [e.coolingBathMin, e.coolingBathMax, 2],
-      "เครื่องควบคุมความชื้น": [e.humidityMin, e.humidityMax, 1],
-    }[e.type];
-    if (rangeOf) {
-      const lo = Number(rangeOf[0]), hi = Number(rangeOf[1]);
-      if (rangeOf[0] === "" || rangeOf[0] == null || rangeOf[1] === "" || rangeOf[1] == null || isNaN(lo) || isNaN(hi)) {
-        skipped.push(`${e.code || e.name} (ยังไม่ได้ตั้งช่วงเกณฑ์)`); return;
-      }
-    }
-    TEST_DAILY_DATES.forEach(([date, time]) => {
-      if (dailyChecks.some(c => c.equipmentId === e.id && c.date === date)) return; // มีบันทึกวันนั้นแล้ว ไม่ทับ
-      const seed = `${e.id}|${date}`;
-      const base = {
-        id: uid(), equipmentId: e.id, date, time: addMinutes(time, 3 + idx * 2),
-        checkedBy: checkerOn(date), remarks: TEST_DAILY_REMARK, isTestData: true,
-        approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
-      };
-      if (e.type === "เครื่องชั่ง") {
-        const dec = /4\s*ตำแหน่ง/.test(e.name || "") ? 4 : 3;
-        const weights = Object.fromEntries(WEIGHT_GROUPS.map(g => [g.key, testValueIn(g.min, g.max, dec, `${seed}|${g.key}`)]));
-        const weightResults = computeWeightResults(weights);
-        entries.push({ ...base, condition: "ปกติ", level: "OK", clean: "OK", zero: "OK", weights, weightResults,
-          result: weightResults.every(r => r.pass) });
-        return;
-      }
-      const f = { ...blankMeterCheckEntry(e.id), ...base };
-      const items = e.type === "Polarimeter" ? POLARIMETER_PREUSE_ITEMS : e.type === "Oven" ? OVEN_PREUSE_ITEMS
-        : e.type === "Cooling Bath" ? COOLING_BATH_PREUSE_ITEMS : HUMIDITY_PREUSE_ITEMS;
-      f.preUse = { ...f.preUse, ...Object.fromEntries(items.map(i => [i.key, "OK"])) };
-      const [lo, hi, dec] = rangeOf;
-      const val = testValueIn(Number(lo), Number(hi), dec, seed);
-      if (e.type === "Polarimeter") { f.polarimeterReading = val; f.polarimeterResult = computePolarimeterResult(e, val); f.result = f.polarimeterResult.pass; }
-      if (e.type === "Oven") { f.ovenReading = val; f.ovenResult = computeOvenResult(e, val); f.result = f.ovenResult.pass; }
-      if (e.type === "Cooling Bath") { f.coolingBathReading = val; f.coolingBathResult = computeCoolingBathTempResult(e, val); f.result = f.coolingBathResult.pass; }
-      if (e.type === "เครื่องควบคุมความชื้น") { f.humidityReading = val; f.humidityResult = computeHumidityResult(e, val); f.result = f.humidityResult.pass; }
-      entries.push(f);
-    });
-  });
-  return { targets, entries, skipped };
-}
-
 function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, intermediateChecks = [], setIntermediateChecks = null, notify, initialCheckId, focusRequest = null, onBackToCalibration = null, guestMode = false, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const checkable = useMemo(() => equipment
     .filter(e => e.type !== "เครื่องปรับอากาศ" && (!guestMode || hasDailyForm(e)))
@@ -9279,31 +9257,6 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
         </button>
       )}
       <TabHeader title="ตรวจเช็คเครื่องมือ" sub={isMobile ? "" : "Daily check และ Intermediate check ระหว่างรอบสอบเทียบ รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที"} />
-      {!guestMode && canApprove && (() => {
-        const testCount = dailyChecks.filter(c => c.isTestData).length;
-        function addTestData() {
-          const { targets, entries, skipped } = buildTestDailyChecks(equipment, dailyChecks, currentDisplayName || currentUsername);
-          if (targets.length === 0) { notify("ไม่พบเครื่องมือกลุ่ม ISO (Polarimeter / Oven / เครื่องชั่ง / Cooling Bath / เครื่องควบคุมความชื้น) — ตรวจช่อง \"กลุ่ม\" ของเครื่องมือว่ามีคำว่า ISO", 7000); return; }
-          if (entries.length === 0) { notify(skipped.length ? `ไม่มีรายการให้เพิ่ม · ข้าม: ${skipped.join(", ")}` : "ทุกเครื่องมีบันทึกครบทุกวันที่แล้ว", 7000); return; }
-          const names = [...new Set(entries.map(x => { const e = equipment.find(q => q.id === x.equipmentId); return e ? `${e.code} ${e.name}` : x.equipmentId; }))];
-          if (!window.confirm(`สร้างข้อมูลทดลอง Daily check ${entries.length} รายการ (${TEST_DAILY_DATES.length} วัน: 04 ก.ย. – 10 พ.ย. 2569)\nให้เครื่อง:\n• ${names.join("\n• ")}${skipped.length ? `\n\nข้าม: ${skipped.join(", ")}` : ""}\n\nทุกรายการมีหมายเหตุ "ข้อมูลทดลอง" และยังไม่อนุมัติ`)) return;
-          setDailyChecks([...entries, ...dailyChecks]);
-          notify(`เพิ่มข้อมูลทดลอง ${entries.length} รายการแล้ว`, 5000);
-        }
-        function removeTestData() {
-          const n = dailyChecks.filter(c => c.isTestData && !c.approved).length;
-          if (!n) { notify("ข้อมูลทดลองที่เหลือถูกอนุมัติแล้ว ลบจากปุ่มนี้ไม่ได้", 6000); return; }
-          if (!window.confirm(`ลบข้อมูลทดลอง Daily check ${n} รายการ (เฉพาะที่ยังไม่อนุมัติ)?`)) return;
-          setDailyChecks(dailyChecks.filter(c => !(c.isTestData && !c.approved)));
-          notify(`ลบข้อมูลทดลอง ${n} รายการแล้ว`);
-        }
-        return (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 12px" }}>
-            <button style={S.smallBtn} onClick={addTestData}>สร้างข้อมูลทดลอง Daily check (กลุ่ม ISO)</button>
-            {testCount > 0 && <button style={S.smallBtn} onClick={removeTestData}>ลบข้อมูลทดลอง ({testCount})</button>}
-          </div>
-        );
-      })()}
 
       {checkable.length === 0 ? (
         <EmptyState text="ยังไม่มีเครื่องมือ — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่" />
@@ -9818,7 +9771,7 @@ function EquipmentGuestView({ equip, activities = [], dailyChecks = [], bookings
   const days = daysUntil(equip.nextDue);
   const st = statusOf(days);
   const isScale = equip.type === "เครื่องชั่ง";
-  const isMeter = equip.type === "pH Meter" || equip.type === "EC Meter" || equip.type === "Polarimeter" || equip.type === "Oven" || equip.type === "เครื่องควบคุมความชื้น" || equip.type === "Cooling Bath" || equip.type === "Refractometer" || equip.type === "Glass Thermometer";
+  const isMeter = equip.type === "pH Meter" || equip.type === "EC Meter" || equip.type === "Polarimeter" || equip.type === "Oven" || equip.type === "เครื่องควบคุมความชื้น" || equip.type === "Cooling Bath" || equip.type === "Refractometer" || equip.type === "Glass Thermometer" || equip.type === ROOM_ENV_TYPE;
   const bk = equipmentBookingSummary(equip.id, bookings);
   const typeLabel = { calibration: "สอบเทียบ", repair: "ซ่อม", request: "แจ้งซ่อม", other: "อื่นๆ" };
   const sortedDailyChecks = dailyChecks.slice().sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
@@ -13226,6 +13179,10 @@ function mpirDailyCheckPoints(c) {
   if (c.ovenResult) return [{ item: "Oven temperature", standard: c.ovenResult.standard, unit: "°C", reading: c.ovenResult.reading, pass: c.ovenResult.pass }];
   if (c.refractometerResult) return [{ item: "Refractometer (Brix)", standard: c.refractometerResult.standard, unit: "°Brix", reading: c.refractometerResult.reading, pass: c.refractometerResult.pass }];
   if (c.coolingBathResult) return [{ item: "Cooling Bath temperature", standard: c.coolingBathResult.standard, unit: "°C", reading: c.coolingBathResult.reading, pass: c.coolingBathResult.pass }];
+  if (c.roomEnvResult) return [
+    { item: "Room temperature", standard: c.roomEnvResult.temp?.standard, unit: "°C", reading: c.roomEnvResult.temp?.reading, pass: c.roomEnvResult.temp?.pass },
+    { item: "Room humidity", standard: c.roomEnvResult.rh?.standard, unit: "%RH", reading: c.roomEnvResult.rh?.reading, pass: c.roomEnvResult.rh?.pass },
+  ];
   if (c.humidityResult) return [{ item: "Humidity control", standard: c.humidityResult.standard, unit: "%RH", reading: c.humidityResult.reading, pass: c.humidityResult.pass }];
   return [{ item: "ตรวจสอบทั่วไป", standard: "", unit: "", reading: "", pass: c.result }];
 }
@@ -13640,6 +13597,7 @@ function dailyCheckSummaryText(c) {
   if (c.ovenResult) parts.push(`${c.ovenResult.reading ?? "-"}°C: ${c.ovenResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.refractometerResult) parts.push(`${c.refractometerResult.reading ?? "-"} °Brix: ${c.refractometerResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.coolingBathResult) parts.push(`เทอร์โมมิเตอร์ ${c.coolingBathResult.reading ?? "-"}°C: ${c.coolingBathResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
+  if (c.roomEnvResult) parts.push(`อุณหภูมิ ${c.roomEnvResult.temp?.reading ?? "-"}°C: ${c.roomEnvResult.temp?.pass ? "ผ่าน" : "ไม่ผ่าน"} / ความชื้น ${c.roomEnvResult.rh?.reading ?? "-"} %RH: ${c.roomEnvResult.rh?.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.humidityResult) parts.push(`${c.humidityResult.reading ?? "-"} %RH: ${c.humidityResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (parts.length === 0) parts.push(c.result ? "ผ่าน" : c.result === false ? "ไม่ผ่าน" : "-");
   if (c.remarks) parts.push(`หมายเหตุ: ${c.remarks}`);
