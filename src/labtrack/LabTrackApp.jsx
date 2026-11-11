@@ -3582,8 +3582,18 @@ function dailyCheckPasses(c) {
 // Given raw entry.weights ({ w10, w50, w200 } strings) computes deviation +
 // pass/fail for every weight group. Used both when editing (live preview)
 // and to freeze the result onto the saved entry.
-function computeWeightResults(weights) {
-  return WEIGHT_GROUPS.map(g => {
+// A scale's own equipment record can set a different ± (g) for its daily
+// check (weightTol, e.g. 0.001 for a 4-decimal balance); blank = ±0.01 g.
+function scaleWeightTol(scale) {
+  const t = Number(scale?.weightTol);
+  return scale?.weightTol !== "" && scale?.weightTol != null && !isNaN(t) && t > 0 ? t : null;
+}
+function weightGroupsFor(scale) {
+  const t = scaleWeightTol(scale);
+  return t == null ? WEIGHT_GROUPS : WEIGHT_GROUPS.map(g => ({ ...g, min: +(g.standard - t).toFixed(6), max: +(g.standard + t).toFixed(6) }));
+}
+function computeWeightResults(weights, scale = null) {
+  return weightGroupsFor(scale).map(g => {
     const raw = weights?.[g.key] ?? "";
     const num = Number(raw);
     const has = raw !== "" && !isNaN(num);
@@ -9521,7 +9531,8 @@ function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, 
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setWeight = (key) => (e) => setF({ ...f, weights: { ...f.weights, [key]: e.target.value } });
 
-  const weightRows = computeWeightResults(f.weights);
+  const weightRows = computeWeightResults(f.weights, scale);
+  const tolDec = Math.max(2, ((String(scaleWeightTol(scale) ?? "").split(".")[1]) || "").length);
   const allWeightsEntered = weightRows.every(r => r.reading !== null);
   const flagsChosen = f.condition && f.level && f.clean && f.zero;
   const result = (!flagsChosen || !allWeightsEntered) ? null
@@ -9576,7 +9587,7 @@ function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, 
             {weightRows.map(r => (
               <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr 0.9fr 0.7fr", gap: 0, alignItems: "center", padding: "7px 10px", borderTop: "1px solid var(--line)" }}>
                 <div style={{ fontSize: 12.5 }}>{r.label}</div>
-                <div style={{ fontSize: 11.5, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{r.min.toFixed(2)}–{r.max.toFixed(2)}</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{r.min.toFixed(tolDec)}–{r.max.toFixed(tolDec)}</div>
                 <input
                   type="number" step="any"
                   style={{ ...S.input, fontFamily: "var(--font-mono)", padding: "6px 8px" }}
