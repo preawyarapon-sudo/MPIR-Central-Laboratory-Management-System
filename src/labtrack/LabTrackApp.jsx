@@ -9092,6 +9092,90 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
   );
 }
 
+/* ---------- ข้อมูลทดลอง Daily check (กลุ่ม ISO) ----------
+   สร้างบันทึก Daily check ทดลองให้เครื่องมือกลุ่ม ISO ตามวันที่เดียวกับ
+   Refractometer (04 ก.ย. – 10 พ.ย. 2569) ค่าที่สุ่มอยู่ในเกณฑ์ของแต่ละเครื่อง
+   ทุกรายการติดธง isTestData และหมายเหตุ "ข้อมูลทดลอง" และไม่อนุมัติให้อัตโนมัติ
+   ลบออกทั้งหมดได้ด้วยปุ่ม "ลบข้อมูลทดลอง" */
+const TEST_DAILY_DATES = [
+  ["2026-09-04", "08:27"], ["2026-09-17", "07:51"], ["2026-10-01", "08:00"], ["2026-10-06", "07:52"],
+  ["2026-10-07", "09:31"], ["2026-10-16", "07:41"], ["2026-10-27", "08:33"], ["2026-11-03", "08:36"],
+  ["2026-11-04", "08:04"], ["2026-11-05", "09:23"], ["2026-11-06", "07:53"], ["2026-11-07", "08:41"],
+  ["2026-11-08", "08:43"], ["2026-11-10", "08:04"],
+];
+const TEST_DAILY_TYPES = ["Polarimeter", "Oven", "เครื่องชั่ง", "Cooling Bath", "เครื่องควบคุมความชื้น"];
+const TEST_DAILY_REMARK = "ข้อมูลทดลอง (สร้างอัตโนมัติ)";
+const isIsoGroup = (e) => /iso/i.test(resolveEquipGroup(e));
+// Seeded random so pressing the button again gives the same numbers.
+function testRand(seedStr) {
+  let h = 2166136261;
+  for (let i = 0; i < seedStr.length; i++) { h ^= seedStr.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return ((h >>> 0) % 100000) / 100000;
+}
+// Value near the middle of [min, max] (within ±35% of the half-width).
+function testValueIn(min, max, decimals, seed) {
+  const mid = (min + max) / 2, half = (max - min) / 2;
+  const v = mid + (testRand(seed) * 2 - 1) * half * 0.35;
+  return Math.min(max, Math.max(min, Number(v.toFixed(decimals)))).toFixed(decimals);
+}
+function addMinutes(hhmm, mins) {
+  const [h, m] = hhmm.split(":").map(Number);
+  const t = h * 60 + m + mins;
+  return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+// Returns { entries, skipped } — skipped lists instruments whose acceptance
+// range isn't set on the equipment record (can't make a passing value).
+function buildTestDailyChecks(equipment, dailyChecks, checkedByFallback) {
+  const targets = equipment.filter(e => isIsoGroup(e) && TEST_DAILY_TYPES.includes(e.type) && e.status !== "retired");
+  // Use the refractometer's checker on the same date, if there is one.
+  const refrIds = new Set(equipment.filter(e => e.type === "Refractometer").map(e => e.id));
+  const checkerOn = (date) => dailyChecks.find(c => refrIds.has(c.equipmentId) && c.date === date)?.checkedBy || checkedByFallback;
+  const entries = [], skipped = [];
+  targets.forEach((e, idx) => {
+    const rangeOf = {
+      Polarimeter: [e.quartzMin, e.quartzMax, 2],
+      Oven: [e.ovenMin, e.ovenMax, 1],
+      "Cooling Bath": [e.coolingBathMin, e.coolingBathMax, 2],
+      "เครื่องควบคุมความชื้น": [e.humidityMin, e.humidityMax, 1],
+    }[e.type];
+    if (rangeOf) {
+      const lo = Number(rangeOf[0]), hi = Number(rangeOf[1]);
+      if (rangeOf[0] === "" || rangeOf[0] == null || rangeOf[1] === "" || rangeOf[1] == null || isNaN(lo) || isNaN(hi)) {
+        skipped.push(`${e.code || e.name} (ยังไม่ได้ตั้งช่วงเกณฑ์)`); return;
+      }
+    }
+    TEST_DAILY_DATES.forEach(([date, time]) => {
+      if (dailyChecks.some(c => c.equipmentId === e.id && c.date === date)) return; // มีบันทึกวันนั้นแล้ว ไม่ทับ
+      const seed = `${e.id}|${date}`;
+      const base = {
+        id: uid(), equipmentId: e.id, date, time: addMinutes(time, 3 + idx * 2),
+        checkedBy: checkerOn(date), remarks: TEST_DAILY_REMARK, isTestData: true,
+        approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "",
+      };
+      if (e.type === "เครื่องชั่ง") {
+        const dec = /4\s*ตำแหน่ง/.test(e.name || "") ? 4 : 3;
+        const weights = Object.fromEntries(WEIGHT_GROUPS.map(g => [g.key, testValueIn(g.min, g.max, dec, `${seed}|${g.key}`)]));
+        const weightResults = computeWeightResults(weights);
+        entries.push({ ...base, condition: "ปกติ", level: "OK", clean: "OK", zero: "OK", weights, weightResults,
+          result: weightResults.every(r => r.pass) });
+        return;
+      }
+      const f = { ...blankMeterCheckEntry(e.id), ...base };
+      const items = e.type === "Polarimeter" ? POLARIMETER_PREUSE_ITEMS : e.type === "Oven" ? OVEN_PREUSE_ITEMS
+        : e.type === "Cooling Bath" ? COOLING_BATH_PREUSE_ITEMS : HUMIDITY_PREUSE_ITEMS;
+      f.preUse = { ...f.preUse, ...Object.fromEntries(items.map(i => [i.key, "OK"])) };
+      const [lo, hi, dec] = rangeOf;
+      const val = testValueIn(Number(lo), Number(hi), dec, seed);
+      if (e.type === "Polarimeter") { f.polarimeterReading = val; f.polarimeterResult = computePolarimeterResult(e, val); f.result = f.polarimeterResult.pass; }
+      if (e.type === "Oven") { f.ovenReading = val; f.ovenResult = computeOvenResult(e, val); f.result = f.ovenResult.pass; }
+      if (e.type === "Cooling Bath") { f.coolingBathReading = val; f.coolingBathResult = computeCoolingBathTempResult(e, val); f.result = f.coolingBathResult.pass; }
+      if (e.type === "เครื่องควบคุมความชื้น") { f.humidityReading = val; f.humidityResult = computeHumidityResult(e, val); f.result = f.humidityResult.pass; }
+      entries.push(f);
+    });
+  });
+  return { targets, entries, skipped };
+}
+
 function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, intermediateChecks = [], setIntermediateChecks = null, notify, initialCheckId, focusRequest = null, onBackToCalibration = null, guestMode = false, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const checkable = useMemo(() => equipment
     .filter(e => e.type !== "เครื่องปรับอากาศ" && (!guestMode || hasDailyForm(e)))
@@ -9195,6 +9279,31 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
         </button>
       )}
       <TabHeader title="ตรวจเช็คเครื่องมือ" sub={isMobile ? "" : "Daily check และ Intermediate check ระหว่างรอบสอบเทียบ รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที"} />
+      {!guestMode && canApprove && (() => {
+        const testCount = dailyChecks.filter(c => c.isTestData).length;
+        function addTestData() {
+          const { targets, entries, skipped } = buildTestDailyChecks(equipment, dailyChecks, currentDisplayName || currentUsername);
+          if (targets.length === 0) { notify("ไม่พบเครื่องมือกลุ่ม ISO (Polarimeter / Oven / เครื่องชั่ง / Cooling Bath / เครื่องควบคุมความชื้น) — ตรวจช่อง \"กลุ่ม\" ของเครื่องมือว่ามีคำว่า ISO", 7000); return; }
+          if (entries.length === 0) { notify(skipped.length ? `ไม่มีรายการให้เพิ่ม · ข้าม: ${skipped.join(", ")}` : "ทุกเครื่องมีบันทึกครบทุกวันที่แล้ว", 7000); return; }
+          const names = [...new Set(entries.map(x => { const e = equipment.find(q => q.id === x.equipmentId); return e ? `${e.code} ${e.name}` : x.equipmentId; }))];
+          if (!window.confirm(`สร้างข้อมูลทดลอง Daily check ${entries.length} รายการ (${TEST_DAILY_DATES.length} วัน: 04 ก.ย. – 10 พ.ย. 2569)\nให้เครื่อง:\n• ${names.join("\n• ")}${skipped.length ? `\n\nข้าม: ${skipped.join(", ")}` : ""}\n\nทุกรายการมีหมายเหตุ "ข้อมูลทดลอง" และยังไม่อนุมัติ`)) return;
+          setDailyChecks([...entries, ...dailyChecks]);
+          notify(`เพิ่มข้อมูลทดลอง ${entries.length} รายการแล้ว`, 5000);
+        }
+        function removeTestData() {
+          const n = dailyChecks.filter(c => c.isTestData && !c.approved).length;
+          if (!n) { notify("ข้อมูลทดลองที่เหลือถูกอนุมัติแล้ว ลบจากปุ่มนี้ไม่ได้", 6000); return; }
+          if (!window.confirm(`ลบข้อมูลทดลอง Daily check ${n} รายการ (เฉพาะที่ยังไม่อนุมัติ)?`)) return;
+          setDailyChecks(dailyChecks.filter(c => !(c.isTestData && !c.approved)));
+          notify(`ลบข้อมูลทดลอง ${n} รายการแล้ว`);
+        }
+        return (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 12px" }}>
+            <button style={S.smallBtn} onClick={addTestData}>สร้างข้อมูลทดลอง Daily check (กลุ่ม ISO)</button>
+            {testCount > 0 && <button style={S.smallBtn} onClick={removeTestData}>ลบข้อมูลทดลอง ({testCount})</button>}
+          </div>
+        );
+      })()}
 
       {checkable.length === 0 ? (
         <EmptyState text="ยังไม่มีเครื่องมือ — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่" />
