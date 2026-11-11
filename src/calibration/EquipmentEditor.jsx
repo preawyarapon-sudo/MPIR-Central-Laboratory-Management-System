@@ -9,7 +9,7 @@ import { toDisplayImageUrl, driveFileId, isDriveFolderUrl, resolveEquipGroup, EQ
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 export const STATUS_LABEL = { active: "ใช้งานอยู่", maintenance: "ซ่อมบำรุง / งดใช้ชั่วคราว", inactive: "ปิดใช้งาน" };
-const TYPES = ["เครื่องชั่ง", "Refractometer", "Polarimeter", "Oven", "Cooling Bath", "เครื่องควบคุมความชื้น", "Glass Thermometer", "pH Meter", "EC Meter", "ตุ้มน้ำหนักมาตรฐาน", "เครื่องปรับอากาศ"];
+const TYPES = ["เครื่องชั่ง", "Refractometer", "Polarimeter", "Oven", "Cooling Bath", "เครื่องควบคุมความชื้น", "Glass Thermometer", "pH Meter", "EC Meter", "ตุ้มน้ำหนักมาตรฐาน", "เครื่องปรับอากาศ", "สภาพแวดล้อมห้อง"];
 const TOL_TYPES = [["absolute", "ค่าคงที่ (±)"], ["% of reading", "% ของค่าที่อ่าน"], ["% of full scale", "% ของเต็มสเกล"]];
 
 // Field layout shared by the editor and the read-only view.
@@ -46,7 +46,7 @@ const SECTIONS = [
     { k: "maintenanceIntervalMonths", l: "รอบบำรุงรักษา (เดือน)", t: "num" },
     { k: "maintenancePlan", l: "แผนบำรุงรักษา", wide: true },
   ] },
-  { title: "เกณฑ์ Daily check เฉพาะประเภท", when: (e) => ["Polarimeter", "Oven", "Cooling Bath", "เครื่องควบคุมความชื้น"].includes(e.type), fields: [
+  { title: "เกณฑ์ Daily check เฉพาะประเภท", when: (e) => ["Polarimeter", "Oven", "Cooling Bath", "เครื่องควบคุมความชื้น", "สภาพแวดล้อมห้อง"].includes(e.type), fields: [
     { k: "quartzNo", l: "แผ่นควอตซ์มาตรฐาน (No.)", when: (e) => e.type === "Polarimeter" },
     { k: "wavelengthNm", l: "ความยาวคลื่น (nm)", when: (e) => e.type === "Polarimeter" },
     { k: "quartzMin", l: "ค่าควอตซ์ต่ำสุด (°Z)", t: "num", when: (e) => e.type === "Polarimeter" },
@@ -57,6 +57,10 @@ const SECTIONS = [
     { k: "coolingBathMax", l: "อุณหภูมิสูงสุด (°C)", t: "num", when: (e) => e.type === "Cooling Bath" },
     { k: "humidityMin", l: "ความชื้นต่ำสุด (%RH)", t: "num", when: (e) => e.type === "เครื่องควบคุมความชื้น" },
     { k: "humidityMax", l: "ความชื้นสูงสุด (%RH)", t: "num", when: (e) => e.type === "เครื่องควบคุมความชื้น" },
+    { k: "roomTempMin", l: "อุณหภูมิห้องต่ำสุด (°C)", t: "num", ph: "เว้นว่าง = 18 (20 ± 2)", when: (e) => e.type === "สภาพแวดล้อมห้อง" },
+    { k: "roomTempMax", l: "อุณหภูมิห้องสูงสุด (°C)", t: "num", ph: "เว้นว่าง = 22 (20 ± 2)", when: (e) => e.type === "สภาพแวดล้อมห้อง" },
+    { k: "roomRhMin", l: "ความชื้นห้องต่ำสุด (%RH)", t: "num", ph: "เว้นว่าง = 48 (50 ± 2)", when: (e) => e.type === "สภาพแวดล้อมห้อง" },
+    { k: "roomRhMax", l: "ความชื้นห้องสูงสุด (%RH)", t: "num", ph: "เว้นว่าง = 52 (50 ± 2)", when: (e) => e.type === "สภาพแวดล้อมห้อง" },
   ] },
 ];
 
