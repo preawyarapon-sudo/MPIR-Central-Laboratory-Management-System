@@ -46,7 +46,8 @@ const SECTIONS = [
     { k: "maintenanceIntervalMonths", l: "รอบบำรุงรักษา (เดือน)", t: "num" },
     { k: "maintenancePlan", l: "แผนบำรุงรักษา", wide: true },
   ] },
-  { title: "เกณฑ์ Daily check เฉพาะประเภท", when: (e) => ["Polarimeter", "Oven", "Cooling Bath", "เครื่องควบคุมความชื้น", "สภาพแวดล้อมห้อง"].includes(e.type), fields: [
+  { title: "เกณฑ์ Daily check เฉพาะประเภท", when: (e) => ["Polarimeter", "Oven", "Cooling Bath", "เครื่องควบคุมความชื้น", "สภาพแวดล้อมห้อง", "เครื่องชั่ง"].includes(e.type), fields: [
+    { k: "weightTol", l: "เกณฑ์ตุ้มน้ำหนัก Daily check ± (g)", t: "num", ph: "เว้นว่าง = ±0.01 · เช่น 0.001", when: (e) => e.type === "เครื่องชั่ง" },
     { k: "quartzNo", l: "แผ่นควอตซ์มาตรฐาน (No.)", when: (e) => e.type === "Polarimeter" },
     { k: "wavelengthNm", l: "ความยาวคลื่น (nm)", when: (e) => e.type === "Polarimeter" },
     { k: "quartzMin", l: "ค่าควอตซ์ต่ำสุด (°Z)", t: "num", when: (e) => e.type === "Polarimeter" },
