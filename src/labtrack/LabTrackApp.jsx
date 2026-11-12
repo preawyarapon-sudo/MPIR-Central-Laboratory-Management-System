@@ -7475,7 +7475,7 @@ function CertificateRoundPanel({ instrument, range, certificates, dailyChecks, i
   );
 }
 
-// ---------- Post-calibration verification (MPIR-LF-068 Rev.01) ----------
+// ---------- Post-calibration verification (MPIR-LF-068 Rev.02) ----------
 // ISO/IEC 17025 ข้อ 6.4.4 / MPIR-LP-002 ข้อ 6.3.3: before an instrument goes
 // back into use after calibration/repair, the certificate is reviewed against
 // the acceptance criteria (section 3) and the lab measures a reference
@@ -7542,7 +7542,7 @@ function VerificationForm({ instrument, cert, row, onCancel, onSave }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(18,37,59,0.45)", zIndex: 2000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={onCancel}>
       <div style={{ ...S.modalBox, maxWidth: 980, padding: 20, marginTop: 20 }} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>ทวนสอบเครื่องมือก่อนนำกลับมาใช้งาน</div>
-        <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 12 }}>{instrument.code} — {instrument.name} · ใบรับรอง {cert.certificateNo || "-"} ({fmtDate(cert.calibrationDate)}) · บันทึกตาม MPIR-LF-068 Rev.01</div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 12 }}>{instrument.code} — {instrument.name} · ใบรับรอง {cert.certificateNo || "-"} ({fmtDate(cert.calibrationDate)}) · บันทึกตาม MPIR-LF-068 Rev.02</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "8px 14px" }}>
           <Field label="เหตุที่ทวนสอบ"><select style={S.input} value={f.reason} onChange={set("reason")}>{VERIFY_REASONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
           <Field label="วันที่รับเครื่องคืน"><input type="date" style={S.input} value={f.returnedDate || ""} onChange={set("returnedDate")} /></Field>
@@ -7630,7 +7630,7 @@ h3{margin:7pt 0 3pt;font-size:10.4pt}h3 b{background:#1F4E6E;color:#fff;border-r
 .l{background:#F4F7F9;font-weight:600;width:30mm;font-size:8.8pt}.n td{text-align:center}.o{margin-right:10pt;white-space:nowrap}
 .p{color:#1E7A4A;font-weight:700}.f{color:#B42318;font-weight:700}.note{font-size:8.2pt;color:#333}.sig td{height:40pt;vertical-align:bottom;text-align:center}
 .pb{page-break-before:always}.ft{margin-top:8pt;font-size:7.6pt;color:#444;border-top:.5pt solid #999;padding-top:2pt;display:flex;justify-content:space-between}</style></head><body>
-${[1, 2].map(pg => `<div class="${pg === 2 ? "pb" : ""}"><table class="hd"><tr><td class="brand" rowspan="2">MITR PHOL<br>Innovation &amp;<br>Research Center</td><td class="t" rowspan="2">รายงานผลการทวนสอบเครื่องมือ<small>${v.legacy ? "ข้อมูลจากรายงานเดิม MPIR-LF-068 Rev.00 คำนวณผลใหม่โดย LabTrack" : "Equipment Verification Report — ก่อนนำเข้าใช้งาน / นำกลับมาใช้งาน"}</small></td><td class="m">รหัสเอกสาร: <b>MPIR-LF-068</b> Rev.: <b>01</b></td></tr><tr><td class="m">หน้า ${pg} / 2 · เลขที่รายงาน: <b>${esc(v.reportNo || "-")}</b></td></tr></table>
+${[1, 2].map(pg => `<div class="${pg === 2 ? "pb" : ""}"><table class="hd"><tr><td class="brand" rowspan="2">MITR PHOL<br>Innovation &amp;<br>Research Center</td><td class="t" rowspan="2">รายงานผลการทวนสอบเครื่องมือ<small>${v.legacy ? "ข้อมูลจากรายงานเดิม MPIR-LF-068 Rev.00 คำนวณผลใหม่โดย LabTrack" : "Equipment Verification Report — ก่อนนำเข้าใช้งาน / นำกลับมาใช้งาน"}</small></td><td class="m">รหัสเอกสาร: <b>MPIR-LF-068</b> Rev.: <b>02</b></td></tr><tr><td class="m">หน้า ${pg} / 2 · เลขที่รายงาน: <b>${esc(v.reportNo || "-")}</b></td></tr></table>
 ${pg === 1 ? `<h3><b>1</b>ข้อมูลเครื่องมือ</h3><table><tr><td class="l">รหัสเครื่องมือ</td><td>${esc(instrument.code)}</td><td class="l">ชื่อเครื่องมือ</td><td>${esc(instrument.name)}</td></tr>
 <tr><td class="l">ยี่ห้อ / รุ่น</td><td>${esc([instrument.brand, instrument.model].filter(Boolean).join(" / "))}</td><td class="l">Serial No.</td><td>${esc(instrument.serialNo)}</td></tr>
 <tr><td class="l">ตำแหน่งที่ตั้ง</td><td>${esc(instrument.location)}</td><td class="l">ความละเอียด (d)</td><td>${esc(v.resolution)} ${unit}</td></tr>
@@ -7657,7 +7657,7 @@ ${pg === 1 ? `<h3><b>1</b>ข้อมูลเครื่องมือ</h3><
 <h3><b>6</b>ลงชื่อ</h3><table class="sig"><tr><th>ผู้ทวนสอบ</th><th>ผู้ประเมินผล (TM/QM)</th><th>ผู้อนุมัติให้ใช้งาน (Lab manager)</th></tr>
 <tr><td>${sign(v.verifiedBy, v.verifyDate)}</td><td>${legacy && !v.evaluatedBy ? "— (แบบฟอร์มเดิมไม่มีช่องนี้)" : sign(v.evaluatedBy, v.evaluationDate)}</td><td>${sign(v.approvedBy, v.approvalDate)}</td></tr></table>
 <div class="note" style="margin-top:3pt">ชื่อผู้ลงชื่อจากบัญชีผู้ใช้ในระบบ LabTrack ถือเป็นการลงนามรับรองบันทึก (MPIR-LP-002 ข้อ 6.7.2) · พิมพ์จากระบบเมื่อ ${esc(new Date().toLocaleString("th-TH"))}</div>`}
-<div class="ft"><span>อ้างอิง MPIR-LP-002 ข้อ 6.3.3, 6.4.3 · ISO/IEC 17025:2017 ข้อ 6.4.4 · บันทึกฉบับจริงอยู่ในระบบ LabTrack</span><span>MPIR-LF-068 Rev.01</span></div></div>`).join("")}
+<div class="ft"><span>อ้างอิง MPIR-LP-002 ข้อ 6.3.3, 6.4.3 · ISO/IEC 17025:2017 ข้อ 6.4.4 · บันทึกฉบับจริงอยู่ในระบบ LabTrack</span><span>MPIR-LF-068 Rev.02</span></div></div>`).join("")}
 <script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
   const w = window.open("", "_blank");
   if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return; }
@@ -9076,7 +9076,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
         {sorted.map(r => {
           const st = RESULT_STYLE[r.result];
           return (
-            <div key={r.key} onClick={() => onEdit(r)} style={{ background: "#fff", border: "1px solid var(--line)", borderLeft: `4px solid ${st.fg}`, borderRadius: 14, padding: "12px 12px 12px 14px", cursor: "pointer" }}>
+            <div key={r.key} onClick={() => onEdit && onEdit(r)} style={{ background: "#fff", border: "1px solid var(--line)", borderLeft: `4px solid ${st.fg}`, borderRadius: 14, padding: "12px 12px 12px 14px", cursor: onEdit ? "pointer" : "default" }}>
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14.5 }}>{fmtDate(r.date)}{r.time && <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12.5, marginLeft: 6 }}>{r.time}</span>}</div>
@@ -9099,8 +9099,8 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
                   <div style={{ marginTop: 6 }} onClick={e => e.stopPropagation()}>{approverCell(r, true)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-                  <button type="button" style={{ ...actBtn, width: 34, height: 34 }} title="แก้ไข" aria-label="แก้ไข" onClick={() => onEdit(r)}><Pencil size={14} /></button>
-                  <button type="button" style={{ ...actBtn, width: 34, height: 34 }} title="ลบ" aria-label="ลบ" onClick={() => askDelete(r)}><Trash2 size={14} /></button>
+                  {onEdit && <button type="button" style={{ ...actBtn, width: 34, height: 34 }} title="แก้ไข" aria-label="แก้ไข" onClick={() => onEdit(r)}><Pencil size={14} /></button>}
+                  {onDelete && <button type="button" style={{ ...actBtn, width: 34, height: 34 }} title="ลบ" aria-label="ลบ" onClick={() => askDelete(r)}><Trash2 size={14} /></button>}
                 </div>
               </div>
             </div>
@@ -9125,7 +9125,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
             {sorted.map(r => {
               const st = RESULT_STYLE[r.result];
               return (
-                <tr key={r.key} onClick={() => onEdit(r)} style={{ cursor: "pointer" }}>
+                <tr key={r.key} onClick={() => onEdit && onEdit(r)} style={{ cursor: onEdit ? "pointer" : "default" }}>
                   <td style={td}><div style={{ fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>{fmtDate(r.date)}</div>{r.time && <div style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 2 }}>{r.time}</div>}</td>
                   <td style={td}>{r.kind === "daily" ? pill("#EAF2FD", "#1D5FB8", "#BFD5F3", "Daily") : pill("#F3EEFB", "#6A43B5", "#D9CCF0", "Intermediate")}</td>
                   <td style={td}>
@@ -9145,8 +9145,8 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
                   <td style={td} onClick={e => e.stopPropagation()}>{approverCell(r)}</td>
                   <td style={td} onClick={e => e.stopPropagation()}>
                     <div style={{ display: "flex", gap: 8 }}>
-                      <button type="button" style={actBtn} title="แก้ไข" onClick={() => onEdit(r)}><Pencil size={15} /></button>
-                      <button type="button" style={actBtn} title="ลบ" onClick={() => askDelete(r)}><Trash2 size={15} /></button>
+                      {onEdit && <button type="button" style={actBtn} title="แก้ไข" onClick={() => onEdit(r)}><Pencil size={15} /></button>}
+                      {onDelete && <button type="button" style={actBtn} title="ลบ" onClick={() => askDelete(r)}><Trash2 size={15} /></button>}
                     </div>
                   </td>
                 </tr>
@@ -9213,12 +9213,14 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
   const editIsScale = editEquip?.type === "เครื่องชั่ง";
 
   function upsert(entry, message = "บันทึกผลการตรวจสอบแล้ว") {
+    if (guestMode && dailyChecks.some(c => c.id === entry.id)) { notify("แก้ไขรายการได้เฉพาะเจ้าหน้าที่ที่ล็อกอิน", 5000); return; }
     if (dailyChecks.find(c => c.id === entry.id)) setDailyChecks(dailyChecks.map(c => c.id === entry.id ? entry : c));
     else setDailyChecks([entry, ...dailyChecks]);
     notify(message);
     setEditing(null);
   }
   function remove(id) {
+    if (guestMode) { notify("ลบรายการได้เฉพาะเจ้าหน้าที่ที่ล็อกอิน", 5000); return; }
     const rec = dailyChecks.find(c => c.id === id);
     if (rec?.approved === true) { notify("ลบไม่ได้: Daily check ที่อนุมัติแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) ให้แก้ไขพร้อมระบุเหตุผลแทน", 6000); return; }
     if (!window.confirm("ลบบันทึก Daily check นี้หรือไม่?")) return;
@@ -9476,8 +9478,10 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
                 <CheckLogTable
                   key={equip.id}
                   rows={shown} unitLabel={unitLabel} mobile={M}
-                  onEdit={r => (r.kind === "daily" ? setEditing(r.rec) : canIc ? setEditingIc(r.rec) : null)}
-                  onDelete={r => (r.kind === "daily" ? remove(r.rec.id) : canIc ? removeIc(r.rec.id) : null)}
+                  // Guests (QR scan, no login) can only add new checks — editing
+                  // or deleting saved records needs a staff login.
+                  onEdit={guestMode ? null : r => (r.kind === "daily" ? setEditing(r.rec) : canIc ? setEditingIc(r.rec) : null)}
+                  onDelete={guestMode ? null : r => (r.kind === "daily" ? remove(r.rec.id) : canIc ? removeIc(r.rec.id) : null)}
                   emptyText={allRows.length ? `ไม่มีรายการในช่วง ${rg.label}` : "ยังไม่มีบันทึกการตรวจเช็คของเครื่องนี้"}
                   onShowAll={allRows.length && range !== "all" ? () => setRange("all") : null}
                   canApprove={canApprove && !guestMode} onApprove={approve}
