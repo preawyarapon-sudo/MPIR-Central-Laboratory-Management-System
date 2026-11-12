@@ -29,7 +29,10 @@ const SECTIONS = [
     { k: "measuredParameter", l: "พารามิเตอร์ที่วัด", ph: "เช่น Mass, Brix, Optical rotation" },
     { k: "calUnit", l: "หน่วย", ph: "เช่น g, %Brix, °Z, °C" },
     { k: "resolution", l: "ความละเอียด (d)", t: "num" },
-    { k: "workingRangeMin", l: "ช่วงใช้งาน — ต่ำสุด", t: "num" }, { k: "workingRangeMax", l: "ช่วงใช้งาน — สูงสุด", t: "num" },
+    // Working range is only needed when the criterion is "% of full scale"
+    // (calc.js reads workingRangeMax as the full scale); hidden otherwise.
+    { k: "workingRangeMin", l: "ช่วงใช้งาน — ต่ำสุด", t: "num", when: (e) => e.toleranceType === "% of full scale" },
+    { k: "workingRangeMax", l: "ช่วงใช้งาน — สูงสุด (Full scale)", t: "num", when: (e) => e.toleranceType === "% of full scale" },
     { k: "relatedTestMethod", l: "วิธีทดสอบที่เกี่ยวข้อง", ph: "เช่น MPIR-WI-002-06" },
     { k: "scopeOfUse", l: "ขอบข่ายการใช้งาน" },
   ] },
@@ -41,10 +44,8 @@ const SECTIONS = [
     { k: "basisOfCriteria", l: "ที่มาของเกณฑ์", ph: "เช่น ICUMSA GS5/7-1, คู่มือผู้ผลิต" },
     { k: "referenceDocument", l: "เอกสารอ้างอิงของเกณฑ์" },
   ] },
-  { title: "บำรุงรักษาและการตรวจระหว่างใช้", fields: [
+  { title: "การตรวจระหว่างใช้", fields: [
     { k: "checkFrequency", l: "ความถี่ Daily / Intermediate check", ph: "เช่น ทุกวันที่ใช้งาน" },
-    { k: "maintenanceIntervalMonths", l: "รอบบำรุงรักษา (เดือน)", t: "num" },
-    { k: "maintenancePlan", l: "แผนบำรุงรักษา", wide: true },
   ] },
   { title: "เกณฑ์ Daily check เฉพาะประเภท", when: (e) => ["Polarimeter", "Oven", "Cooling Bath", "เครื่องควบคุมความชื้น", "สภาพแวดล้อมห้อง", "เครื่องชั่ง"].includes(e.type), fields: [
     { k: "weightTol", l: "เกณฑ์ตุ้มน้ำหนัก Daily check ± (g)", t: "num", ph: "เว้นว่าง = ±0.01 · เช่น 0.001", when: (e) => e.type === "เครื่องชั่ง" },
