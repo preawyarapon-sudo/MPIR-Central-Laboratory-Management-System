@@ -712,16 +712,25 @@ function LogDownload({ kind, instrument: e, records, extra = null }) {
   const inMonth = records.filter(c => String((kind === "daily" ? c.date : c.checkDate) || "").startsWith(month));
   const [y, m] = month.split("-").map(Number);
   const monthLabel = month ? new Date(y, m - 1, 1).toLocaleDateString("th-TH", { month: "long", year: "numeric" }) : "";
+  // approvedAt is an ISO timestamp (UTC); show the approval day in local time.
+  const localDay = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return isNaN(d) ? String(iso).slice(0, 10) : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
   function download() {
     const sorted = inMonth.slice().sort((a, b) => ((kind === "daily" ? a.date + (a.time || "") : a.checkDate) || "").localeCompare((kind === "daily" ? b.date + (b.time || "") : b.checkDate) || ""));
     const rows = kind === "daily"
       ? sorted.flatMap(c => dailyCheckPoints(c).map((p, i) => ({ date: i === 0 ? c.date : "", time: i === 0 ? c.time || "" : "", item: p.item, standard: p.standard, unit: p.unit,
-          reading: p.reading, pass: p.pass, by: i === 0 ? c.checkedBy || "" : "", note: i === 0 ? c.remarks || "" : "" })))
+          reading: p.reading, pass: p.pass, by: i === 0 ? c.checkedBy || "" : "",
+          approvedBy: i === 0 && c.approved ? c.approvedByName || "" : "", approvedAt: i === 0 && c.approved ? localDay(c.approvedAt) : "",
+          note: i === 0 ? c.remarks || "" : "" })))
       : sorted.map(c => {
           const k = calcIntermediateCheck(c, e);
           return { date: c.checkDate, item: [c.parameter, c.checkItem].filter(Boolean).join(" · "), standard: c.referenceValue,
             mean: k.correctedMean != null ? k.correctedMean.toFixed(4) : "", bias: k.bias != null ? k.bias.toFixed(4) : "",
-            range: k.lal != null ? `${k.lal.toFixed(3)} – ${k.ual.toFixed(3)}` : "", result: k.result, by: c.checkedBy || "", note: c.remarks || "" };
+            range: k.lal != null ? `${k.lal.toFixed(3)} – ${k.ual.toFixed(3)}` : "", result: k.result, by: c.checkedBy || "",
+            approvedBy: c.approved ? c.approvedByName || "" : "", approvedAt: c.approved ? localDay(c.approvedAt) : "", note: c.remarks || "" };
         });
     printCheckLog({ instrument: e, monthLabel, kind, rows });
   }
