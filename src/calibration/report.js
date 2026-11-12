@@ -98,19 +98,22 @@ export function printLf068(round, instrument) {
 }
 
 /* ---------- monthly Daily / Intermediate check log (signed on paper) ---------- */
-// rows: [{ date, time, item, standard, unit, reading, pass, by, note }] for daily;
+// rows: [{ date, time, item, standard, unit, reading, pass, by, approvedBy, approvedAt, note }] for daily;
 // IC rows: [{ date, item, standard, mean, bias, range, result, by, note }].
 export function checkLogHtml({ instrument, monthLabel, kind, rows }) {
   const daily = kind === "daily";
   const title = daily ? "บันทึกการตรวจสอบเครื่องมือประจำวัน (Daily check)" : "บันทึกการตรวจสอบระหว่างใช้งาน (Intermediate check)";
   const head = daily
-    ? "<tr><th>วันที่</th><th>เวลา</th><th>รายการ</th><th>ค่ามาตรฐาน</th><th>ค่าที่อ่านได้</th><th>ผล</th><th>ผู้ตรวจ</th><th>หมายเหตุ</th></tr>"
-    : "<tr><th>วันที่</th><th>รายการ</th><th>ค่าอ้างอิง</th><th>ค่าเฉลี่ย (หลังแก้)</th><th>Bias</th><th>ช่วงยอมรับ</th><th>ผล</th><th>ผู้ตรวจ</th><th>หมายเหตุ</th></tr>";
+    ? "<tr><th>วันที่</th><th>เวลา</th><th>รายการ</th><th>ค่ามาตรฐาน</th><th>ค่าที่อ่านได้</th><th>ผล</th><th>ผู้ตรวจ</th><th>ผู้อนุมัติ</th><th>วันที่อนุมัติ</th><th>หมายเหตุ</th></tr>"
+    : "<tr><th>วันที่</th><th>รายการ</th><th>ค่าอ้างอิง</th><th>ค่าเฉลี่ย (หลังแก้)</th><th>Bias</th><th>ช่วงยอมรับ</th><th>ผล</th><th>ผู้ตรวจ</th><th>ผู้อนุมัติ</th><th>วันที่อนุมัติ</th><th>หมายเหตุ</th></tr>";
   const res = (ok, txt) => `<td class="${ok === false || txt === "FAIL" ? "f" : ok === true || txt === "PASS" ? "p" : ""}">${txt === "WARNING" ? "เฝ้าระวัง" : ok === true || txt === "PASS" ? "ผ่าน" : ok === false || txt === "FAIL" ? "ไม่ผ่าน" : "–"}</td>`;
+  // Approver + approval date come from the in-app approval (approvedByName /
+  // approvedAt); blank until the record is approved.
+  const appr = (r) => `<td>${esc(r.approvedBy || "")}</td><td>${r.approvedAt ? esc(fmtDate(r.approvedAt)) : ""}</td>`;
   const body = rows.length ? rows.map(r => daily
-    ? `<tr><td>${esc(fmtDate(r.date))}</td><td>${esc(r.time)}</td><td>${esc(r.item)}</td><td>${esc(r.standard ?? "")} ${esc(r.unit || "")}</td><td>${esc(r.reading ?? "")}</td>${res(r.pass)}<td>${esc(r.by)}</td><td>${esc(r.note)}</td></tr>`
-    : `<tr><td>${esc(fmtDate(r.date))}</td><td>${esc(r.item)}</td><td>${esc(r.standard ?? "")}</td><td>${esc(r.mean ?? "")}</td><td>${esc(r.bias ?? "")}</td><td>${esc(r.range ?? "")}</td>${res(null, r.result)}<td>${esc(r.by)}</td><td>${esc(r.note)}</td></tr>`).join("")
-    : `<tr><td colspan="9">ไม่มีบันทึกในเดือนนี้</td></tr>`;
+    ? `<tr><td>${esc(fmtDate(r.date))}</td><td>${esc(r.time)}</td><td>${esc(r.item)}</td><td>${esc(r.standard ?? "")} ${esc(r.unit || "")}</td><td>${esc(r.reading ?? "")}</td>${res(r.pass)}<td>${esc(r.by)}</td>${appr(r)}<td>${esc(r.note)}</td></tr>`
+    : `<tr><td>${esc(fmtDate(r.date))}</td><td>${esc(r.item)}</td><td>${esc(r.standard ?? "")}</td><td>${esc(r.mean ?? "")}</td><td>${esc(r.bias ?? "")}</td><td>${esc(r.range ?? "")}</td>${res(null, r.result)}<td>${esc(r.by)}</td>${appr(r)}<td>${esc(r.note)}</td></tr>`).join("")
+    : `<tr><td colspan="${daily ? 10 : 11}">ไม่มีบันทึกในเดือนนี้</td></tr>`;
   const nFail = rows.filter(r => r.pass === false || r.result === "FAIL").length;
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(instrument.code || instrument.name)} ${esc(monthLabel)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
@@ -124,8 +127,7 @@ table{border-collapse:collapse;width:100%}td,th{border:.6pt solid #222;padding:2
 <tr><td class="l">ยี่ห้อ / รุ่น / S/N</td><td>${esc([instrument.brand, instrument.model, instrument.serialNo && `S/N ${instrument.serialNo}`].filter(Boolean).join(" · "))}</td><td class="l">สรุป</td><td>${rows.length} รายการ · ไม่ผ่าน ${nFail}</td></tr></table>
 <table style="margin-top:6pt">${head}${body}</table>
 ${nFail ? `<div class="note">มีรายการไม่ผ่าน — ดำเนินการตาม MPIR-LP-012 และบันทึกเลขที่ NC ในหมายเหตุ</div>` : ""}
-<table class="sig"><tr><td><div class="line"></div>ผู้ทบทวน (TM/QM)<br>วันที่ ........./........./.........</td><td><div class="line"></div>ผู้อนุมัติ (Lab manager)<br>วันที่ ........./........./.........</td></tr></table>
-<div class="note">พิมพ์จากระบบ LabTrack เมื่อ ${esc(new Date().toLocaleString("th-TH"))} · ฉบับที่ลงนามเก็บตามระบบเอกสาร</div>
+<div class="note" style="margin-top:8pt">พิมพ์จากระบบ LabTrack เมื่อ ${esc(new Date().toLocaleString("th-TH"))} · การอนุมัติบันทึกในระบบ</div>
 <script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
 }
 export function printCheckLog(args) {
