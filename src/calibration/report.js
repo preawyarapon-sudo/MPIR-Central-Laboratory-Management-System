@@ -1,4 +1,4 @@
-// Printable MPIR-LF-068 Rev.01 (verification report). Opens a print window;
+// Printable MPIR-LF-068 Rev.02 (verification report). Opens a print window;
 // the browser's "Save as PDF" produces the file. Signature boxes are left
 // blank — the report is signed on paper and filed (lab decision).
 import { LOGO_DATA_URI } from "./logo.js";
@@ -15,7 +15,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<":
 // Same content and layout as the registered paper form (RDI-LF-068 Rev.00):
 // framed pages, "ชื่อเครื่องมือ", sections 1–6, calibration table (5.1),
 // verification readings R1–R10 (5.2), conclusion and two blank signatures.
-const LF068_DOC = { code: "MPIR-LF-068", rev: "01" };
+const LF068_DOC = { code: "MPIR-LF-068", rev: "02" };
 const longDate = (iso) => { if (!iso) return ""; const d = new Date(iso + "T00:00:00"); return isNaN(d) ? iso : d.toLocaleDateString("th-TH", { day: "numeric", month: "long", year: "numeric" }); };
 const REASON_TEXT = { new: "เพื่อตรวจสอบความใช้ได้ของเครื่องมือที่รับเข้ามาใหม่" };
 const REASON_DEFAULT = "เพื่อตรวจสอบความเบี่ยงเบนของเครื่องมือวัดเมื่อได้มีการนำเครื่องมือออกไปจากการควบคุม";
