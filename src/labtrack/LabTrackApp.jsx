@@ -9164,6 +9164,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
   );
 }
 
+const SHOW_DAILY_LIMITS = false;
 function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChecks, intermediateChecks = [], setIntermediateChecks = null, notify, initialCheckId, focusRequest = null, onBackToCalibration = null, guestMode = false, canApprove = false, currentUsername = "", currentDisplayName = "" }) {
   const checkable = useMemo(() => equipment
     .filter(e => e.type !== "เครื่องปรับอากาศ" && (!guestMode || hasDailyForm(e)))
@@ -9387,7 +9388,9 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
                       </div>
                     )}
                   </div>
-                  {lims && (
+                  {/* Warning / Action Limit box hidden from the Daily check page (per TM).
+                      Set SHOW_DAILY_LIMITS = true to bring it back. */}
+                  {SHOW_DAILY_LIMITS && lims && (
                     <div style={{ flex: M ? "1 1 100%" : "1 1 380px", background: "#FFF8EC", border: "1px solid #F6DDB0", borderRadius: M ? 12 : 14, padding: M ? "10px 10px" : "14px 18px", minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: M ? 12.5 : 13.5, fontWeight: 700, marginBottom: M ? 8 : 12 }}>
                         <AlertTriangle size={M ? 16 : 20} color="#D9941E" style={{ flexShrink: 0 }} />
