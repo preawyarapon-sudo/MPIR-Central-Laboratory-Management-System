@@ -3816,6 +3816,9 @@ function computeRefractometerResult(equip, reading) {
 // a room's equipment record can override them (roomTempMin/Max,
 // roomRhMin/Max) if a different room needs other limits.
 const ROOM_ENV_TYPE = "สภาพแวดล้อมห้อง";
+// Visual check done with the readings: room lights all on and bright
+// (none out or flickering). NG makes the day's check "ไม่ผ่าน".
+const ROOM_ENV_PREUSE_ITEMS = [{ key: "lighting", label: "ความสว่างของหลอดไฟในห้อง (สว่างปกติ ไม่ดับ/ไม่กะพริบ)" }];
 const ROOM_ENV_DEFAULT = { tempStd: 20, tempTol: 2, rhStd: 50, rhTol: 2 };
 function roomEnvLimits(equip) {
   const n = (v) => (v === "" || v === undefined || v === null || isNaN(Number(v)) ? null : Number(v));
@@ -3943,7 +3946,9 @@ function CheckPointsMini({ c }) {
         {x?.pass ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}{x?.reading ?? "-"}{u}
       </span>
     );
-    return <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, fontFamily: "var(--font-mono)" }}>{bit(r.temp, "°C")}{bit(r.rh, "%RH")}</span>;
+    const light = c.preUse?.lighting;
+    return <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, fontFamily: "var(--font-mono)", flexWrap: "wrap" }}>{bit(r.temp, "°C")}{bit(r.rh, "%RH")}
+      {light && bit({ pass: light === "OK", reading: light === "OK" ? "ไฟปกติ" : "ไฟผิดปกติ" }, "")}</span>;
   }
   // Fallback for any daily-check shape without a dedicated mini-view above.
   if (c.result !== undefined && c.result !== null) {
@@ -3961,7 +3966,7 @@ function CheckPointsMini({ c }) {
 function blankMeterCheckEntry(equipmentId) {
   return {
     id: uid(), equipmentId, date: todayISO(), time: new Date().toTimeString().slice(0, 5),
-    preUse: { ready: "", display: "", probeClean: "", tubeClean: "", waterLevel: "", cleaned: "", stdPrepared: "", notBroken: "", mercuryNormal: "" },
+    preUse: { ready: "", display: "", probeClean: "", tubeClean: "", waterLevel: "", cleaned: "", stdPrepared: "", notBroken: "", mercuryNormal: "", lighting: "" },
     phReadings: { ph4: "", ph7: "", ph10: "" },
     ecStandard: "1413", ecReading: "",
     polarimeterReading: "",
@@ -3988,7 +3993,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
   const isRefractometer = equip?.type === "Refractometer";
   const isGlassThermometer = equip?.type === "Glass Thermometer";
   const isRoomEnv = equip?.type === ROOM_ENV_TYPE;
-  const preUseItems = isRoomEnv ? [] : isPolarimeter ? POLARIMETER_PREUSE_ITEMS
+  const preUseItems = isRoomEnv ? ROOM_ENV_PREUSE_ITEMS : isPolarimeter ? POLARIMETER_PREUSE_ITEMS
     : isOven ? OVEN_PREUSE_ITEMS
     : isHumidity ? HUMIDITY_PREUSE_ITEMS
     : isCoolingBath ? COOLING_BATH_PREUSE_ITEMS
@@ -13200,6 +13205,8 @@ function mpirDailyCheckPoints(c) {
   if (c.roomEnvResult) return [
     { item: "Room temperature", standard: c.roomEnvResult.temp?.standard, unit: "°C", reading: c.roomEnvResult.temp?.reading, pass: c.roomEnvResult.temp?.pass },
     { item: "Room humidity", standard: c.roomEnvResult.rh?.standard, unit: "%RH", reading: c.roomEnvResult.rh?.reading, pass: c.roomEnvResult.rh?.pass },
+    // Older records (before the lighting check was added) have no lighting value.
+    ...(c.preUse?.lighting ? [{ item: "Room lighting", standard: "สว่างปกติ", unit: "", reading: c.preUse.lighting === "OK" ? "ปกติ" : "ผิดปกติ", pass: c.preUse.lighting === "OK" }] : []),
   ];
   if (c.humidityResult) return [{ item: "Humidity control", standard: c.humidityResult.standard, unit: "%RH", reading: c.humidityResult.reading, pass: c.humidityResult.pass }];
   return [{ item: "ตรวจสอบทั่วไป", standard: "", unit: "", reading: "", pass: c.result }];
@@ -13615,7 +13622,7 @@ function dailyCheckSummaryText(c) {
   if (c.ovenResult) parts.push(`${c.ovenResult.reading ?? "-"}°C: ${c.ovenResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.refractometerResult) parts.push(`${c.refractometerResult.reading ?? "-"} °Brix: ${c.refractometerResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.coolingBathResult) parts.push(`เทอร์โมมิเตอร์ ${c.coolingBathResult.reading ?? "-"}°C: ${c.coolingBathResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
-  if (c.roomEnvResult) parts.push(`อุณหภูมิ ${c.roomEnvResult.temp?.reading ?? "-"}°C: ${c.roomEnvResult.temp?.pass ? "ผ่าน" : "ไม่ผ่าน"} / ความชื้น ${c.roomEnvResult.rh?.reading ?? "-"} %RH: ${c.roomEnvResult.rh?.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
+  if (c.roomEnvResult) parts.push(`อุณหภูมิ ${c.roomEnvResult.temp?.reading ?? "-"}°C: ${c.roomEnvResult.temp?.pass ? "ผ่าน" : "ไม่ผ่าน"} / ความชื้น ${c.roomEnvResult.rh?.reading ?? "-"} %RH: ${c.roomEnvResult.rh?.pass ? "ผ่าน" : "ไม่ผ่าน"}${c.preUse?.lighting ? ` / หลอดไฟ: ${c.preUse.lighting === "OK" ? "ปกติ" : "ผิดปกติ"}` : ""}`);
   if (c.humidityResult) parts.push(`${c.humidityResult.reading ?? "-"} %RH: ${c.humidityResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (parts.length === 0) parts.push(c.result ? "ผ่าน" : c.result === false ? "ไม่ผ่าน" : "-");
   if (c.remarks) parts.push(`หมายเหตุ: ${c.remarks}`);
