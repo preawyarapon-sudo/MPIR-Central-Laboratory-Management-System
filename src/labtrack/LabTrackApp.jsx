@@ -1231,32 +1231,34 @@ const round4 = (n) => Math.round(n * 10000) / 10000;
 // Sheet 01 Tolerance (Action limits = reference ± Tolerance, Warning limits =
 // reference ± ⅔ Tolerance) — the same rule Sheet 04 uses. Returns null while
 // the instrument has no Tolerance yet.
-function deriveCheckLimits(instrument, referenceValue) {
-  // The calibration app attaches the latest calibration round as
-  // instrument.roundCheck: its certificate tolerance (nearest point to the
-  // reference) is the Daily check criterion — it replaces the instrument's
-  // own (possibly last year's) tolerance. The verification's |Error|+U is
-  // carried along for display only.
-  const rc = instrument?.roundCheck;
-  if (rc && referenceValue != null) {
+function deriveCheckLimits(instrument, referenceValue, checkDate = "") {
+  // Criteria take effect on the VERIFICATION date: a check dated D uses the
+  // verification (LF-068) with the latest verifyDate ≤ D → reference ±
+  // (|Error| + U) of its point nearest the reference, never wider than that
+  // round's certificate tolerance. Checks before any verification use the
+  // certificate tolerance of the latest round calibrated ≤ D, else the
+  // instrument's own tolerance. The calibration app attaches every round as
+  // instrument.roundChecks (not stored on the instrument).
+  const rcs = Array.isArray(instrument?.roundChecks) ? instrument.roundChecks : [];
+  if (rcs.length && referenceValue != null) {
+    const D = checkDate || todayISO();
     const near = (list) => list.length ? list.reduce((a, b) => Math.abs(b.reference - referenceValue) < Math.abs(a.reference - referenceValue) ? b : a) : null;
-    const tp = near((rc.tols || []).filter(x => x.reference != null && x.tolerance != null));
-    const vp = near((rc.verifyPts || []).filter(x => x.reference != null && x.tot != null));
-    const verify = vp ? { err: round4(vp.err), U: round4(vp.U), tot: round4(vp.tot), date: rc.verifyDate || "" } : null;
-    const roundT = tp ? (tp.type === "% of reading" ? Math.abs(referenceValue) * tp.tolerance / 100 : tp.tolerance) : null;
-    // Latest round verified → criterion = reference ± (|Error| + U) of the
-    // verification point nearest the reference (TM decision), never wider
-    // than that round's certificate tolerance.
-    if (verify) {
+    const tolOf = (rc) => {
+      const tp = near((rc.tols || []).filter(x => x.reference != null && x.tolerance != null));
+      return tp ? (tp.type === "% of reading" ? Math.abs(referenceValue) * tp.tolerance / 100 : tp.tolerance) : null;
+    };
+    const lims = (t) => ({ lwl: round4(referenceValue - t * 2 / 3), uwl: round4(referenceValue + t * 2 / 3), lal: round4(referenceValue - t), ual: round4(referenceValue + t), tol: round4(t) });
+    const ver = rcs.filter(rc => rc.verifyDate && rc.verifyDate <= D && (rc.verifyPts || []).some(x => x.tot != null && x.reference != null))
+      .sort((a, b) => b.verifyDate.localeCompare(a.verifyDate))[0];
+    if (ver) {
+      const vp = near(ver.verifyPts.filter(x => x.tot != null && x.reference != null));
+      const roundT = tolOf(ver);
       const t = roundT != null ? Math.min(vp.tot, roundT) : vp.tot;
-      return { lwl: round4(referenceValue - t * 2 / 3), uwl: round4(referenceValue + t * 2 / 3), lal: round4(referenceValue - t), ual: round4(referenceValue + t),
-        tol: round4(t), source: "verify", round: { certNo: rc.certNo || "", date: rc.date || "" }, verify: { ...verify, capped: roundT != null && vp.tot > roundT, roundTol: roundT } };
+      return { ...lims(t), source: "verify", round: { certNo: ver.certNo || "", date: ver.date || "" },
+        verify: { err: round4(vp.err), U: round4(vp.U), tot: round4(vp.tot), date: ver.verifyDate, capped: roundT != null && vp.tot > roundT, roundTol: roundT } };
     }
-    if (tp) {
-      const t = roundT;
-      return { lwl: round4(referenceValue - t * 2 / 3), uwl: round4(referenceValue + t * 2 / 3), lal: round4(referenceValue - t), ual: round4(referenceValue + t),
-        tol: round4(t), source: "round", round: { certNo: rc.certNo || "", date: rc.date || "" }, verify };
-    }
+    const cal = rcs.filter(rc => rc.date && rc.date <= D && tolOf(rc) != null).sort((a, b) => b.date.localeCompare(a.date))[0];
+    if (cal) return { ...lims(tolOf(cal)), source: "round", round: { certNo: cal.certNo || "", date: cal.date || "" }, verify: null };
   }
   const lim = warningActionLimits(instrument, referenceValue);
   if (!lim) return null;
@@ -3817,8 +3819,8 @@ const REFRACTOMETER_STD_BRIX = 20;
 const REFRACTOMETER_PREUSE_ITEMS = [
   { key: "stdPrepared", label: "เตรียมสารละลายมาตรฐาน Std. 20 Brix เรียบร้อย" },
 ];
-function computeRefractometerResult(equip, reading) {
-  const derived = deriveCheckLimits(equip, REFRACTOMETER_STD_BRIX);
+function computeRefractometerResult(equip, reading, checkDate = "") {
+  const derived = deriveCheckLimits(equip, REFRACTOMETER_STD_BRIX, checkDate);
   let min = null, max = null, source = null, tol = null, verify = null, round = null;
   if (derived) {
     min = derived.lal; max = derived.ual; tol = derived.tol; source = derived.source || "sheet01"; verify = derived.verify || null; round = derived.round || null;
@@ -4035,7 +4037,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
   const ecResult = isEc ? computeEcResult(f.ecStandard, f.ecReading) : null;
   const polarimeterResult = isPolarimeter ? computePolarimeterResult(equip, f.polarimeterReading) : null;
   const ovenResult = isOven ? computeOvenResult(equip, f.ovenReading) : null;
-  const refractometerResult = isRefractometer ? computeRefractometerResult(criteriaAsOf(equip, f.date || f.checkDate || ""), f.brixReading) : null;
+  const refractometerResult = isRefractometer ? computeRefractometerResult(criteriaAsOf(equip, f.date || f.checkDate || ""), f.brixReading, f.date || f.checkDate || "") : null;
   const coolingBathResult = isCoolingBath ? computeCoolingBathTempResult(equip, f.coolingBathReading) : null;
   const humidityResult = isHumidity ? computeHumidityResult(equip, f.humidityReading) : null;
   const roomEnvResult = isRoomEnv ? computeRoomEnvResult(equip, f.roomTempReading, f.roomRhReading) : null;
