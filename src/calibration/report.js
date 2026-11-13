@@ -103,8 +103,9 @@ export function printLf068(round, instrument) {
 export function checkLogHtml({ instrument, monthLabel, kind, rows }) {
   const daily = kind === "daily";
   const isRoom = instrument.type === "สภาพแวดล้อมห้อง";
-  const title = daily ? (isRoom ? "บันทึกการตรวจสอบสภาพแวดล้อมห้องประจำวัน" : "บันทึกการตรวจสอบเครื่องมือประจำวัน (Daily check)") : "บันทึกการตรวจสอบระหว่างใช้งาน (Intermediate check)";
-  const subTitle = daily ? (isRoom ? "Room Environment Daily Check Record (Temperature · Humidity · Lighting)" : "Daily Check Record") : "Intermediate Check Record";
+  // Every Daily check form has the same title; the second line says what kind.
+  const title = daily ? "บันทึกการตรวจสอบประจำวัน (Daily check)" : "บันทึกการตรวจสอบระหว่างใช้งาน (Intermediate check)";
+  const subTitle = daily ? (isRoom ? "การตรวจสอบสภาพแวดล้อมห้อง (Room Environment)" : "การตรวจสอบเครื่องมือ (Equipment)") : "Intermediate Check Record";
   const head = daily
     ? "<tr><th>วันที่</th><th>เวลา</th><th>รายการ</th><th>ค่ามาตรฐาน</th><th>ค่าที่อ่านได้</th><th>ผล</th><th>ผู้ตรวจ</th><th>ผู้อนุมัติ</th><th>วันที่อนุมัติ</th><th>หมายเหตุ</th></tr>"
     : "<tr><th>วันที่</th><th>รายการ</th><th>ค่าอ้างอิง</th><th>ค่าเฉลี่ย (หลังแก้)</th><th>Bias</th><th>ช่วงยอมรับ</th><th>ผล</th><th>ผู้ตรวจ</th><th>ผู้อนุมัติ</th><th>วันที่อนุมัติ</th><th>หมายเหตุ</th></tr>";
@@ -121,7 +122,7 @@ export function checkLogHtml({ instrument, monthLabel, kind, rows }) {
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
 <style>@page{size:A4 portrait;margin:10mm 12mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:9.6pt;color:#111;margin:0}
 table{border-collapse:collapse;width:100%}td,th{border:.6pt solid #222;padding:2.5pt 4pt;text-align:center}th{background:#E8EEF3;font-weight:600;font-size:8.8pt}
-.hd td{text-align:left}.t{text-align:center !important;font-weight:700;font-size:13pt}.t small{display:block;font-weight:400;font-size:9pt}.lg{width:30mm;text-align:center !important}.lg img{height:14mm}.dc{width:58mm;font-size:8.8pt}.l{background:#F4F7F9;font-weight:600;width:28mm}
+.hd td{text-align:left}.t{text-align:center !important;font-weight:700;font-size:13pt}.t small{display:block;font-weight:400;font-size:8.5pt;margin-top:1pt}.lg{width:30mm;text-align:center !important}.lg img{height:14mm}.dc{width:58mm;font-size:8.8pt}.l{background:#F4F7F9;font-weight:600;width:28mm}
 .p{color:#1E7A4A;font-weight:700}.f{color:#B42318;font-weight:700}.sig{margin-top:14pt}.sig td{border:none;width:50%;height:56pt;vertical-align:bottom}
 .line{border-bottom:.6pt dotted #333;margin:0 24pt 4pt;height:26pt}.note{font-size:8.2pt;color:#333;margin-top:4pt}</style></head><body>
 <table class="hd"><tr><td class="lg" rowspan="2"><img src="${LOGO_DATA_URI}" alt="MITR PHOL"></td><td class="t" colspan="2" rowspan="2">${title}<small>${subTitle}</small></td><td class="dc">${daily ? `รหัสเอกสาร: <b>${DAILY_DOC.code}</b> แก้ไขครั้งที่ (Rev.): <b>${DAILY_DOC.rev}</b>` : ""}</td></tr><tr><td class="dc">ประจำเดือน ${esc(monthLabel)}</td></tr></table><table class="hd" style="margin-top:4pt">
@@ -130,7 +131,6 @@ ${isRoom ? `<tr><td class="l">ห้อง / พื้นที่</td><td colsp
 <tr><td class="l">ยี่ห้อ / รุ่น / S/N</td><td>${esc([instrument.brand, instrument.model, instrument.serialNo && `S/N ${instrument.serialNo}`].filter(Boolean).join(" · "))}</td><td class="l">สรุป</td><td>${rows.length} รายการ · ไม่ผ่าน ${nFail}</td></tr></table>
 <table style="margin-top:6pt">${head}${body}</table>
 ${nFail ? `<div class="note">มีรายการไม่ผ่าน — ดำเนินการตาม MPIR-LP-012 และบันทึกเลขที่ NC ในหมายเหตุ</div>` : ""}
-<div class="note" style="margin-top:8pt">พิมพ์จากระบบ LabTrack เมื่อ ${esc(new Date().toLocaleString("th-TH"))} · การอนุมัติบันทึกในระบบ</div>
 <script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
 }
 export function printCheckLog(args) {
