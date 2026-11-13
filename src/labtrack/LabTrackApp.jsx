@@ -1232,18 +1232,31 @@ const round4 = (n) => Math.round(n * 10000) / 10000;
 // reference ± ⅔ Tolerance) — the same rule Sheet 04 uses. Returns null while
 // the instrument has no Tolerance yet.
 function deriveCheckLimits(instrument, referenceValue) {
-  // When the latest calibration round has a verification (LF-068), the
-  // daily acceptance range is reference ± (|Error| + U) of the verification
-  // point nearest the reference — never wider than the Tolerance. The
-  // calibration app attaches these points as instrument.verifyTot.
-  const vt = instrument?.verifyTot;
-  const pts = (vt?.pts || []).filter(p => p.tot != null && p.reference != null);
-  if (pts.length && referenceValue != null) {
-    const pt = pts.reduce((a, b) => Math.abs(b.reference - referenceValue) < Math.abs(a.reference - referenceValue) ? b : a);
-    const setTol = resolveTolerance(instrument, { indication: referenceValue, referenceValue });
-    const t = setTol != null && isFinite(setTol) ? Math.min(pt.tot, setTol) : pt.tot;
-    return { lwl: round4(referenceValue - t * 2 / 3), uwl: round4(referenceValue + t * 2 / 3), lal: round4(referenceValue - t), ual: round4(referenceValue + t),
-      tol: round4(t), source: "verify", verify: { err: round4(pt.err), U: round4(pt.U), tot: round4(pt.tot), capped: t < pt.tot, date: vt.date || "", certNo: vt.certNo || "" } };
+  // The calibration app attaches the latest calibration round as
+  // instrument.roundCheck: its certificate tolerance (nearest point to the
+  // reference) is the Daily check criterion — it replaces the instrument's
+  // own (possibly last year's) tolerance. The verification's |Error|+U is
+  // carried along for display only.
+  const rc = instrument?.roundCheck;
+  if (rc && referenceValue != null) {
+    const near = (list) => list.length ? list.reduce((a, b) => Math.abs(b.reference - referenceValue) < Math.abs(a.reference - referenceValue) ? b : a) : null;
+    const tp = near((rc.tols || []).filter(x => x.reference != null && x.tolerance != null));
+    const vp = near((rc.verifyPts || []).filter(x => x.reference != null && x.tot != null));
+    const verify = vp ? { err: round4(vp.err), U: round4(vp.U), tot: round4(vp.tot), date: rc.verifyDate || "" } : null;
+    const roundT = tp ? (tp.type === "% of reading" ? Math.abs(referenceValue) * tp.tolerance / 100 : tp.tolerance) : null;
+    // Latest round verified → criterion = reference ± (|Error| + U) of the
+    // verification point nearest the reference (TM decision), never wider
+    // than that round's certificate tolerance.
+    if (verify) {
+      const t = roundT != null ? Math.min(vp.tot, roundT) : vp.tot;
+      return { lwl: round4(referenceValue - t * 2 / 3), uwl: round4(referenceValue + t * 2 / 3), lal: round4(referenceValue - t), ual: round4(referenceValue + t),
+        tol: round4(t), source: "verify", round: { certNo: rc.certNo || "", date: rc.date || "" }, verify: { ...verify, capped: roundT != null && vp.tot > roundT, roundTol: roundT } };
+    }
+    if (tp) {
+      const t = roundT;
+      return { lwl: round4(referenceValue - t * 2 / 3), uwl: round4(referenceValue + t * 2 / 3), lal: round4(referenceValue - t), ual: round4(referenceValue + t),
+        tol: round4(t), source: "round", round: { certNo: rc.certNo || "", date: rc.date || "" }, verify };
+    }
   }
   const lim = warningActionLimits(instrument, referenceValue);
   if (!lim) return null;
@@ -3806,9 +3819,9 @@ const REFRACTOMETER_PREUSE_ITEMS = [
 ];
 function computeRefractometerResult(equip, reading) {
   const derived = deriveCheckLimits(equip, REFRACTOMETER_STD_BRIX);
-  let min = null, max = null, source = null, tol = null, verify = null;
+  let min = null, max = null, source = null, tol = null, verify = null, round = null;
   if (derived) {
-    min = derived.lal; max = derived.ual; tol = derived.tol; source = derived.source || "sheet01"; verify = derived.verify || null;
+    min = derived.lal; max = derived.ual; tol = derived.tol; source = derived.source || "sheet01"; verify = derived.verify || null; round = derived.round || null;
   } else {
     const lo = numOrNull(equip?.brixMin), hi = numOrNull(equip?.brixMax);
     if (lo != null && hi != null) { min = lo; max = hi; source = "legacy"; }
@@ -3817,7 +3830,7 @@ function computeRefractometerResult(equip, reading) {
   const read = Number(reading);
   const hasRead = reading !== "" && reading !== undefined && reading !== null && !isNaN(read);
   return {
-    standard: REFRACTOMETER_STD_BRIX, tol, source, verify,
+    standard: REFRACTOMETER_STD_BRIX, tol, source, verify, round,
     min, max,
     reading: hasRead ? read : null,
     pass: (hasRange && hasRead) ? (read >= min && read <= max) : null,
@@ -4154,7 +4167,13 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
                   <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix (จาก Tolerance ในบันทึกการสอบเทียบ)</div>
                 )}
                 {refractometerResult.source === "verify" && (
-                  <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix (|Error| {refractometerResult.verify.err} + U {refractometerResult.verify.U} จากผลทวนสอบ{refractometerResult.verify.date ? ` ${refractometerResult.verify.date}` : ""}{refractometerResult.verify.certNo ? ` · ใบรับรอง ${refractometerResult.verify.certNo}` : ""}{refractometerResult.verify.capped ? " · เกิน Tolerance จึงใช้ Tolerance" : ""})</div>
+                  <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix · |Error| {refractometerResult.verify.err} + U {refractometerResult.verify.U} จากผลทวนสอบ{refractometerResult.verify.date ? ` ${refractometerResult.verify.date}` : ""}{refractometerResult.round?.certNo ? ` · ใบรับรอง ${refractometerResult.round.certNo}` : ""}</div>
+                )}
+                {refractometerResult.source === "verify" && refractometerResult.verify.capped && (
+                  <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2, color: "var(--red)" }}>|E|+U = {refractometerResult.verify.tot} เกินเกณฑ์ในใบรับรอง (± {refractometerResult.verify.roundTol}) จึงใช้เกณฑ์ในใบรับรอง · ตรวจสอบผลทวนสอบ</div>
+                )}
+                {refractometerResult.source === "round" && (
+                  <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix (เกณฑ์ของรอบสอบเทียบล่าสุด{refractometerResult.round?.certNo ? ` · ใบรับรอง ${refractometerResult.round.certNo}` : ""} · ยังไม่มีผลทวนสอบ)</div>
                 )}
                 {refractometerResult.source === "legacy" && (
                   <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2, color: "var(--amber)" }}>ค่าเดิมที่กรอกไว้ — ควรตั้ง Tolerance ในบันทึกการสอบเทียบแทน</div>
