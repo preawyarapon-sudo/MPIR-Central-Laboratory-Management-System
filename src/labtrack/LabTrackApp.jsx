@@ -1232,6 +1232,19 @@ const round4 = (n) => Math.round(n * 10000) / 10000;
 // reference ± ⅔ Tolerance) — the same rule Sheet 04 uses. Returns null while
 // the instrument has no Tolerance yet.
 function deriveCheckLimits(instrument, referenceValue) {
+  // When the latest calibration round has a verification (LF-068), the
+  // daily acceptance range is reference ± (|Error| + U) of the verification
+  // point nearest the reference — never wider than the Tolerance. The
+  // calibration app attaches these points as instrument.verifyTot.
+  const vt = instrument?.verifyTot;
+  const pts = (vt?.pts || []).filter(p => p.tot != null && p.reference != null);
+  if (pts.length && referenceValue != null) {
+    const pt = pts.reduce((a, b) => Math.abs(b.reference - referenceValue) < Math.abs(a.reference - referenceValue) ? b : a);
+    const setTol = resolveTolerance(instrument, { indication: referenceValue, referenceValue });
+    const t = setTol != null && isFinite(setTol) ? Math.min(pt.tot, setTol) : pt.tot;
+    return { lwl: round4(referenceValue - t * 2 / 3), uwl: round4(referenceValue + t * 2 / 3), lal: round4(referenceValue - t), ual: round4(referenceValue + t),
+      tol: round4(t), source: "verify", verify: { err: round4(pt.err), U: round4(pt.U), tot: round4(pt.tot), capped: t < pt.tot, date: vt.date || "", certNo: vt.certNo || "" } };
+  }
   const lim = warningActionLimits(instrument, referenceValue);
   if (!lim) return null;
   const tol = resolveTolerance(instrument, { indication: referenceValue, referenceValue });
@@ -3793,9 +3806,9 @@ const REFRACTOMETER_PREUSE_ITEMS = [
 ];
 function computeRefractometerResult(equip, reading) {
   const derived = deriveCheckLimits(equip, REFRACTOMETER_STD_BRIX);
-  let min = null, max = null, source = null, tol = null;
+  let min = null, max = null, source = null, tol = null, verify = null;
   if (derived) {
-    min = derived.lal; max = derived.ual; tol = derived.tol; source = "sheet01";
+    min = derived.lal; max = derived.ual; tol = derived.tol; source = derived.source || "sheet01"; verify = derived.verify || null;
   } else {
     const lo = numOrNull(equip?.brixMin), hi = numOrNull(equip?.brixMax);
     if (lo != null && hi != null) { min = lo; max = hi; source = "legacy"; }
@@ -3804,7 +3817,7 @@ function computeRefractometerResult(equip, reading) {
   const read = Number(reading);
   const hasRead = reading !== "" && reading !== undefined && reading !== null && !isNaN(read);
   return {
-    standard: REFRACTOMETER_STD_BRIX, tol, source,
+    standard: REFRACTOMETER_STD_BRIX, tol, source, verify,
     min, max,
     reading: hasRead ? read : null,
     pass: (hasRange && hasRead) ? (read >= min && read <= max) : null,
@@ -4139,6 +4152,9 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
                 {refractometerResult.min !== null ? `${refractometerResult.min} – ${refractometerResult.max} °Brix` : "ยังไม่ได้ตั้งค่า — ตั้งเกณฑ์ที่ Instrument Assurance System › แท็บ Daily check"}
                 {refractometerResult.source === "sheet01" && (
                   <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix (จาก Tolerance ในบันทึกการสอบเทียบ)</div>
+                )}
+                {refractometerResult.source === "verify" && (
+                  <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2 }}>{refractometerResult.standard} ± {refractometerResult.tol} °Brix (|Error| {refractometerResult.verify.err} + U {refractometerResult.verify.U} จากผลทวนสอบ{refractometerResult.verify.date ? ` ${refractometerResult.verify.date}` : ""}{refractometerResult.verify.certNo ? ` · ใบรับรอง ${refractometerResult.verify.certNo}` : ""}{refractometerResult.verify.capped ? " · เกิน Tolerance จึงใช้ Tolerance" : ""})</div>
                 )}
                 {refractometerResult.source === "legacy" && (
                   <div style={{ fontFamily: "inherit", fontSize: 11, marginTop: 2, color: "var(--amber)" }}>ค่าเดิมที่กรอกไว้ — ควรตั้ง Tolerance ในบันทึกการสอบเทียบแทน</div>
