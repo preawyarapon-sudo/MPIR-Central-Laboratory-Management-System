@@ -137,21 +137,23 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
   useEffect(() => {
     if (guest && !["guestDaily", "instrument"].includes(page.name)) go({ name: "guestDaily" }, { replace: true });
   }, [guest, page.name]);
-  // Daily check criteria follow the LATEST calibration round: its
-  // verification |Error|+U, else its certificate tolerance, replaces the
-  // instrument's own (possibly last year's) tolerance — see deriveCheckLimits
-  // in LabTrackApp.jsx. Only for the Daily check screens; not saved.
+  // Daily check criteria change on each verification date (see
+  // deriveCheckLimits in LabTrackApp.jsx): attach every calibration round
+  // with its certificate tolerances and verification |Error|+U points.
+  // Only for the Daily check screens; not saved on the instrument.
   const checkEquipment = useMemo(() => data.equipment.map(e => {
-    const latest = (roundsById[e.id] || [])[0];
-    if (!latest) return e;
-    const roundTol = (latest.points || []).map(p => ({ p, c: criteriaOf(e, p) }))
-      .filter(x => x.c && x.c.source === "certificate" && num(x.p.referenceValue) != null)
-      .map(x => ({ reference: num(x.p.referenceValue), tolerance: x.c.tolerance, type: x.c.type }));
-    const v = latest.verification;
-    const vs = v ? verifySummary(v, e, latest.points) : null;
-    const vpts = (vs?.pts || []).filter(x => x.r.tot != null).map(x => ({ reference: num(x.p.reference), err: x.r.err, U: x.r.U, tot: x.r.tot }));
-    if (!roundTol.length && !vpts.length) return e;
-    return { ...e, roundCheck: { certNo: latest.certificateNo || "", date: latest.calibrationDate || "", tols: roundTol, verifyDate: v?.verifyDate || "", verifyPts: vpts } };
+    const rounds = roundsById[e.id] || [];
+    if (!rounds.length) return e;
+    const roundChecks = rounds.map(r => {
+      const tols = (r.points || []).map(p => ({ p, c: criteriaOf(e, p) }))
+        .filter(x => x.c && x.c.source === "certificate" && num(x.p.referenceValue) != null)
+        .map(x => ({ reference: num(x.p.referenceValue), tolerance: x.c.tolerance, type: x.c.type }));
+      const v = r.verification;
+      const vs = v ? verifySummary(v, e, r.points) : null;
+      const verifyPts = (vs?.pts || []).filter(x => x.r.tot != null).map(x => ({ reference: num(x.p.reference), err: x.r.err, U: x.r.U, tot: x.r.tot }));
+      return { certNo: r.certificateNo || "", date: r.calibrationDate || "", tols, verifyDate: v?.verifyDate || "", verifyPts };
+    });
+    return { ...e, roundChecks };
   }), [data.equipment, roundsById]);
   const instrument = page.instrumentId ? checkEquipment.find(e => e.id === page.instrumentId) : null;
   // The per-instrument round list moved into the instrument page ("สอบเทียบ/ทวนสอบ"
@@ -808,7 +810,7 @@ function CheckCriteria({ instrument: e, onSave }) {
     <div className="ca-download" style={{ marginTop: 0 }}>
       <label className="ca-field"><span>เกณฑ์ Daily / Intermediate check ± ({e.calUnit || "หน่วยของเครื่อง"})</span><input value={t} onChange={ev => setT(ev.target.value)} inputMode="decimal" placeholder="เช่น 0.09" /></label>
       <label className="ca-field"><span>ชนิด</span><select value={type} onChange={ev => setType(ev.target.value)}><option value="absolute">ค่าคงที่</option><option value="% of reading">% ของค่าที่อ่าน</option></select></label>
-      <span className="ca-muted ca-small" style={{ flex: 1, minWidth: 180 }}>ใช้คำนวณช่วงยอมรับของการตรวจประจำวันและระหว่างใช้งาน (Warning = ⅔ ของเกณฑ์) · Daily check ของ Refractometer ใช้ |Error|+U จากผลทวนสอบรอบล่าสุด (ถ้ายังไม่ทวนสอบ ใช้เกณฑ์ในใบรับรองรอบล่าสุด) ก่อนค่านี้ · ช่วงของ Oven, Polarimeter, Cooling Bath, ตู้ควบคุมความชื้น ตั้งที่แท็บ “ข้อมูลเครื่อง”</span>
+      <span className="ca-muted ca-small" style={{ flex: 1, minWidth: 180 }}>ใช้คำนวณช่วงยอมรับของการตรวจประจำวันและระหว่างใช้งาน (Warning = ⅔ ของเกณฑ์) · Daily check ของ Refractometer ใช้ |Error|+U จากผลทวนสอบ โดยเริ่มใช้ตั้งแต่วันที่ทวนสอบ (ก่อนมีผลทวนสอบใช้เกณฑ์ในใบรับรอง) ก่อนค่านี้ · ช่วงของ Oven, Polarimeter, Cooling Bath, ตู้ควบคุมความชื้น ตั้งที่แท็บ “ข้อมูลเครื่อง”</span>
       <button className="ca-btn" disabled={!dirty} onClick={() => onSave(e.id, { tolerance: num(t) ?? "", toleranceType: type })}><Check size={15} /> บันทึกเกณฑ์</button>
     </div>
   );
