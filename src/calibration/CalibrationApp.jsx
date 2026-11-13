@@ -137,7 +137,18 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
   useEffect(() => {
     if (guest && !["guestDaily", "instrument"].includes(page.name)) go({ name: "guestDaily" }, { replace: true });
   }, [guest, page.name]);
-  const instrument = page.instrumentId ? data.equipment.find(e => e.id === page.instrumentId) : null;
+  // Daily check criteria follow the latest verification: attach each
+  // instrument's |Error|+U per verification point (see deriveCheckLimits in
+  // LabTrackApp.jsx). Only for the Daily check screens; not saved.
+  const checkEquipment = useMemo(() => data.equipment.map(e => {
+    const latest = (roundsById[e.id] || [])[0];
+    const v = latest?.verification;
+    if (!v) return e;
+    const vs = verifySummary(v, e, latest.points);
+    const pts = (vs?.pts || []).filter(x => x.r.tot != null).map(x => ({ reference: num(x.p.reference), err: x.r.err, U: x.r.U, tot: x.r.tot }));
+    return pts.length ? { ...e, verifyTot: { date: v.verifyDate || "", certNo: latest.certificateNo || "", pts } } : e;
+  }), [data.equipment, roundsById]);
+  const instrument = page.instrumentId ? checkEquipment.find(e => e.id === page.instrumentId) : null;
   // The per-instrument round list moved into the instrument page ("สอบเทียบ/ทวนสอบ"
   // tab); old links/bookmarks to it land there.
   useEffect(() => {
@@ -269,7 +280,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
           {(page.name === "guestDaily" || (page.name === "dailyAll" && guest)) && (
             <div className="ca-stack">
               <header className="ca-head"><div><h1>Daily check</h1><p className="ca-muted">{guest ? "บันทึกผลตรวจเช็คประจำวัน · ระบุชื่อผู้ตรวจทุกครั้ง" : "เลือกเครื่องแล้วบันทึกผล · ดาวน์โหลดบันทึกรายเดือนได้ที่หน้าเครื่องมือ แท็บ Daily check"}</p></div></header>
-              <div className="ca-lt"><DailyCheckTab equipment={data.equipment} certificates={data.certificates}
+              <div className="ca-lt"><DailyCheckTab equipment={checkEquipment} certificates={data.certificates}
                 dailyChecks={data.dailyChecks} setDailyChecks={(l) => setListSmart("dailyChecks", l)}
                 intermediateChecks={data.intermediateChecks} setIntermediateChecks={null}
                 notify={notify} initialCheckId={page.instrumentId} focusRequest={page.instrumentId ? { id: page.instrumentId, at: 1 } : null}
