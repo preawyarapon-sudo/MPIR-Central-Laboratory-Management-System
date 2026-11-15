@@ -10,6 +10,8 @@ import { toDisplayImageUrl, driveFileId, isDriveFolderUrl, resolveEquipGroup, EQ
 const uid = () => Math.random().toString(36).slice(2, 10);
 export const STATUS_LABEL = { active: "ใช้งานอยู่", maintenance: "ซ่อมบำรุง / งดใช้ชั่วคราว", inactive: "ปิดใช้งาน" };
 const TYPES = ["เครื่องชั่ง", "Refractometer", "Polarimeter", "Oven", "Cooling Bath", "เครื่องควบคุมความชื้น", "Glass Thermometer", "pH Meter", "EC Meter", "ตุ้มน้ำหนักมาตรฐาน", "เครื่องปรับอากาศ", "สภาพแวดล้อมห้อง"];
+const HUM_MODES = [["", "อ่านค่า %RH จากหน้าจอ"], ["silica", "เช็คสีซิลิกาเจล"]];
+const SELECT_OPTS = { hum: HUM_MODES };
 const TOL_TYPES = [["absolute", "ค่าคงที่ (±)"], ["% of reading", "% ของค่าที่อ่าน"], ["% of full scale", "% ของเต็มสเกล"]];
 
 // Field layout shared by the editor and the read-only view.
@@ -57,8 +59,9 @@ const SECTIONS = [
     { k: "ovenMax", l: "อุณหภูมิสูงสุด (°C)", t: "num", when: (e) => e.type === "Oven" },
     { k: "coolingBathMin", l: "อุณหภูมิต่ำสุด (°C)", t: "num", when: (e) => e.type === "Cooling Bath" },
     { k: "coolingBathMax", l: "อุณหภูมิสูงสุด (°C)", t: "num", when: (e) => e.type === "Cooling Bath" },
-    { k: "humidityMin", l: "ความชื้นต่ำสุด (%RH)", t: "num", when: (e) => e.type === "เครื่องควบคุมความชื้น" },
-    { k: "humidityMax", l: "ความชื้นสูงสุด (%RH)", t: "num", when: (e) => e.type === "เครื่องควบคุมความชื้น" },
+    { k: "humidityCheckMode", l: "รูปแบบ Daily check", t: "select", opts: "hum", when: (e) => e.type === "เครื่องควบคุมความชื้น" },
+    { k: "humidityMin", l: "ความชื้นต่ำสุด (%RH)", t: "num", when: (e) => e.type === "เครื่องควบคุมความชื้น" && e.humidityCheckMode !== "silica" },
+    { k: "humidityMax", l: "ความชื้นสูงสุด (%RH)", t: "num", when: (e) => e.type === "เครื่องควบคุมความชื้น" && e.humidityCheckMode !== "silica" },
     { k: "roomTempMin", l: "อุณหภูมิห้องต่ำสุด (°C)", t: "num", ph: "เว้นว่าง = 18 (20 ± 2)", when: (e) => e.type === "สภาพแวดล้อมห้อง" },
     { k: "roomTempMax", l: "อุณหภูมิห้องสูงสุด (°C)", t: "num", ph: "เว้นว่าง = 22 (20 ± 2)", when: (e) => e.type === "สภาพแวดล้อมห้อง" },
     { k: "roomRhMin", l: "ความชื้นห้องต่ำสุด (%RH)", t: "num", ph: "เว้นว่าง = 48 (50 ± 2)", when: (e) => e.type === "สภาพแวดล้อมห้อง" },
@@ -88,6 +91,7 @@ export function InstrumentInfo({ instrument: e, guest, onEdit, due = "" }) {
   const show = (f) => {
     if (f.k === "group") return resolveEquipGroup(e);
     const v = f.k === "nextDue" ? (e.nextDue || due) : e[f.k];
+    if (SELECT_OPTS[f.opts]) return (SELECT_OPTS[f.opts].find(t => t[0] === (v || "")) || [, v])[1];
     if (v == null || v === "") return "–";
     if (f.t === "date") return fmtDate(v);
     if (f.opts === "tol") return (TOL_TYPES.find(t => t[0] === v) || [, v])[1];
@@ -139,6 +143,7 @@ export function EquipmentEditor({ instrument, equipment, hasRecords, onCancel, o
 
   const input = (f) => {
     const v = d[f.k] ?? "";
+    if (f.t === "select" && SELECT_OPTS[f.opts]) return <select value={v} onChange={ev => set(f.k, ev.target.value)}>{SELECT_OPTS[f.opts].map(([a, b]) => <option key={a} value={a}>{b}</option>)}</select>;
     if (f.t === "select") return <select value={v || "absolute"} onChange={ev => set(f.k, ev.target.value)}>{TOL_TYPES.map(([a, b]) => <option key={a} value={a}>{b}</option>)}</select>;
     if (f.t === "list") return <><input list={`dl-${f.k}`} value={f.k === "group" ? (v || (d.type ? resolveEquipGroup(d) : "")) : v} onChange={ev => set(f.k, ev.target.value)} placeholder={f.ph} />
       <datalist id={`dl-${f.k}`}>{(f.opts === "types" ? types : groups).map(o => <option key={o} value={o} />)}</datalist></>;
