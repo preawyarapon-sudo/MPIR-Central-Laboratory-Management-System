@@ -3768,6 +3768,12 @@ const HUMIDITY_PREUSE_ITEMS = [
   { key: "drain", label: "ท่อระบายน้ำต่อแน่น ไม่หัก ไม่รั่ว (หรือถังพักน้ำยังไม่เต็ม)" },
   { key: "airflow", label: "ช่องลมเข้า–ออกและแผ่นกรองสะอาด ไม่มีสิ่งกีดขวาง" },
 ];
+// A humidity cabinet can be checked by its silica gel colour instead of a
+// %RH reading (equipment.humidityCheckMode === "silica").
+const isSilicaCheck = (equip) => equip?.type === "เครื่องควบคุมความชื้น" && equip?.humidityCheckMode === "silica";
+const SILICA_PREUSE_ITEMS = [
+  { key: "silicaColor", label: "สีซิลิกาเจลปกติ ยังไม่เปลี่ยนสี (เช่น น้ำเงิน/ส้ม = OK · ชมพู/เขียว = NG ต้องอบหรือเปลี่ยน)" },
+];
 function computeHumidityResult(equip, reading) {
   const min = Number(equip?.humidityMin);
   const max = Number(equip?.humidityMax);
@@ -3958,6 +3964,15 @@ function CheckPointsMini({ c }) {
       </span>
     );
   }
+  if (c.silicaResult) {
+    const ok = c.silicaResult.pass;
+    return (
+      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11.5, color: ok ? "var(--ink)" : "var(--red)" }}>
+        {ok ? <CheckCircle2 size={12} color="var(--green)" /> : <XCircle size={12} color="var(--red)" />}
+        ซิลิกาเจล{ok ? "สีปกติ" : "เปลี่ยนสี"}
+      </span>
+    );
+  }
   if (c.humidityResult) {
     const r = c.humidityResult;
     return (
@@ -4021,9 +4036,10 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
   const isRefractometer = equip?.type === "Refractometer";
   const isGlassThermometer = equip?.type === "Glass Thermometer";
   const isRoomEnv = equip?.type === ROOM_ENV_TYPE;
+  const isSilica = isSilicaCheck(equip);
   const preUseItems = isRoomEnv ? ROOM_ENV_PREUSE_ITEMS : isPolarimeter ? POLARIMETER_PREUSE_ITEMS
     : isOven ? OVEN_PREUSE_ITEMS
-    : isHumidity ? HUMIDITY_PREUSE_ITEMS
+    : isHumidity ? (isSilica ? SILICA_PREUSE_ITEMS : HUMIDITY_PREUSE_ITEMS)
     : isCoolingBath ? COOLING_BATH_PREUSE_ITEMS
     : isRefractometer ? REFRACTOMETER_PREUSE_ITEMS
     : isGlassThermometer ? GLASS_THERMOMETER_PREUSE_ITEMS
@@ -4039,7 +4055,8 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
   const ovenResult = isOven ? computeOvenResult(equip, f.ovenReading) : null;
   const refractometerResult = isRefractometer ? computeRefractometerResult(criteriaAsOf(equip, f.date || f.checkDate || ""), f.brixReading, f.date || f.checkDate || "") : null;
   const coolingBathResult = isCoolingBath ? computeCoolingBathTempResult(equip, f.coolingBathReading) : null;
-  const humidityResult = isHumidity ? computeHumidityResult(equip, f.humidityReading) : null;
+  const humidityResult = isHumidity && !isSilica ? computeHumidityResult(equip, f.humidityReading) : null;
+  const silicaResult = isSilica && f.preUse?.silicaColor ? { color: f.preUse.silicaColor, pass: f.preUse.silicaColor === "OK" } : null;
   const roomEnvResult = isRoomEnv ? computeRoomEnvResult(equip, f.roomTempReading, f.roomRhReading) : null;
   // Link back to the calibration record: warn when the instrument is past its
   // calibration due date or its newest certificate failed the Sheet 03 check.
@@ -4051,6 +4068,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
     : isOven ? ovenResult.reading !== null
     : isRefractometer ? refractometerResult.reading !== null
     : isCoolingBath ? coolingBathResult.reading !== null
+    : isSilica ? true
     : isHumidity ? humidityResult.reading !== null
     : isRoomEnv ? (roomEnvResult.temp.reading !== null && roomEnvResult.rh.reading !== null)
     : isEc ? (ecResult.standard !== null && ecResult.reading !== null)
@@ -4063,6 +4081,7 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
       : isOven ? ovenResult.pass
       : isRefractometer ? refractometerResult.pass
       : isCoolingBath ? coolingBathResult.pass
+      : isSilica ? true
       : isHumidity ? humidityResult.pass
       : isRoomEnv ? roomEnvResult.pass
       : isEc ? ecResult.pass
@@ -4207,6 +4226,8 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
                   : <span style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--red)", fontSize: 12, fontWeight: 600 }}><XCircle size={13} /> ไม่ผ่าน</span>}
               </div></Field>
           </>
+        ) : isSilica ? (
+          <p style={{ gridColumn: "1 / -1", margin: 0, fontSize: 12.5, color: "var(--muted)" }}>ตู้นี้ตรวจด้วยสีซิลิกาเจล — เลือก OK / NG ด้านบน ถ้า NG ให้อบหรือเปลี่ยนซิลิกาเจล แล้วบันทึกการดำเนินการในหมายเหตุ</p>
         ) : isHumidity ? (
           <>
             <Field label="ค่าความชื้นสัมพัทธ์จากหน้าจอเครื่อง (%RH)"><input type="number" step="any" style={S.input} value={f.humidityReading} onChange={set("humidityReading")} /></Field>
@@ -4290,13 +4311,13 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
         onCancel={onCancel}
         onSave={() => {
           const resetApproval = f.approved ? { approved: false, approvedByName: "", approvedByUsername: "", approvedAt: "" } : {};
-          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity ? humidityResult : undefined, roomEnvResult: isRoomEnv ? roomEnvResult : undefined, result, ...resetApproval });
+          onSave({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity && !isSilica ? humidityResult : undefined, silicaResult: silicaResult || undefined, roomEnvResult: isRoomEnv ? roomEnvResult : undefined, result, ...resetApproval });
         }}
         disabled={!canSave}
         extra={showApproveButton && (
           <button
             style={{ ...S.primaryBtn, background: "var(--green)", boxShadow: "none" }}
-            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity ? humidityResult : undefined, roomEnvResult: isRoomEnv ? roomEnvResult : undefined, result })}
+            onClick={() => onApprove({ ...f, phResults: isPh ? phRows : undefined, ecResult: isEc ? ecResult : undefined, polarimeterResult: isPolarimeter ? polarimeterResult : undefined, ovenResult: isOven ? ovenResult : undefined, refractometerResult: isRefractometer ? refractometerResult : undefined, coolingBathResult: isCoolingBath ? coolingBathResult : undefined, humidityResult: isHumidity && !isSilica ? humidityResult : undefined, silicaResult: silicaResult || undefined, roomEnvResult: isRoomEnv ? roomEnvResult : undefined, result })}
           >
             <CheckCircle2 size={15} /> อนุมัติรายการนี้
           </button>
@@ -9001,6 +9022,9 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
 // The one number that sums up a check, for the "ผลล่าสุด" card and the log.
 const CHECK_RESULT_UNIT = { refractometerResult: "°Brix", polarimeterResult: "°", ovenResult: "°C", coolingBathResult: "°C", humidityResult: "%RH", ecResult: "µS/cm" };
 function checkHeadline(c) {
+  if (c?.silicaResult) {
+    return { value: c.silicaResult.pass ? "สีปกติ" : "เปลี่ยนสี", unit: "", ref: "สีซิลิกาเจล", pass: c.silicaResult.pass ?? c.result ?? null };
+  }
   if (c?.roomEnvResult) {
     const r = c.roomEnvResult;
     return { value: r.temp?.reading != null || r.rh?.reading != null ? `${r.temp?.reading ?? "-"} °C / ${r.rh?.reading ?? "-"} %RH` : null, unit: "",
@@ -9311,7 +9335,9 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
           <ChevronLeft size={14} /> กลับไปบันทึกการสอบเทียบ
         </button>
       )}
-      <TabHeader title="ตรวจเช็คเครื่องมือ" sub={isMobile ? "" : "Daily check และ Intermediate check ระหว่างรอบสอบเทียบ รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที"} />
+      {/* Embedded on one instrument's page (equipment = [that instrument]):
+          no page title or instrument picker — the page already shows it. */}
+      {checkable.length !== 1 && <TabHeader title="ตรวจเช็คเครื่องมือ" sub={isMobile ? "" : "Daily check และ Intermediate check ระหว่างรอบสอบเทียบ รวมไว้ที่เดียว คำนวณผ่าน/ไม่ผ่านให้อัตโนมัติ — สแกน QR ที่ติดบนเครื่องเพื่อเปิดฟอร์ม Daily check ของเครื่องนั้นได้ทันที"} />}
 
       {checkable.length === 0 ? (
         <EmptyState text="ยังไม่มีเครื่องมือ — เพิ่มเครื่องมือในหน้าเครื่องมือก่อน แล้วกลับมาบันทึกที่นี่" />
@@ -9367,11 +9393,13 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
             return (<>
               {/* toolbar */}
               <div style={{ display: "flex", gap: M ? 8 : 10, alignItems: "center", flexWrap: "wrap", marginBottom: M ? 12 : 16 }}>
+                {checkable.length > 1 && (
                 <select style={{ ...S.select, flex: M ? "1 1 0" : "1 1 280px", minWidth: 0, maxWidth: M ? "none" : 460, height: M ? 40 : 46, borderRadius: 12, fontSize: M ? 13.5 : 14, order: 0 }} value={equipId} onChange={e => setEquipId(e.target.value)}>
                   {checkable.map(e => (
                     <option key={e.id} value={e.id}>{e.code}{e.name ? ` — ${e.name}` : ""}{e.location ? ` (${e.location})` : ""}</option>
                   ))}
                 </select>
+                )}
                 {hasDailyForm(equip) && (
                   <button style={{ ...S.primaryBtn, height: M ? 40 : 46, borderRadius: 12, padding: M ? "0 10px" : "0 20px", fontSize: M ? 13.5 : 14, justifyContent: "center", ...(M ? { flex: "1 1 0", order: 2 } : {}) }}
                     onClick={() => setEditing(isScale ? blankScaleCheckEntry(equipId) : blankMeterCheckEntry(equipId))}>
@@ -13245,6 +13273,7 @@ function mpirDailyCheckPoints(c) {
     // Older records (before the lighting check was added) have no lighting value.
     ...(c.preUse?.lighting ? [{ item: "Room lighting", standard: "สว่างปกติ", unit: "", reading: c.preUse.lighting === "OK" ? "ปกติ" : "ผิดปกติ", pass: c.preUse.lighting === "OK" }] : []),
   ];
+  if (c.silicaResult) return [{ item: "Silica gel colour", standard: "สีปกติ", unit: "", reading: c.silicaResult.pass ? "ปกติ" : "เปลี่ยนสี", pass: c.silicaResult.pass }];
   if (c.humidityResult) return [{ item: "Humidity control", standard: c.humidityResult.standard, unit: "%RH", reading: c.humidityResult.reading, pass: c.humidityResult.pass }];
   return [{ item: "ตรวจสอบทั่วไป", standard: "", unit: "", reading: "", pass: c.result }];
 }
@@ -13660,6 +13689,7 @@ function dailyCheckSummaryText(c) {
   if (c.refractometerResult) parts.push(`${c.refractometerResult.reading ?? "-"} °Brix: ${c.refractometerResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.coolingBathResult) parts.push(`เทอร์โมมิเตอร์ ${c.coolingBathResult.reading ?? "-"}°C: ${c.coolingBathResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (c.roomEnvResult) parts.push(`อุณหภูมิ ${c.roomEnvResult.temp?.reading ?? "-"}°C: ${c.roomEnvResult.temp?.pass ? "ผ่าน" : "ไม่ผ่าน"} / ความชื้น ${c.roomEnvResult.rh?.reading ?? "-"} %RH: ${c.roomEnvResult.rh?.pass ? "ผ่าน" : "ไม่ผ่าน"}${c.preUse?.lighting ? ` / หลอดไฟ: ${c.preUse.lighting === "OK" ? "ปกติ" : "ผิดปกติ"}` : ""}`);
+  if (c.silicaResult) parts.push(`ซิลิกาเจล: ${c.silicaResult.pass ? "สีปกติ" : "เปลี่ยนสี"}`);
   if (c.humidityResult) parts.push(`${c.humidityResult.reading ?? "-"} %RH: ${c.humidityResult.pass ? "ผ่าน" : "ไม่ผ่าน"}`);
   if (parts.length === 0) parts.push(c.result ? "ผ่าน" : c.result === false ? "ไม่ผ่าน" : "-");
   if (c.remarks) parts.push(`หมายเหตุ: ${c.remarks}`);
