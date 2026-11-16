@@ -35,6 +35,8 @@ const SECTIONS = [
     // (calc.js reads workingRangeMax as the full scale); hidden otherwise.
     { k: "workingRangeMin", l: "ช่วงใช้งาน — ต่ำสุด", t: "num", when: (e) => e.toleranceType === "% of full scale" },
     { k: "workingRangeMax", l: "ช่วงใช้งาน — สูงสุด (Full scale)", t: "num", when: (e) => e.toleranceType === "% of full scale" },
+    { k: "usableRange", l: "ช่วงการใช้งานได้ (ตามสเปก)", ph: "เช่น 0.00–3200.00 g" },
+    { k: "testRange", l: "ช่วงใช้งานในการทดสอบ", ph: "เช่น 10.00–250.00 g" },
     { k: "relatedTestMethod", l: "วิธีทดสอบที่เกี่ยวข้อง", ph: "เช่น MPIR-WI-002-06" },
     { k: "scopeOfUse", l: "ขอบข่ายการใช้งาน" },
   ] },
