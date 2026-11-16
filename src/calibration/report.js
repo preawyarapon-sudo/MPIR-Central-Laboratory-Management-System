@@ -139,3 +139,36 @@ export function printCheckLog(args) {
   w.document.open(); w.document.write(checkLogHtml(args)); w.document.close();
   return true;
 }
+
+/* ---------- MPIR-LF-033 ประวัติเครื่องมือวัดและทดสอบ ---------- */
+// info: [[label, value], ...] for section 1; rows: [{ date, action, criteria,
+// result, nextDue, ref, by }] for section 2 (oldest first).
+export const HISTORY_DOC = { code: "MPIR-LF-033-06" };
+export function equipHistoryHtml({ instrument: e, info, rows, imgSrc = "" }) {
+  const minRows = 12;
+  const body = rows.map(r => `<tr><td>${esc(fmtDate(r.date))}</td><td>${esc(r.action)}</td><td>${esc(r.criteria)}</td><td class="lft">${esc(r.result)}</td><td>${esc(fmtDate(r.nextDue))}</td><td>${esc(r.ref)}</td><td>${esc(r.by)}</td></tr>`).join("")
+    + Array.from({ length: Math.max(0, minRows - rows.length) }, () => "<tr class=\"blank\"><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>").join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>ประวัติเครื่องมือ ${esc(e.code || e.name)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>@page{size:A4 portrait;margin:12mm 14mm}*{box-sizing:border-box}body{font-family:Sarabun,sans-serif;font-size:11pt;color:#111;margin:0}
+.top{display:flex;justify-content:space-between;align-items:flex-start}.top img{height:17mm}.code{font-size:9pt}
+h1{text-align:center;font-size:14pt;margin:4pt 0 12pt}.sec{display:flex;gap:10pt}.info{flex:1}.info h2,.h2{font-size:11.5pt;font-weight:600;margin:0 0 4pt}
+.info div{line-height:1.75}.info b{font-weight:400;border-bottom:.6pt dotted #333;padding:0 4pt}.ph{width:62mm;height:70mm;border:.8pt solid #222;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.ph img{max-width:100%;max-height:100%;object-fit:contain}.ph span{color:#888;font-size:9pt}
+table{border-collapse:collapse;width:100%;margin-top:4pt}td,th{border:.8pt solid #222;padding:3pt 4pt;text-align:center;font-size:9.6pt}th{font-weight:600;font-size:9.6pt}
+td.lft{text-align:left}tr.blank td{height:18pt}</style></head><body>
+<div class="top"><img src="${LOGO_DATA_URI}" alt="MITR PHOL"><div class="code">${HISTORY_DOC.code} Page <b>1</b> of <b>1</b></div></div>
+<h1>ประวัติเครื่องมือวัดและทดสอบ</h1>
+<div class="sec"><div class="info"><h2>1. ข้อมูลทั่วไป</h2>
+${info.map(([l, v]) => `<div>${esc(l)}: <b>${esc(v || "-")}</b></div>`).join("")}
+</div><div class="ph">${imgSrc ? `<img src="${esc(imgSrc)}" alt="">` : "<span>ไม่มีรูปเครื่องมือ</span>"}</div></div>
+<div class="h2" style="margin-top:12pt">2. บันทึกการดำเนินการเกี่ยวกับเครื่องมือวัดและทดสอบ</div>
+<table><tr><th style="width:15%">วันที่</th><th style="width:15%">การดำเนินการ<br>[สอบเทียบ/ปรับแต่ง/<br>บำรุงรักษา]</th><th style="width:11%">เกณฑ์การ<br>ยอมรับ</th><th>ผลการดำเนินการ<br>[สอบเทียบ/ปรับแต่ง/<br>บำรุงรักษา]</th><th style="width:14%">กำหนดการสอบ<br>เทียบครั้งต่อไป</th><th style="width:12%">เอกสารอ้างอิง</th><th style="width:11%">ผู้บันทึก</th></tr>${body}</table>
+<script>Promise.all([document.fonts.ready].concat([].slice.call(document.images).map(function(i){return i.complete?0:new Promise(function(r){i.onload=i.onerror=r})}))).then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
+}
+export function printEquipHistory(args) {
+  const w = window.open("", "_blank");
+  if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return false; }
+  w.document.open(); w.document.write(equipHistoryHtml(args)); w.document.close();
+  return true;
+}
