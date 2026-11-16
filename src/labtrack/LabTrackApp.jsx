@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from "react";
-import {
+import { RefreshCw,
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
   Clock, ChevronRight, ChevronLeft, MapPin, CalendarClock, ClipboardList,
@@ -1262,6 +1262,48 @@ function withVerifyRange(res, instrument, checkDate) {
   if (!vc) return res;
   return { ...res, min: vc.min, max: vc.max, pass: res.reading != null ? (res.reading >= vc.min && res.reading <= vc.max) : null,
     criteriaSource: "verify", criteria: { standard: vc.standard, tol: vc.tol, certNo: vc.certNo, ...vc.verify } };
+}
+// Re-evaluate a saved Daily check against the criteria in force on its own
+// date (verification-based). Returns { next, from, to } when the acceptance
+// range changes, else null. Only records whose new criteria come from a
+// verification / calibration round are touched; readings are never changed.
+function preUseItemsFor(equip) {
+  const t = equip?.type;
+  return t === ROOM_ENV_TYPE ? ROOM_ENV_PREUSE_ITEMS : t === "Polarimeter" ? POLARIMETER_PREUSE_ITEMS : t === "Oven" ? OVEN_PREUSE_ITEMS
+    : t === "เครื่องควบคุมความชื้น" ? (isSilicaCheck(equip) ? SILICA_PREUSE_ITEMS : HUMIDITY_PREUSE_ITEMS)
+    : t === "Cooling Bath" ? COOLING_BATH_PREUSE_ITEMS : t === "Refractometer" ? REFRACTOMETER_PREUSE_ITEMS
+    : t === "Glass Thermometer" ? GLASS_THERMOMETER_PREUSE_ITEMS : METER_PREUSE_ITEMS;
+}
+function reevaluateDailyCheck(c, equip) {
+  if (!c || !equip || !c.date) return null;
+  const same = (a, b) => a != null && b != null && Math.abs(Number(a) - Number(b)) < 1e-9;
+  if (equip.type === "เครื่องชั่ง") {
+    if (!c.weights || !Array.isArray(c.weightResults)) return null;
+    const rows = computeWeightResults(c.weights, equip, c.date);
+    if (!rows.some(r => r.criteria)) return null;
+    const old = c.weightResults;
+    const differs = rows.some(r => { const o = old.find(x => x.key === r.key); return !o || !same(o.min, r.min) || !same(o.max, r.max); });
+    if (!differs) return null;
+    const result = !dailyCheckPasses(c) ? false : rows.every(r => r.pass);
+    const fmt = (list) => list.map(r => `${r.standard}g ${r.min}–${r.max}`).join(", ");
+    return { next: { ...c, weightResults: rows, result }, from: { range: fmt(old), result: c.result }, to: { range: fmt(rows), result } };
+  }
+  const spec = {
+    Refractometer: ["refractometerResult", () => computeRefractometerResult(criteriaAsOf(equip, c.date), c.brixReading, c.date), (r) => r.source === "verify" || r.source === "round"],
+    Polarimeter: ["polarimeterResult", () => withVerifyRange(computePolarimeterResult(equip, c.polarimeterReading), equip, c.date)],
+    Oven: ["ovenResult", () => withVerifyRange(computeOvenResult(equip, c.ovenReading), equip, c.date)],
+    "Cooling Bath": ["coolingBathResult", () => withVerifyRange(computeCoolingBathTempResult(equip, c.coolingBathReading), equip, c.date)],
+    "เครื่องควบคุมความชื้น": ["humidityResult", () => withVerifyRange(computeHumidityResult(equip, c.humidityReading), equip, c.date)],
+  }[equip.type];
+  if (!spec || !c[spec[0]]) return null;
+  const [key, calc, fromRound = (r) => r.criteriaSource === "verify"] = spec;
+  const r = calc();
+  if (!r || r.reading == null || !fromRound(r)) return null;
+  const o = c[key];
+  if (same(o.min, r.min) && same(o.max, r.max)) return null;
+  const preOk = meterPreUsePasses(c.preUse, preUseItemsFor(equip));
+  const result = !preOk ? false : r.pass;
+  return { next: { ...c, [key]: r, result }, from: { range: `${o.min}–${o.max}`, result: c.result }, to: { range: `${r.min}–${r.max}`, result } };
 }
 function deriveCheckLimits(instrument, referenceValue, checkDate = "") {
   // Criteria take effect on the VERIFICATION date: a check dated D uses the
@@ -9373,6 +9415,27 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
     }, keepApprover ? "แก้วันที่อนุมัติแล้ว" : "อนุมัติรายการเรียบร้อยแล้ว");
   }
 
+  // Records already saved before the verification was entered: re-check them
+  // against the criteria in force on their own date. Readings stay as typed;
+  // the old range/result is kept in criteriaHistory.
+  const reevals = useMemo(() => (!equip || guestMode) ? [] : dailyChecks.filter(c => c.equipmentId === equipId)
+    .map(c => reevaluateDailyCheck(c, equip)).filter(Boolean), [dailyChecks, equip, equipId, guestMode]);
+  function applyReevals() {
+    if (!reevals.length) return;
+    const flips = reevals.filter(x => x.from.result !== x.to.result);
+    const lines = flips.slice(0, 8).map(x => `• ${fmtDate(x.next.date)}: ${x.from.result ? "ผ่าน" : "ไม่ผ่าน"} → ${x.to.result ? "ผ่าน" : x.to.result === false ? "ไม่ผ่าน" : "-"}`);
+    if (!window.confirm(`ปรับเกณฑ์ย้อนหลัง ${reevals.length} รายการ ตามเกณฑ์ที่มีผล ณ วันตรวจของแต่ละรายการ (ตั้งแต่วันที่ทวนสอบ)\n` +
+      `ค่าที่อ่านได้ไม่เปลี่ยน · เกณฑ์และผลเดิมเก็บไว้ในประวัติ\n\n` +
+      (flips.length ? `ผลเปลี่ยน ${flips.length} รายการ:\n${lines.join("\n")}${flips.length > 8 ? "\n…" : ""}` : "ผลผ่าน/ไม่ผ่านไม่เปลี่ยน"))) return;
+    const now = new Date().toISOString(), by = currentDisplayName || currentUsername;
+    const map = new Map(reevals.map(x => [x.next.id, x]));
+    setDailyChecks(dailyChecks.map(c => {
+      const x = map.get(c.id);
+      return x ? { ...x.next, criteriaHistory: [...(c.criteriaHistory || []), { at: now, by, action: "ปรับเกณฑ์ตามผลทวนสอบ", from: x.from, to: x.to }] } : c;
+    }));
+    notify(`ปรับเกณฑ์ย้อนหลังแล้ว ${reevals.length} รายการ${flips.length ? ` · ผลเปลี่ยน ${flips.length} รายการ` : ""}`, 6000);
+  }
+
   return (
     <div>
       {onBackToCalibration && (
@@ -9449,6 +9512,12 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
                   <button style={{ ...S.primaryBtn, height: M ? 40 : 46, borderRadius: 12, padding: M ? "0 10px" : "0 20px", fontSize: M ? 13.5 : 14, justifyContent: "center", ...(M ? { flex: "1 1 0", order: 2 } : {}) }}
                     onClick={() => setEditing(isScale ? blankScaleCheckEntry(equipId) : blankMeterCheckEntry(equipId))}>
                     <Plus size={M ? 15 : 17} /> Daily check วันนี้
+                  </button>
+                )}
+                {canApprove && !guestMode && reevals.length > 0 && (
+                  <button style={{ ...S.ghostBtn, height: M ? 40 : 46, borderRadius: 12, padding: M ? "0 10px" : "0 16px", fontSize: M ? 13 : 13.5, justifyContent: "center", ...(M ? { flex: "1 1 100%", order: 4 } : {}) }}
+                    title="บันทึกที่ลงไว้ก่อนกรอกผลทวนสอบ — ปรับให้ใช้เกณฑ์ตามผลทวนสอบตั้งแต่วันที่ทวนสอบ" onClick={applyReevals}>
+                    <RefreshCw size={M ? 14 : 16} /> ปรับเกณฑ์ย้อนหลัง ({reevals.length})
                   </button>
                 )}
                 {canIc && equip && (
