@@ -1231,6 +1231,38 @@ const round4 = (n) => Math.round(n * 10000) / 10000;
 // Sheet 01 Tolerance (Action limits = reference ± Tolerance, Warning limits =
 // reference ± ⅔ Tolerance) — the same rule Sheet 04 uses. Returns null while
 // the instrument has no Tolerance yet.
+/* ---------- Daily check criteria from verification (all instruments) ----------
+   A check dated D uses the verification (LF-068) with the latest
+   verifyDate ≤ D: standard ± (|Error| + U) of the verification point nearest
+   the standard (that point must lie within 10 % of the standard), never wider
+   than that round's certificate tolerance. instrument.roundChecks is attached
+   by the calibration app. Returns null when no verification applies. */
+function verifyCriterion(instrument, standard, checkDate = "") {
+  const rcs = Array.isArray(instrument?.roundChecks) ? instrument.roundChecks : [];
+  if (!rcs.length || standard == null || !isFinite(standard)) return null;
+  const D = checkDate || todayISO();
+  const near = (list) => list.length ? list.reduce((a, b) => Math.abs(b.reference - standard) < Math.abs(a.reference - standard) ? b : a) : null;
+  const close = (x) => Math.abs(x.reference - standard) <= Math.max(Math.abs(standard) * 0.1, 1e-9);
+  const ver = rcs.filter(rc => rc.verifyDate && rc.verifyDate <= D && (rc.verifyPts || []).some(x => x.tot != null && x.reference != null && close(x)))
+    .sort((a, b) => b.verifyDate.localeCompare(a.verifyDate))[0];
+  if (!ver) return null;
+  const vp = near(ver.verifyPts.filter(x => x.tot != null && x.reference != null && close(x)));
+  const tp = near((ver.tols || []).filter(x => x.reference != null && x.tolerance != null));
+  const roundT = tp ? (tp.type === "% of reading" ? Math.abs(standard) * tp.tolerance / 100 : tp.tolerance) : null;
+  const t = roundT != null ? Math.min(vp.tot, roundT) : vp.tot;
+  return { standard, tol: round4(t), min: round4(standard - t), max: round4(standard + t), certNo: ver.certNo || "",
+    verify: { err: round4(vp.err), U: round4(vp.U), tot: round4(vp.tot), date: ver.verifyDate, capped: roundT != null && vp.tot > roundT, roundTol: roundT } };
+}
+// Fixed-range checks (Polarimeter, Oven, Cooling Bath, humidity): once a
+// verification applies, its range replaces the range typed on the instrument.
+// The standard is the middle of that typed range (e.g. quartz plate value).
+function withVerifyRange(res, instrument, checkDate) {
+  if (!res || res.min == null || res.max == null) return res;
+  const vc = verifyCriterion(instrument, round4((res.min + res.max) / 2), checkDate);
+  if (!vc) return res;
+  return { ...res, min: vc.min, max: vc.max, pass: res.reading != null ? (res.reading >= vc.min && res.reading <= vc.max) : null,
+    criteriaSource: "verify", criteria: { standard: vc.standard, tol: vc.tol, certNo: vc.certNo, ...vc.verify } };
+}
 function deriveCheckLimits(instrument, referenceValue, checkDate = "") {
   // Criteria take effect on the VERIFICATION date: a check dated D uses the
   // verification (LF-068) with the latest verifyDate ≤ D → reference ±
@@ -3616,12 +3648,17 @@ function scaleWeightTol(scale) {
   const t = Number(scale?.weightTol);
   return scale?.weightTol !== "" && scale?.weightTol != null && !isNaN(t) && t > 0 ? t : null;
 }
-function weightGroupsFor(scale) {
+function weightGroupsFor(scale, checkDate = "") {
   const t = scaleWeightTol(scale);
-  return t == null ? WEIGHT_GROUPS : WEIGHT_GROUPS.map(g => ({ ...g, min: +(g.standard - t).toFixed(6), max: +(g.standard + t).toFixed(6) }));
+  const base = t == null ? WEIGHT_GROUPS : WEIGHT_GROUPS.map(g => ({ ...g, min: +(g.standard - t).toFixed(6), max: +(g.standard + t).toFixed(6) }));
+  // A verification point at (or near) the weight → standard ± (|E|+U).
+  return base.map(g => {
+    const vc = verifyCriterion(scale, g.standard, checkDate);
+    return vc ? { ...g, min: vc.min, max: vc.max, criteria: { tol: vc.tol, certNo: vc.certNo, ...vc.verify } } : g;
+  });
 }
-function computeWeightResults(weights, scale = null) {
-  return weightGroupsFor(scale).map(g => {
+function computeWeightResults(weights, scale = null, checkDate = "") {
+  return weightGroupsFor(scale, checkDate).map(g => {
     const raw = weights?.[g.key] ?? "";
     const num = Number(raw);
     const has = raw !== "" && !isNaN(num);
@@ -4051,12 +4088,14 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
 
   const phRows = isPh ? computePhResults(f.phReadings) : [];
   const ecResult = isEc ? computeEcResult(f.ecStandard, f.ecReading) : null;
-  const polarimeterResult = isPolarimeter ? computePolarimeterResult(equip, f.polarimeterReading) : null;
-  const ovenResult = isOven ? computeOvenResult(equip, f.ovenReading) : null;
+  const polarimeterResult = isPolarimeter ? withVerifyRange(computePolarimeterResult(equip, f.polarimeterReading), equip, f.date) : null;
+  const ovenResult = isOven ? withVerifyRange(computeOvenResult(equip, f.ovenReading), equip, f.date) : null;
   const refractometerResult = isRefractometer ? computeRefractometerResult(criteriaAsOf(equip, f.date || f.checkDate || ""), f.brixReading, f.date || f.checkDate || "") : null;
-  const coolingBathResult = isCoolingBath ? computeCoolingBathTempResult(equip, f.coolingBathReading) : null;
-  const humidityResult = isHumidity && !isSilica ? computeHumidityResult(equip, f.humidityReading) : null;
+  const coolingBathResult = isCoolingBath ? withVerifyRange(computeCoolingBathTempResult(equip, f.coolingBathReading), equip, f.date) : null;
+  const humidityResult = isHumidity && !isSilica ? withVerifyRange(computeHumidityResult(equip, f.humidityReading), equip, f.date) : null;
   const silicaResult = isSilica && f.preUse?.silicaColor ? { color: f.preUse.silicaColor, pass: f.preUse.silicaColor === "OK" } : null;
+  const critRes = [polarimeterResult, ovenResult, coolingBathResult, humidityResult].find(r => r?.criteria);
+  const critNote = critRes ? { ...critRes.criteria, text: `${critRes.criteria.standard} ± ${critRes.criteria.tol} (|Error| ${critRes.criteria.err} + U ${critRes.criteria.U})` } : null;
   const roomEnvResult = isRoomEnv ? computeRoomEnvResult(equip, f.roomTempReading, f.roomRhReading) : null;
   // Link back to the calibration record: warn when the instrument is past its
   // calibration due date or its newest certificate failed the Sheet 03 check.
@@ -4294,6 +4333,12 @@ function MeterCheckForm({ entry, equip, certificates = [], isExisting = false, c
         </Field>
         )}
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.remarks} onChange={set("remarks")} /></Field>
+        {critNote && (
+          <div style={{ gridColumn: "1 / -1", fontSize: 12, color: critNote.capped ? "var(--red)" : "var(--muted)", background: "#F5F8F7", borderRadius: 10, padding: "8px 12px", lineHeight: 1.55 }}>
+            เกณฑ์จากผลทวนสอบ{critNote.date ? ` ${critNote.date}` : ""}{critNote.certNo ? ` · ใบรับรอง ${critNote.certNo}` : ""}: {critNote.text}
+            {critNote.capped ? " · |E|+U เกินเกณฑ์ในใบรับรอง จึงใช้เกณฑ์ในใบรับรอง" : ""}
+          </div>
+        )}
       </div>
 
       <div style={{
@@ -9608,8 +9653,10 @@ function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, 
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setWeight = (key) => (e) => setF({ ...f, weights: { ...f.weights, [key]: e.target.value } });
 
-  const weightRows = computeWeightResults(f.weights, scale);
-  const tolDec = Math.max(2, ((String(scaleWeightTol(scale) ?? "").split(".")[1]) || "").length);
+  const weightRows = computeWeightResults(f.weights, scale, f.date);
+  const tolDec = weightRows.some(r => r.criteria) ? 4 : Math.max(2, ((String(scaleWeightTol(scale) ?? "").split(".")[1]) || "").length);
+  const critRow = weightRows.find(r => r.criteria);
+  const critNote = critRow ? { ...critRow.criteria, text: weightRows.filter(r => r.criteria).map(r => `${r.standard} g ± ${r.criteria.tol}`).join(" · ") } : null;
   const allWeightsEntered = weightRows.every(r => r.reading !== null);
   const flagsChosen = f.condition && f.level && f.clean && f.zero;
   const result = (!flagsChosen || !allWeightsEntered) ? null
@@ -9698,6 +9745,12 @@ function DailyCheckForm({ entry, scale, isExisting = false, canApprove = false, 
         </Field>
         )}
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 60 }} value={f.remarks} onChange={set("remarks")} /></Field>
+        {critNote && (
+          <div style={{ gridColumn: "1 / -1", fontSize: 12, color: critNote.capped ? "var(--red)" : "var(--muted)", background: "#F5F8F7", borderRadius: 10, padding: "8px 12px", lineHeight: 1.55 }}>
+            เกณฑ์จากผลทวนสอบ{critNote.date ? ` ${critNote.date}` : ""}{critNote.certNo ? ` · ใบรับรอง ${critNote.certNo}` : ""}: {critNote.text}
+            {critNote.capped ? " · |E|+U เกินเกณฑ์ในใบรับรอง จึงใช้เกณฑ์ในใบรับรอง" : ""}
+          </div>
+        )}
       </div>
 
       <div style={{
