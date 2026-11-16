@@ -3,7 +3,7 @@
 // same Firebase data and login as LabTrack. One calibration round =
 // certificate table + verification (LF-068) + download the report; signing
 // happens on the printed report (lab decision — no approvals in the app).
-import { useState, useEffect, useMemo } from "react";
+import { Fragment, useState, useEffect, useMemo } from "react";
 import {
   LayoutGrid, ChevronLeft, Plus, Trash2, FileDown, AlertTriangle, Search, Pencil, X,
   ClipboardList, ExternalLink, Gauge, Calculator, ClipboardCheck, Check, CheckCircle2, CalendarClock, Ruler, Target, Settings2, ShieldCheck,
@@ -13,12 +13,12 @@ import {
   verifySummary, instrumentStatus, isBefore, refOf, uOf, VERIFY_MAX_READS, VERIFY_MIN_READS,
   VERIFICATION_REQUIRED_FROM, criteriaOf,
 } from "./calc.js";
-import { printLf068, printCheckLog, VERIFY_REASONS } from "./report.js";
+import { printLf068, printCheckLog, printEquipHistory, VERIFY_REASONS } from "./report.js";
 import TrendChart from "./TrendChart.jsx";
 import { EquipmentEditor, InstrumentInfo, InstrumentPhoto, blankInstrument, STATUS_LABEL } from "./EquipmentEditor.jsx";
 import {
   LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable, newIntermediateCheckFor,
-  saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm, dailyCheckPoints, LF069_REPORTS,
+  saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm, dailyCheckPoints, LF069_REPORTS, toDisplayImageUrl,
 } from "../labtrack/LabTrackApp.jsx";
 import { UncertaintyList, UncertaintyEditor, newReport, legacyReports, printLf069 } from "./UncertaintyPage.jsx";
 
@@ -299,7 +299,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
               guest={guest} me={me} currentUsername={currentUsername} notify={notify} initialTab={page.tab} openDaily={page.openDaily}
               certificates={data.certificates} dailyChecks={data.dailyChecks} intermediateChecks={data.intermediateChecks}
               setDailyChecks={(l) => setListSmart("dailyChecks", l)} setIntermediateChecks={(l) => setListSmart("intermediateChecks", l)}
-              onSaveInstrument={async (id, patch) => { await mutate("equipment", list => list.map(x => x.id === id ? { ...x, ...patch } : x)); setToast("บันทึกเกณฑ์แล้ว"); }}
+              onSaveInstrument={async (id, patch) => { await mutate("equipment", list => list.map(x => x.id === id ? { ...x, ...patch } : x)); setToast("บันทึกแล้ว"); }}
               onBack={guest ? null : () => goBack({ name: "overview" })}
               onTabChange={(t) => go({ ...page, tab: t }, { replace: true, keepScroll: true })}
               onEditInstrument={() => go({ name: "equipEdit", instrumentId: instrument.id })}
@@ -648,7 +648,7 @@ function InstrumentPage({ instrument: e, rounds, onBack, onOpenRound, onEditRoun
   const myIc = intermediateChecks.filter(c => c.instrumentId === e.id);
   const tabs = guest
     ? [["main", "ข้อมูลเครื่อง"], ...(hasDaily ? [["daily", `Daily check (${myDaily.length})`]] : [])]
-    : [["main", "ภาพรวม"], ["cal", `สอบเทียบ/ทวนสอบ (${rounds.length})`], ...(hasDaily ? [["daily", `Daily check (${myDaily.length})`]] : []),
+    : [["main", "ภาพรวม"], ["history", "ประวัติเครื่องมือ"], ["cal", `สอบเทียบ/ทวนสอบ (${rounds.length})`], ...(hasDaily ? [["daily", `Daily check (${myDaily.length})`]] : []),
        ["ic", `Intermediate check (${myIc.length})`], ["unc", `ความไม่แน่นอน (${uncReports.length})`], ["reports", "รายงาน"]];
   const [tab, setTabState] = useState(() => tabs.some(t => t[0] === initialTab) ? initialTab : "main");
   const setTab = (t) => { setTabState(t); onTabChange?.(t); };
@@ -720,6 +720,8 @@ function InstrumentPage({ instrument: e, rounds, onBack, onOpenRound, onEditRoun
       </>)}
 
 
+      {tab === "history" && !guest && <EquipHistory e={e} rounds={rounds} canEdit={!guest} onSave={onSaveInstrument} me={me} />}
+
       {tab === "cal" && !guest && (<>
         <p className="ca-muted ca-small" style={{ margin: 0 }}>รอบสอบเทียบของเครื่องนี้ · กรอกผลจากใบรับรอง ทวนสอบ แล้วดาวน์โหลด MPIR-LF-068</p>
         <RoundCards e={e} rounds={rounds} onVerify={onEditRound} onOpen={onOpenRound} onNew={onNewRound} onDeleteRound={onDeleteRound} />
@@ -744,6 +746,10 @@ function InstrumentPage({ instrument: e, rounds, onBack, onOpenRound, onEditRoun
       )}
 
       {tab === "reports" && !guest && (<>
+        <section className="ca-card"><div className="ca-row ca-wrap" style={{ justifyContent: "space-between" }}>
+          <h2 style={{ margin: 0 }}>ประวัติเครื่องมือวัดและทดสอบ (MPIR-LF-033)</h2>
+          <div className="ca-row"><button className="ca-link" onClick={() => setTab("history")}>ดู/เพิ่มรายการ ›</button>
+            <button className="ca-btn" onClick={() => downloadHistory(e, rounds)}><FileDown size={15} /> ดาวน์โหลด</button></div></div></section>
         <section className="ca-card">
           <h2 style={{ marginTop: 0 }}>รายงานทวนสอบหลังสอบเทียบ (MPIR-LF-068)</h2>
           {rounds.length ? (
@@ -912,6 +918,109 @@ function DailyToday({ equipment, dailyChecks, onOpen }) {
       )}
     </div>
   );
+}
+
+/* ---------- ประวัติเครื่องมือวัดและทดสอบ (MPIR-LF-033) ---------- */
+const HISTORY_ACTIONS = ["ปรับแต่ง", "บำรุงรักษา", "ซ่อม", "ทวนสอบ", "อื่นๆ"];
+const freqText = (m) => { const n = num(m); return !n ? "" : 12 % n === 0 ? `${12 / n} ครั้ง/ปี` : `ทุก ${n} เดือน`; };
+function tolText(crit, unit) {
+  if (!crit || crit.tolerance == null || crit.tolerance === "") return "";
+  return crit.type === "% of reading" || crit.type === "% of full scale" ? `± ${crit.tolerance} %` : `± ${crit.tolerance}${unit ? ` ${unit}` : ""}`;
+}
+// Section 1 (general info) and section 2 (calibration rounds from the app +
+// rows added by hand: adjustment / maintenance / repair) of LF-033.
+function historyOf(e, rounds) {
+  const unit = e.calUnit || "";
+  const critOfRound = (r) => { const p = r.points.find(x => !isBefore(x)) || r.points[0]; return p ? criteriaOf(e, p) : null; };
+  const latest = rounds[0];
+  const accept = (latest && tolText(critOfRound(latest), unit)) || tolText({ tolerance: e.tolerance, type: e.toleranceType }, unit);
+  const usable = e.usableRange || (num(e.workingRangeMin) != null || num(e.workingRangeMax) != null ? `${e.workingRangeMin ?? ""}–${e.workingRangeMax ?? ""} ${unit}` : "");
+  const info = [
+    ["ชื่อเครื่องมือ/ซอฟต์แวร์", [e.name, e.code && `(${e.code})`].filter(Boolean).join(" ")],
+    ["รุ่น/Version (ซอฟต์แวร์)", [e.model, e.softwareVersion && `Version ${e.softwareVersion}`].filter(Boolean).join(" · ")],
+    ["Serial number", e.serialNo],
+    ["ยี่ห้อ/ผู้ผลิต", e.brand],
+    ["สถานที่ตั้งปัจจุบัน", e.location],
+    ["หัวข้อที่ใช้ทดสอบ", e.scopeOfUse || e.relatedTestMethod],
+    ["ช่วงการใช้งานได้", usable],
+    ["ความละเอียดของเครื่องมือ", e.resolution ? `± ${e.resolution}${unit ? ` ${unit}` : ""}` : ""],
+    ["ช่วงใช้งานในการทดสอบ", e.testRange],
+    ["ความถี่ในการสอบเทียบ", freqText(e.intervalMonths)],
+    ["เกณฑ์การยอมรับ", accept],
+  ];
+  const auto = rounds.map(r => {
+    const cs = certSummary(r.points, e);
+    const adjusted = r.points.some(p => /adjust|ปรับ/i.test(String(p.adjustmentStatus || "")) && !/not|ไม่/i.test(String(p.adjustmentStatus || "")));
+    const v = r.verification;
+    const res = cs.incomplete ? "สอบเทียบแล้ว" : cs.pass ? "ผ่านเกณฑ์สอบเทียบ" : "ไม่ผ่านเกณฑ์สอบเทียบ";
+    return { id: `round:${r.key}`, auto: true, date: r.calibrationDate, action: adjusted ? "สอบเทียบ/ปรับแต่ง" : "สอบเทียบ",
+      criteria: tolText(critOfRound(r), unit), result: v ? `${res} · ทวนสอบ ${fmtDate(v.verifyDate)}` : res,
+      nextDue: r.calibrationDate ? addMonthsISO(r.calibrationDate, num(e.intervalMonths) || 12) : "", ref: r.certificateNo, by: v?.verifiedBy || "" };
+  });
+  const manual = (Array.isArray(e.historyLog) ? e.historyLog : []).map(x => ({ ...x, auto: false }));
+  const rows = [...auto, ...manual].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  return { info, rows };
+}
+function downloadHistory(e, rounds) {
+  const { info, rows } = historyOf(e, rounds);
+  printEquipHistory({ instrument: e, info, rows, imgSrc: e.imageUrl ? toDisplayImageUrl(e.imageUrl) : "" });
+}
+function EquipHistory({ e, rounds, canEdit, onSave, me }) {
+  const { info, rows } = historyOf(e, rounds);
+  const blank = () => ({ date: todayISO(), action: "บำรุงรักษา", criteria: "", result: "", nextDue: "", ref: "", by: me || "" });
+  const [adding, setAdding] = useState(null);
+  const log = Array.isArray(e.historyLog) ? e.historyLog : [];
+  const set = (k) => (ev) => setAdding({ ...adding, [k]: ev.target.value });
+  async function save() {
+    await onSave(e.id, { historyLog: [...log, { ...adding, id: `h${Date.now().toString(36)}`, createdAt: new Date().toISOString(), createdBy: me || "" }] });
+    setAdding(null);
+  }
+  async function remove(id) {
+    if (!window.confirm("ลบรายการนี้ออกจากประวัติเครื่องมือ?")) return;
+    await onSave(e.id, { historyLog: log.filter(x => x.id !== id) });
+  }
+  return (<>
+    <section className="ca-card">
+      <div className="ca-card-head" style={{ padding: 0, marginBottom: 10 }}>
+        <h2 style={{ margin: 0 }}>1. ข้อมูลทั่วไป</h2>
+        <button className="ca-btn ca-btn-primary" onClick={() => downloadHistory(e, rounds)}><FileDown size={15} /> ดาวน์โหลด MPIR-LF-033</button>
+      </div>
+      <div className="ca-row" style={{ alignItems: "flex-start", gap: 18, flexWrap: "wrap" }}>
+        <dl className="ca-dl" style={{ flex: "1 1 320px", margin: 0, display: "grid", gridTemplateColumns: "max-content 1fr", gap: "6px 14px" }}>
+          {info.map(([l, v]) => <Fragment key={l}><dt className="ca-muted">{l}</dt><dd style={{ margin: 0 }}>{v || <span className="ca-muted">–</span>}</dd></Fragment>)}
+        </dl>
+        <InstrumentPhoto e={e} size={180} />
+      </div>
+      {canEdit && <p className="ca-small ca-muted" style={{ marginBottom: 0 }}>แก้ข้อมูลส่วนนี้ได้ที่ “แก้ไขข้อมูลเครื่อง” (ช่วงการใช้งานได้ / ช่วงใช้งานในการทดสอบ / ความถี่ / เกณฑ์)</p>}
+    </section>
+    <section className="ca-card ca-flush">
+      <div className="ca-card-head"><h2>2. บันทึกการดำเนินการเกี่ยวกับเครื่องมือวัดและทดสอบ</h2>
+        {canEdit && !adding && <button className="ca-btn" onClick={() => setAdding(blank())}><Plus size={15} /> เพิ่มรายการ</button>}</div>
+      {adding && (
+        <div style={{ padding: "0 18px 14px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+          <label className="ca-field"><span>วันที่</span><input type="date" value={adding.date} onChange={set("date")} /></label>
+          <label className="ca-field"><span>การดำเนินการ</span><select value={adding.action} onChange={set("action")}>{HISTORY_ACTIONS.map(a => <option key={a}>{a}</option>)}</select></label>
+          <label className="ca-field"><span>เกณฑ์การยอมรับ</span><input value={adding.criteria} onChange={set("criteria")} placeholder="เช่น ± 0.02 g" /></label>
+          <label className="ca-field" style={{ gridColumn: "span 2" }}><span>ผลการดำเนินการ</span><input value={adding.result} onChange={set("result")} placeholder="เช่น ทำความสะอาด ปรับระดับ ผ่าน" /></label>
+          <label className="ca-field"><span>กำหนดสอบเทียบครั้งต่อไป</span><input type="date" value={adding.nextDue} onChange={set("nextDue")} /></label>
+          <label className="ca-field"><span>เอกสารอ้างอิง</span><input value={adding.ref} onChange={set("ref")} placeholder="เลขที่ใบงาน/รายงาน" /></label>
+          <label className="ca-field"><span>ผู้บันทึก</span><input value={adding.by} onChange={set("by")} /></label>
+          <div className="ca-row" style={{ alignItems: "flex-end", gap: 8 }}>
+            <button className="ca-btn" onClick={() => setAdding(null)}>ยกเลิก</button>
+            <button className="ca-btn ca-btn-primary" disabled={!adding.date || !adding.result.trim()} onClick={save}>บันทึก</button>
+          </div>
+        </div>
+      )}
+      <div className="ca-scroll"><table className="ca-table">
+        <thead><tr><th>วันที่</th><th>การดำเนินการ</th><th>เกณฑ์การยอมรับ</th><th>ผลการดำเนินการ</th><th>กำหนดสอบเทียบครั้งต่อไป</th><th>เอกสารอ้างอิง</th><th>ผู้บันทึก</th><th></th></tr></thead>
+        <tbody>{rows.length ? rows.map(r => (
+          <tr key={r.id}><td>{fmtDate(r.date)}</td><td>{r.action}</td><td>{r.criteria || "–"}</td><td>{r.result || "–"}</td><td>{fmtDate(r.nextDue) || "–"}</td><td>{r.ref || "–"}</td><td>{r.by || "–"}</td>
+            <td style={{ textAlign: "right" }}>{r.auto ? <span className="ca-small ca-muted">จากรอบสอบเทียบ</span>
+              : canEdit ? <button className="ca-btn" title="ลบ" onClick={() => remove(r.id)}><Trash2 size={14} /></button> : null}</td></tr>
+        )) : <tr><td colSpan={8} className="ca-muted">ยังไม่มีประวัติ</td></tr>}</tbody>
+      </table></div>
+    </section>
+  </>);
 }
 
 function LogDownload({ kind, instrument: e, records, extra = null }) {
