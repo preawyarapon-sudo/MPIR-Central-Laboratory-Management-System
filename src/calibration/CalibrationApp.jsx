@@ -294,7 +294,16 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
                 guestMode={guest} canApprove={!guest} currentUsername={currentUsername} currentDisplayName={guest ? "ผู้เยี่ยมชม (สแกน QR)" : currentDisplayName} /></div>
             </div>
           )}
-          {page.name === "instrument" && instrument && (
+          {/* Scanned "ดูข้อมูลเครื่องมือ" QR without a login: the instrument
+              history card only (read-only) — no tabs, buttons or downloads. */}
+          {page.name === "instrument" && instrument && guest && (
+            <div className="ca-stack">
+              <header className="ca-head"><div><h1>{instrument.code} {instrument.name}</h1>
+                <p className="ca-muted">ประวัติเครื่องมือวัดและทดสอบ · ดูอย่างเดียว</p></div></header>
+              <EquipHistory e={instrument} rounds={roundsById[instrument.id] || []} canEdit={false} readOnly onSave={() => {}} me="" />
+            </div>
+          )}
+          {page.name === "instrument" && instrument && !guest && (
             <InstrumentPage instrument={instrument} rounds={roundsById[instrument.id] || []}
               guest={guest} me={me} currentUsername={currentUsername} notify={notify} initialTab={page.tab} openDaily={page.openDaily}
               certificates={data.certificates} dailyChecks={data.dailyChecks} intermediateChecks={data.intermediateChecks}
@@ -965,7 +974,7 @@ function downloadHistory(e, rounds) {
   const { info, rows } = historyOf(e, rounds);
   printEquipHistory({ instrument: e, info, rows, imgSrc: e.imageUrl ? toDisplayImageUrl(e.imageUrl) : "" });
 }
-function EquipHistory({ e, rounds, canEdit, onSave, me }) {
+function EquipHistory({ e, rounds, canEdit, onSave, me, readOnly = false }) {
   const { info, rows } = historyOf(e, rounds);
   const blank = () => ({ date: todayISO(), action: "บำรุงรักษา", criteria: "", result: "", nextDue: "", ref: "", by: me || "" });
   const [adding, setAdding] = useState(null);
@@ -983,7 +992,7 @@ function EquipHistory({ e, rounds, canEdit, onSave, me }) {
     <section className="ca-card">
       <div className="ca-card-head" style={{ padding: 0, marginBottom: 10 }}>
         <h2 style={{ margin: 0 }}>1. ข้อมูลทั่วไป</h2>
-        <button className="ca-btn ca-btn-primary" onClick={() => downloadHistory(e, rounds)}><FileDown size={15} /> ดาวน์โหลด MPIR-LF-033</button>
+        {!readOnly && <button className="ca-btn ca-btn-primary" onClick={() => downloadHistory(e, rounds)}><FileDown size={15} /> ดาวน์โหลด MPIR-LF-033</button>}
       </div>
       <div className="ca-row" style={{ alignItems: "flex-start", gap: 18, flexWrap: "wrap" }}>
         <dl className="ca-dl" style={{ flex: "1 1 320px", margin: 0, display: "grid", gridTemplateColumns: "max-content 1fr", gap: "6px 14px" }}>
@@ -1011,14 +1020,28 @@ function EquipHistory({ e, rounds, canEdit, onSave, me }) {
           </div>
         </div>
       )}
+      {readOnly ? (
+        <div style={{ padding: "0 18px 16px", display: "grid", gap: 10 }}>
+          {rows.length ? [...rows].reverse().map(r => (
+            <div key={r.id} style={{ border: "1px solid var(--ca-line, #DCE6EE)", borderRadius: 12, padding: "10px 12px" }}>
+              <div className="ca-row" style={{ justifyContent: "space-between", gap: 8 }}><b>{fmtDate(r.date)}</b><span className="ca-small ca-muted">{r.action}</span></div>
+              <div style={{ marginTop: 4 }}>{r.result || "–"}</div>
+              <div className="ca-small ca-muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                {[r.criteria && `เกณฑ์ ${r.criteria}`, r.nextDue && `ครั้งต่อไป ${fmtDate(r.nextDue)}`, r.ref && `อ้างอิง ${r.ref}`, r.by && `ผู้บันทึก ${r.by}`].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+          )) : <p className="ca-muted" style={{ margin: 0 }}>ยังไม่มีประวัติ</p>}
+        </div>
+      ) : (
       <div className="ca-scroll"><table className="ca-table">
-        <thead><tr><th>วันที่</th><th>การดำเนินการ</th><th>เกณฑ์การยอมรับ</th><th>ผลการดำเนินการ</th><th>กำหนดสอบเทียบครั้งต่อไป</th><th>เอกสารอ้างอิง</th><th>ผู้บันทึก</th><th></th></tr></thead>
+        <thead><tr><th>วันที่</th><th>การดำเนินการ</th><th>เกณฑ์การยอมรับ</th><th>ผลการดำเนินการ</th><th>กำหนดสอบเทียบครั้งต่อไป</th><th>เอกสารอ้างอิง</th><th>ผู้บันทึก</th>{!readOnly && <th></th>}</tr></thead>
         <tbody>{rows.length ? rows.map(r => (
           <tr key={r.id}><td>{fmtDate(r.date)}</td><td>{r.action}</td><td>{r.criteria || "–"}</td><td>{r.result || "–"}</td><td>{fmtDate(r.nextDue) || "–"}</td><td>{r.ref || "–"}</td><td>{r.by || "–"}</td>
-            <td style={{ textAlign: "right" }}>{r.auto ? <span className="ca-small ca-muted">จากรอบสอบเทียบ</span>
-              : canEdit ? <button className="ca-btn" title="ลบ" onClick={() => remove(r.id)}><Trash2 size={14} /></button> : null}</td></tr>
+            {!readOnly && <td style={{ textAlign: "right" }}>{r.auto ? <span className="ca-small ca-muted">จากรอบสอบเทียบ</span>
+              : canEdit ? <button className="ca-btn" title="ลบ" onClick={() => remove(r.id)}><Trash2 size={14} /></button> : null}</td>}</tr>
         )) : <tr><td colSpan={8} className="ca-muted">ยังไม่มีประวัติ</td></tr>}</tbody>
       </table></div>
+      )}
     </section>
   </>);
 }
