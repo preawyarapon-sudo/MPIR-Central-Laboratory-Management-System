@@ -1361,6 +1361,68 @@ function ParamRepairs({ jobNo, p, onFlagRepair, onResolveRepair }) {
   );
 }
 
+// ---------- MPIR-LF-045-04: printable Brix / Pol / Fibre result sheet ----------
+// Same layout as the registered Excel form (A4 landscape, 12 samples × 2
+// reps per page). The job number, sample count, page "x/y", running No. and
+// every registration number (regStart … regEnd) are filled in; everything
+// else is left blank for hand-writing. Printed via the browser ("Save as PDF").
+const LF045_CODE = "MPIR-LF-045-04";
+const LF045_PER_PAGE = 12;
+function isBrixPolFiberJob(job) {
+  return (job.parameters || []).some((p) => /brix|pol|fib(re|er)/i.test(p.name || ""));
+}
+function lf045RegNumbers(job) {
+  const start = parseRegNo(job.regStart);
+  const end = parseRegNo(job.regEnd);
+  if (start && end && end.num >= start.num && end.num - start.num < 5000) {
+    const out = [];
+    for (let n = start.num; n <= end.num; n++) out.push(String(n).padStart(start.width, "0"));
+    return out;
+  }
+  // No usable range: blank rows for the sample count (at least one page).
+  return Array.from({ length: Math.max(parseInt(job.sampleCount, 10) || 0, LF045_PER_PAGE) }, () => "");
+}
+function lf045Html(job) {
+  const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const regs = lf045RegNumbers(job);
+  const pages = [];
+  for (let i = 0; i < regs.length; i += LF045_PER_PAGE) pages.push(regs.slice(i, i + LF045_PER_PAGE));
+  const count = job.sampleCount || (job.regStart && job.regEnd ? regs.length : "");
+  const cols = `<col style="width:3.02%"><col style="width:7.64%"><col style="width:3.20%"><col style="width:7.10%"><col style="width:7.64%"><col style="width:6.75%"><col style="width:5.51%"><col style="width:6.22%"><col style="width:6.04%"><col style="width:5.68%"><col style="width:4.26%"><col style="width:6.04%"><col style="width:6.04%"><col style="width:6.04%"><col style="width:6.04%"><col style="width:6.04%"><col style="width:6.75%">`;
+  const head = `<tr class="h"><th rowspan="2">No.</th><th rowspan="2">เลขทะเบียนตัวอย่าง</th><th rowspan="2">Rep.</th><th rowspan="2">หมายเลขถุง</th><th rowspan="2">น้ำหนักถุง (กรัม)</th><th colspan="2">น้ำหนักชานอ้อยย่อย (กรัม)</th><th rowspan="2">ตำแหน่งที่วางในตู้อบ</th><th rowspan="2">วันที่เข้าตู้อบ</th><th rowspan="2">วันที่ออกตู้อบ</th><th rowspan="2">pH</th><th rowspan="2">น้ำหนักภาชนะ</th><th rowspan="2">นน.ภาชนะ+<wbr>ชานอ้อยสด</th><th rowspan="2">น้ำหนักภาชนะ</th><th rowspan="2">นน.ภาชนะ+<wbr>น้ำอ้อย</th><th rowspan="2">น้ำหนักภาชนะ</th><th rowspan="2">น้ำหนักภาชนะ+<wbr>ชานอ้อยแห้ง</th></tr>
+<tr class="h"><th>ก่อนอบ</th><th>หลังอบ</th></tr>`;
+  const blanks = "<td></td>".repeat(14);
+  const body = (list, pi) => list.map((reg, i) => {
+    const no = pi * LF045_PER_PAGE + i + 1;
+    return `<tr><td rowspan="2" class="no">${no}</td><td rowspan="2" class="reg">${esc(reg)}</td><td class="rep">1</td>${blanks}</tr><tr><td class="rep">2</td>${blanks}</tr>`;
+  }).join("")
+    // keep the form's 12-sample shape on the last page (blank, unnumbered)
+    + Array.from({ length: LF045_PER_PAGE - list.length }, () => `<tr><td rowspan="2"></td><td rowspan="2"></td><td></td>${blanks}</tr><tr><td></td>${blanks}</tr>`).join("");
+  const page = (list, pi) => `<section class="pg">
+<div class="top"><div class="title">บันทึกผลทดสอบ ค่าองศาบริกซ์ (Brix)&nbsp; โพลาไรเซชัน (Pol) และเส้นใย (Fibre)</div><div class="code">${LF045_CODE} หน้าที่ ${pi + 1}/${pages.length}</div></div>
+<div class="meta"><span>เลขที่รับ <b>${esc(job.jobNo)}</b></span><span>จำนวนตัวอย่าง <b>${esc(count)}</b></span><span>Brix น้ำต้มไฟเบอร์ น้ำสุดท้าย<i></i></span></div>
+<table><colgroup>${cols}</colgroup>${head}${body(list, pi)}</table>
+<div class="foot"><div><span>ผู้บันทึก<i></i></span><span>วันที่บันทึก<i></i></span></div><div><span>รวมข้อมูลที่บันทึกผิด (จุด)<i></i></span><span>ผู้ตรวจสอบ<i></i></span></div></div>
+</section>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(job.jobNo)} ${LF045_CODE}</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>@page{size:A4 landscape;margin:7mm 8mm 5mm}*{box-sizing:border-box}body{margin:0;font-family:Sarabun,sans-serif;color:#000}
+.pg{page-break-after:always;break-after:page}.pg:last-child{page-break-after:auto;break-after:auto}
+.top{display:flex;justify-content:space-between;align-items:baseline;margin:0 0 2.5mm}.title{flex:1;text-align:center;font-weight:700;font-size:13pt;padding-left:30mm}.code{font-size:9.5pt;white-space:nowrap}
+.meta{display:flex;gap:14mm;font-size:10.5pt;margin:0 0 2mm 1mm}.meta b{display:inline-block;min-width:34mm;border-bottom:.6pt dotted #000;text-align:center;font-weight:600}
+.meta i,.foot i{display:inline-block;width:40mm;border-bottom:.6pt dotted #000;margin-left:2mm}
+table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:.6pt solid #000;text-align:center;vertical-align:middle;font-size:9pt;padding:0 1mm}
+tr.h th{font-weight:600;height:9mm;line-height:1.15;font-size:8.6pt;overflow-wrap:anywhere}tr.h + tr.h th{height:5mm}td{height:5.9mm}td.no{font-size:9.5pt}td.reg{font-weight:700;font-size:10.5pt}td.rep{font-size:9pt}
+.foot{display:flex;justify-content:space-between;font-size:10pt;margin-top:2.5mm;padding:0 2mm}.foot>div{display:flex;flex-direction:column;gap:2mm}.foot span{white-space:nowrap}</style></head><body>
+${pages.map(page).join("")}
+<script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
+}
+function printLf045(job) {
+  const w = window.open("", "_blank");
+  if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return; }
+  w.document.open(); w.document.write(lf045Html(job)); w.document.close();
+}
+
 // ---------- Job Detail ----------
 function JobDetail({ job, onBack, onUpdateParam, onDeleteJob, onEditJob, onFlagRepair, onResolveRepair }) {
   const stats = computeJobStats(job);
@@ -1452,6 +1514,11 @@ function JobDetail({ job, onBack, onUpdateParam, onDeleteJob, onEditJob, onFlagR
       </div>
 
       <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        {isBrixPolFiberJob(job) && (
+          <Btn small kind="primary" onClick={() => printLf045(job)} title={`พิมพ์แบบบันทึก ${LF045_CODE} พร้อมเลขที่รับและเลขทะเบียนตัวอย่าง`}>
+            <FileSpreadsheet size={13} /> พิมพ์ฟอร์ม Brix/Pol/Fibre
+          </Btn>
+        )}
         <Btn small onClick={() => onEditJob(job)}>แก้ไขรหัสงานนี้</Btn>
         <Btn kind="danger" small onClick={() => setConfirmDelete(true)}><Trash2 size={13} /> ลบรหัสงานนี้</Btn>
       </div>
