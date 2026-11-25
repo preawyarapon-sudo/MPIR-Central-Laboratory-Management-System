@@ -980,8 +980,14 @@ function EquipHistory({ e, rounds, canEdit, onSave, me, readOnly = false }) {
   const [adding, setAdding] = useState(null);
   const log = Array.isArray(e.historyLog) ? e.historyLog : [];
   const set = (k) => (ev) => setAdding({ ...adding, [k]: ev.target.value });
+  // adding.id set → editing an existing hand-added row (kept in place, with
+  // who/when it was last edited); otherwise a new row.
   async function save() {
-    await onSave(e.id, { historyLog: [...log, { ...adding, id: `h${Date.now().toString(36)}`, createdAt: new Date().toISOString(), createdBy: me || "" }] });
+    const { auto: _a, ...row } = adding;
+    const next = row.id
+      ? log.map(x => x.id === row.id ? { ...x, ...row, editedAt: new Date().toISOString(), editedBy: me || "" } : x)
+      : [...log, { ...row, id: `h${Date.now().toString(36)}`, createdAt: new Date().toISOString(), createdBy: me || "" }];
+    await onSave(e.id, { historyLog: next });
     setAdding(null);
   }
   async function remove(id) {
@@ -1016,7 +1022,7 @@ function EquipHistory({ e, rounds, canEdit, onSave, me, readOnly = false }) {
           <label className="ca-field"><span>ผู้บันทึก</span><input value={adding.by} onChange={set("by")} /></label>
           <div className="ca-row" style={{ alignItems: "flex-end", gap: 8 }}>
             <button className="ca-btn" onClick={() => setAdding(null)}>ยกเลิก</button>
-            <button className="ca-btn ca-btn-primary" disabled={!adding.date || !adding.result.trim()} onClick={save}>บันทึก</button>
+            <button className="ca-btn ca-btn-primary" disabled={!adding.date || !String(adding.result || "").trim()} onClick={save}>{adding.id ? "บันทึกการแก้ไข" : "บันทึก"}</button>
           </div>
         </div>
       )}
@@ -1038,7 +1044,9 @@ function EquipHistory({ e, rounds, canEdit, onSave, me, readOnly = false }) {
         <tbody>{rows.length ? rows.map(r => (
           <tr key={r.id}><td>{fmtDate(r.date)}</td><td>{r.action}</td><td>{r.criteria || "–"}</td><td>{r.result || "–"}</td><td>{fmtDate(r.nextDue) || "–"}</td><td>{r.ref || "–"}</td><td>{r.by || "–"}</td>
             {!readOnly && <td style={{ textAlign: "right" }}>{r.auto ? <span className="ca-small ca-muted">จากรอบสอบเทียบ</span>
-              : canEdit ? <button className="ca-btn" title="ลบ" onClick={() => remove(r.id)}><Trash2 size={14} /></button> : null}</td>}</tr>
+              : canEdit ? <span style={{ whiteSpace: "nowrap" }}>
+                  <button className="ca-btn" title="แก้ไข" onClick={() => setAdding({ ...blank(), ...r, criteria: r.criteria || "", result: r.result || "", nextDue: r.nextDue || "", ref: r.ref || "", by: r.by || "" })}><Pencil size={14} /></button>{" "}
+                  <button className="ca-btn" title="ลบ" onClick={() => remove(r.id)}><Trash2 size={14} /></button></span> : null}</td>}</tr>
         )) : <tr><td colSpan={8} className="ca-muted">ยังไม่มีประวัติ</td></tr>}</tbody>
       </table></div>
       )}
