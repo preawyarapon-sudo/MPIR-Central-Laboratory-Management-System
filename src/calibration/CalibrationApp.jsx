@@ -930,7 +930,7 @@ function DailyToday({ equipment, dailyChecks, onOpen }) {
 }
 
 /* ---------- ประวัติเครื่องมือวัดและทดสอบ (MPIR-LF-033) ---------- */
-const HISTORY_ACTIONS = ["ปรับแต่ง", "บำรุงรักษา", "ซ่อม", "ทวนสอบ", "อื่นๆ"];
+const HISTORY_ACTIONS = ["สอบเทียบ", "สอบเทียบ/ปรับแต่ง", "ทวนสอบ", "ปรับแต่ง", "บำรุงรักษา", "ซ่อม", "อื่นๆ"];
 const freqText = (m) => { const n = num(m); return !n ? "" : 12 % n === 0 ? `${12 / n} ครั้ง/ปี` : `ทุก ${n} เดือน`; };
 function tolText(crit, unit) {
   if (!crit || crit.tolerance == null || crit.tolerance === "") return "";
@@ -1016,7 +1016,7 @@ function EquipHistory({ e, rounds, canEdit, onSave, me, readOnly = false }) {
       {adding && (
         <div style={{ padding: "0 18px 14px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
           <label className="ca-field"><span>วันที่</span><input type="date" value={adding.date} onChange={set("date")} /></label>
-          <label className="ca-field"><span>การดำเนินการ</span><select value={adding.action} onChange={set("action")}>{HISTORY_ACTIONS.map(a => <option key={a}>{a}</option>)}</select></label>
+          <label className="ca-field"><span>การดำเนินการ</span><select value={adding.action} onChange={set("action")}>{[...HISTORY_ACTIONS, ...(adding.action && !HISTORY_ACTIONS.includes(adding.action) ? [adding.action] : [])].map(a => <option key={a}>{a}</option>)}</select></label>
           <label className="ca-field"><span>เกณฑ์การยอมรับ</span><input value={adding.criteria} onChange={set("criteria")} placeholder="เช่น ± 0.02 g" /></label>
           <label className="ca-field" style={{ gridColumn: "span 2" }}><span>ผลการดำเนินการ</span><input value={adding.result} onChange={set("result")} placeholder="เช่น ทำความสะอาด ปรับระดับ ผ่าน" /></label>
           <label className="ca-field"><span>กำหนดสอบเทียบครั้งต่อไป</span><input type="date" value={adding.nextDue} onChange={set("nextDue")} /></label>
