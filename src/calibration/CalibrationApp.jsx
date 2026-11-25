@@ -952,7 +952,9 @@ function historyOf(e, rounds) {
     ["สถานที่ตั้งปัจจุบัน", e.location],
     ["หัวข้อที่ใช้ทดสอบ", e.scopeOfUse || e.relatedTestMethod],
     ["ช่วงการใช้งานได้", usable],
-    ["ความละเอียดของเครื่องมือ", e.resolution ? `± ${e.resolution}${unit ? ` ${unit}` : ""}` : ""],
+    // resolution may already be typed with its unit (e.g. "0.01% Brix") — add
+    // the unit only to a bare number.
+    ["ความละเอียดของเครื่องมือ", e.resolution ? `± ${e.resolution}${unit && /^[\d.,\s]+$/.test(String(e.resolution)) ? ` ${unit}` : ""}` : ""],
     ["ช่วงใช้งานในการทดสอบ", e.testRange],
     ["ความถี่ในการสอบเทียบ", freqText(e.intervalMonths)],
     ["เกณฑ์การยอมรับ", accept],
