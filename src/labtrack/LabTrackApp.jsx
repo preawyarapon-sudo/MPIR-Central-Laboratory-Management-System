@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, Fragment } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment, createContext, useContext } from "react";
 import { createRoot } from "react-dom/client";
 import { RefreshCw,
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
@@ -14,6 +14,7 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue, runTransaction } from "firebase/database";
 import * as XLSX from "xlsx";
 import { db as labtrackDb } from "./firebase.js";
+import { can, guard, guardList, subscribeAccess } from "./access.js";
 import { roundsOf, verifySummary, VERIFICATION_REQUIRED_FROM as LF068_REQUIRED_FROM } from "../calibration/calc.js";
 
 // Lab decision (14 ต.ค. 2569): no approvals inside the app — checks and
@@ -1710,6 +1711,17 @@ const BOTTOM_NAV_SHORT = {
   analysisTracking: "งานวิเคราะห์", requestAnalysis: "ขอรับบริการ", bookings: "จอง/ยืม", usageCalendar: "ปฏิทิน",
   catalog: "เครื่องมือ", dailyCheck: "ตรวจเช็ค", calibrationApp: "Instrument Assurance", calibrationRecords: "สอบเทียบเดิม", consumables: "พัสดุ", purchase: "ใบขอซื้อ",
 };
+// Permission module for each LabTrack page and stored list (Release 5).
+const TAB_MODULE = { dashboard: "dashboard", equipment: "equipment", items: "items", bookings: "bookings", usageCalendar: "calendar",
+  catalog: "calendar", chemicals: "chemicals", consumables: "consumables", purchase: "purchase", reports: "reports",
+  analysisTracking: "jobs", dailyCheck: "dailyCheck", equipmentView: "instruments" };
+const LIST_MODULE = { equipment: "equipment", dailyChecks: "dailyCheck", activities: "history", items: "items", bookings: "bookings",
+  chemicals: "chemicals", consumables: "consumables", purchaseRequests: "purchase", certificates: "calibration",
+  intermediateChecks: "intermediateCheck", uncertaintyBudgets: "uncertainty", actionImpacts: "calibration",
+  approvalRecords: "calibration", verifications: "calibration" };
+// Which module the page on screen belongs to, so shared buttons (edit /
+// delete) can hide themselves when the user lacks that permission.
+const ModuleScope = createContext(null);
 const NAV = [
   { key: "dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   REQUEST_ANALYSIS_LINK_ADMIN,
@@ -1840,7 +1852,8 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
     ? ["dailyCheck"]
     : restrictToEquipmentView
     ? ["equipmentView"]
-    : [...(restrictToBooking ? RESTRICTED_NAV : NAV).filter(n => !n.external).map(n => n.key), "equipmentView"];
+    : [...(restrictToBooking ? RESTRICTED_NAV : NAV).filter(n => !n.external).map(n => n.key), "equipmentView"]
+        .filter(k => !TAB_MODULE[k] || can(TAB_MODULE[k], "view"));
   const [tab, setTabState] = useState(() => {
     if (typeof window === "undefined") return defaultTab;
     const fromUrl = new URLSearchParams(window.location.search).get("tab");
@@ -1867,10 +1880,22 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
     setTabState(key);
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
+      if (url.searchParams.get("tab") === key) return;
       url.searchParams.set("tab", key);
-      window.history.replaceState(null, "", url);
+      // A history entry per page, so the browser's back button returns to
+      // the previous LabTrack page (see the popstate listener below).
+      window.history.pushState({ ltTab: key }, "", url);
     }
   }
+  useEffect(() => {
+    const onPop = () => {
+      const t = new URLSearchParams(window.location.search).get("tab");
+      if (t && allowedTabKeys.includes(t)) setTabState(t);
+      else if (!t && !new URLSearchParams(window.location.search).get("app")) setTabState(defaultTab);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const [loading, setLoading] = useState(true);
   // Set whenever the page was opened via a scanned per-equipment QR link
   // that carries an ?equip=<id> — either the Daily check QR
@@ -1905,6 +1930,8 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   const [approvalRecords, setApprovalRecords] = useState([]); // Sheet 09
   const [toast, setToast] = useState(null);
   const [analysisJobs, setAnalysisJobs] = useState([]);
+  const [, setAccessTick] = useState(0);
+  useEffect(() => subscribeAccess(() => setAccessTick(x => x + 1)), []);
 
   useEffect(() => {
     (async () => {
@@ -1986,7 +2013,18 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
       const out = audited("verifications", verifications, list, v => !!v.approvedBy, "ผลทวนสอบที่อนุมัติแล้ว");
       setVerifications(out); saveList("verifications", out);
     },
-  };
+  };  // Release 5: every save is checked against the user's permissions for
+  // that list (create / edit / delete / approve) before anything is written.
+  const persistPrev = { equipment, dailyChecks, activities, items, bookings, chemicals, consumables, purchaseRequests,
+    certificates, intermediateChecks, uncertaintyBudgets, actionImpacts, approvalRecords, verifications };
+  Object.keys(persist).forEach(k => {
+    const raw = persist[k];
+    if (!LIST_MODULE[k] || raw.__guarded) return;
+    const wrapped = (list) => { if (!guardList(LIST_MODULE[k], persistPrev[k] || [], list)) return; raw(list); };
+    wrapped.__guarded = true;
+    persist[k] = wrapped;
+  });
+
 
   const alerts = useMemo(() => {
     const calib = equipment
@@ -2017,7 +2055,8 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
   // already hides itself whenever visibleNav.length <= 1, so this alone
   // keeps a guest confined to their single page (Daily check, or read-only
   // equipment history) with no other tab ever a click away.
-  const visibleNav = (restrictToDailyCheck || restrictToEquipmentView) ? [] : restrictToBooking ? RESTRICTED_NAV : NAV.filter(n => !n.hidden);
+  const visibleNav = ((restrictToDailyCheck || restrictToEquipmentView) ? [] : restrictToBooking ? RESTRICTED_NAV : NAV.filter(n => !n.hidden))
+    .filter(n => n.external || !TAB_MODULE[n.key] || can(TAB_MODULE[n.key], "view"));
   // One-shot: when set, the Bookings tab (once mounted) jumps straight to
   // this sub-view instead of its default "pending" — used by the global
   // "ต้องคืน" reminder banner below so restricted accounts land exactly on
@@ -2134,6 +2173,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
 
         {/* main */}
         <main style={S.main} className="ltMain">
+          <ModuleScope.Provider value={TAB_MODULE[tab] || null}>
           {restrictToBooking && tab !== "bookings" && (isPhone ? myOverdueCount > 0 : myInUseCount > 0) && (
             <div
               style={{
@@ -2226,6 +2266,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
               certificates={certificates} intermediateChecks={intermediateChecks} uncertaintyBudgets={uncertaintyBudgets}
               actionImpacts={actionImpacts} approvalRecords={approvalRecords} />
           )}
+          </ModuleScope.Provider>
         </main>
       </div>
 
@@ -12825,9 +12866,9 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), prNo: "", date: todayISO(), categories: [], itemName: "", requestedBy: "", poNo: "", notes: "" })}>
+        {can("purchase", "create") && <button style={S.primaryBtn} onClick={() => setEditing({ id: uid(), prNo: "", date: todayISO(), categories: [], itemName: "", requestedBy: "", poNo: "", notes: "" })}>
           <Plus size={15} /> ออกใบขอซื้อ
-        </button>
+        </button>}
       </Toolbar>
       {showImport && <PurchaseRequestsImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
       {showBackfill && <RequestNoBackfillDialog requests={requests} setRequests={setRequests} notify={notify} onClose={() => setShowBackfill(false)} />}
@@ -12840,12 +12881,12 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
             <div style={{ marginTop: 4 }}><PRStageBadge r={r} /></div>
             {hasOfficialPR(r) && <div style={{ fontSize: 11.5, marginTop: 3, whiteSpace: "nowrap", fontFamily: "var(--font-mono)", color: "var(--ink)" }}>PR: {r.prNo}</div>}
             {r.prEnteredAt && <div style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>สั่งซื้อ {fmtDate(r.prEnteredAt.slice(0, 10))}{r.prEnteredBy ? ` · ${r.prEnteredBy}` : ""}</div>}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+            {can("purchase", "edit") && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
               {prStage(r) === "waitPR" && <button style={S.prStepBtn} onClick={() => setNumbering({ r, kind: "pr" })}>ใส่เลข PR</button>}
               {prStage(r) === "waitPO" && <button style={S.prStepBtn} onClick={() => setNumbering({ r, kind: "po" })}>ใส่เลข PO</button>}
               {hasOfficialPR(r) && <button style={S.prStepLink} onClick={() => setNumbering({ r, kind: "pr" })}>แก้เลข PR</button>}
               {hasPO(r) && <button style={S.prStepLink} onClick={() => setNumbering({ r, kind: "po" })}>แก้/เพิ่ม PO</button>}
-            </div>
+            </div>}
             {getPRPos(r).map(p => (
               <div key={p.id} style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
                 PO: {p.fileUrl ? (
@@ -12863,7 +12904,7 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
           </div>,
           <div>
             <PRItemsCell items={getPRItems(r)} onUpdateItems={(items) => updateItems(r.id, items)} onReceiveAll={() => receiveAll(r)}
-              onReceiveToStock={setChemicals && setConsumables ? () => setReceiving(r) : null} />
+              onReceiveToStock={setChemicals && setConsumables && can("purchase", "edit") ? () => setReceiving(r) : null} />
             {r.requestedBy && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>ผู้ขอ: {r.requestedBy}</div>}
           </div>,
           <RowActions onEdit={() => setEditing({ ...r, itemName: getPRItems(r).map(i => i.text).join("\n") })} onDelete={() => remove(r.id)} />,
@@ -14576,6 +14617,7 @@ function ReportsTab({ equipment, setEquipment, activities, dailyChecks = [], che
     return ws;
   }
   function download(filename, sheetName, headers, rows) {
+    if (!guard("reports", "export")) return;
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, buildSheet(headers, rows), sheetName);
     XLSX.writeFile(wb, filename);
@@ -14625,11 +14667,15 @@ function ReportsTab({ equipment, setEquipment, activities, dailyChecks = [], che
       const pos = getPRPos(r).filter(p => p.poNo || p.fileUrl);
       const poCell = pos.length === 0 ? "" : pos.length === 1 ? link(pos[0].fileUrl, pos[0].poNo || "เปิดไฟล์ PO") : pos.map(p => p.poNo).join("; ");
       getPRItems(r).forEach(it => {
-        rows.push([r.requestNo || "", r.prNo || "", r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", poCell, r.requestedBy, r.notes || ""]);
+        const stamp = (by, at) => [by || "", at ? fmtDate(at.slice(0, 10)) : ""].filter(Boolean).join(" · ");
+        rows.push([r.requestNo || "", r.prNo || "", r.date, cats, it.text,
+          it.qty !== undefined && it.qty !== null && it.qty !== "" ? it.qty : "", it.unit || "", PR_STAGES[prStage(r)].label,
+          it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", poCell, r.requestedBy,
+          stamp(r.prEnteredBy, r.prEnteredAt), stamp(r.poEnteredBy, r.poEnteredAt), r.notes || ""]);
       });
     });
     download("purchase-requests.xlsx", "ใบขอซื้อ",
-      ["เลขที่คำขอ", "เลขที่ PR (บริษัท)", "วันที่", "หมวด", "รายการ", "สถานะรับของ", "วันที่รับ", "เลขที่ PO", "ผู้ขอ", "หมายเหตุ"],
+      ["เลขที่คำขอ", "เลขที่ PR (บริษัท)", "วันที่", "หมวด", "รายการ", "จำนวน", "หน่วย", "ขั้นตอน", "สถานะรับของ", "วันที่รับ", "เลขที่ PO", "ผู้ขอ", "สั่งซื้อโดย/วันที่ (ใส่เลข PR)", "จัดซื้อสั่งของ/วันที่ (ใส่เลข PO)", "หมายเหตุ"],
       rows
     );
   };
@@ -14753,8 +14799,14 @@ function ReportsTab({ equipment, setEquipment, activities, dailyChecks = [], che
 
 /* ================= shared small components ================= */
 function TabHeader({ title, sub }) {
+  // Breadcrumb: area › page. The area link goes back to its dashboard.
   return (
     <div style={{ marginBottom: 16 }}>
+      <nav aria-label="ตำแหน่งหน้า" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
+        <button onClick={() => openLink("/?tab=dashboard")} style={{ background: "none", border: "none", padding: 0, color: "var(--teal-dark)", cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>จัดการห้องแล็บ</button>
+        <ChevronRight size={12} />
+        <span>{title}</span>
+      </nav>
       <h2 style={S.h2}>{title}</h2>
       <div style={S.h2sub}>{sub}</div>
     </div>
@@ -15051,10 +15103,13 @@ function RowTitle({ text, beacon, badge }) {
 function Mono({ children }) { return <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{children}</span>; }
 function RowActions({ onEdit, onDelete, confirmMessage = "ต้องการลบรายการนี้ใช่ไหม การลบไม่สามารถกู้คืนได้" }) {
   const [confirming, setConfirming] = useState(false);
+  const mod = useContext(ModuleScope);
+  const canEdit = !mod || can(mod, "edit"), canDelete = !mod || can(mod, "delete");
+  if (!canEdit && !canDelete) return null;
   return (
     <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-      <button style={S.iconBtnSm} onClick={onEdit}><Pencil size={13} /></button>
-      <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirming(true)}><Trash2 size={13} /></button>
+      {canEdit && <button style={S.iconBtnSm} onClick={onEdit} title="แก้ไข" aria-label="แก้ไข"><Pencil size={13} /></button>}
+      {canDelete && <button style={{ ...S.iconBtnSm, color: "var(--red)" }} onClick={() => setConfirming(true)} title="ลบ" aria-label="ลบ"><Trash2 size={13} /></button>}
       {confirming && (
         <ConfirmDialog
           message={confirmMessage}
@@ -15713,6 +15768,14 @@ const CSS = `
   --font-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 }
 input, select, textarea, button { font-family: var(--font-body); }
+/* Table standard (UI design system): header stays visible while the page
+   scrolls (below the app's top bar), quiet row hover, 44px rows. Phones keep
+   the stacked-card layout further down. */
+@media (min-width: 761px) {
+  .ltTable thead th { position: sticky; top: var(--mpir-header-h, 0px); z-index: 2; background: #F5F8FB; }
+  .ltTableRow:hover { background: #F7FAFD; }
+  .ltTableRow > td { height: 44px; }
+}
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outline-offset: 1px; }
 button { cursor: pointer; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -15883,7 +15946,7 @@ button { cursor: pointer; }
 `;
 
 const S = {
-  app: { fontFamily: "var(--font-body)", background: "var(--paper)", color: "var(--ink)", minHeight: 500, borderRadius: 12, overflow: "hidden", border: "1px solid var(--line)" },
+  app: { fontFamily: "var(--font-body)", background: "var(--paper)", color: "var(--ink)", minHeight: 500, borderRadius: 12, overflow: "clip", border: "1px solid var(--line)" },
   shell: { display: "flex", minHeight: 500 },
   sidebar: {
     width: 216, background: "#FFFFFF",
@@ -15999,11 +16062,11 @@ const S = {
   activityType: { fontSize: 12.5, fontWeight: 600 },
   activityDetail: { fontSize: 12, color: "var(--muted)", marginTop: 1 },
 
-  tableWrap: { background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, overflow: "hidden" },
+  tableWrap: { background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, overflow: "clip" },
   table: { width: "100%", borderCollapse: "collapse" },
   th: { textAlign: "left", fontSize: 11, color: "var(--muted)", fontWeight: 600, padding: "10px 14px", borderBottom: "1px solid var(--line)", textTransform: "uppercase", letterSpacing: 0.3 },
   tr: { borderBottom: "1px solid var(--line)" },
-  td: { padding: "11px 14px", fontSize: 13 },
+  td: { padding: "11px 14px", fontSize: 13, verticalAlign: "middle" },
   lowTag: { marginLeft: 8, fontSize: 10.5, color: "var(--amber)", fontWeight: 600 },
   returnTag: { marginLeft: 8, fontSize: 10.5, color: "var(--teal-dark)", fontWeight: 600 },
   returnBadge: {
