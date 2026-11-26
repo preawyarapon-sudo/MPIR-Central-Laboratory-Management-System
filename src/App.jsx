@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
-import { Wrench, FlaskConical, Lock, LogOut, ShieldCheck, Plus, Search, ExternalLink } from "lucide-react";
-import LabTrackApp from "./labtrack/LabTrackApp.jsx";
+import { Wrench, FlaskConical, Lock, LogOut, ShieldCheck, Plus, Search, ExternalLink, Users } from "lucide-react";
+import LabTrackApp, { mpirAlert } from "./labtrack/LabTrackApp.jsx";
+import AccessAdmin from "./labtrack/AccessAdmin.jsx";
+import { can, primeCurrentUser, loadAccessConfig, subscribeAccess, effectiveRole, setDeniedNotifier } from "./labtrack/access.js";
 import AnalysisApp from "./analysis/AnalysisApp.jsx";
 import CalibrationApp from "./calibration/CalibrationApp.jsx";
 
@@ -45,11 +47,11 @@ const TABS = [
    existing form (do=…); nothing here saves data. Booking accounts see only
    what their role already reaches. */
 const QUICK_ACTIONS = [
-  { key: "daily", label: "บันทึก Daily check", url: "/?app=calibration&view=dailyAll", roles: ["admin", "approver"] },
-  { key: "booking", label: "จองเครื่องมือ", url: "/?tab=bookings&do=newBooking", roles: ["admin", "approver", "booking"] },
-  { key: "job", label: "สร้างรหัสงาน", url: "/?app=analysis&tab=jobs&do=newJob", roles: ["admin", "approver"] },
-  { key: "pr", label: "ออกใบขอซื้อ (PR)", url: "/?tab=purchase&do=newPR", roles: ["admin", "approver"] },
-  { key: "equip", label: "เพิ่มเครื่องมือ", url: "/?app=calibration&new=1", roles: ["admin", "approver"] },
+  { key: "daily", label: "บันทึก Daily check", url: "/?app=calibration&view=dailyAll", roles: ["admin", "approver"], perm: ["dailyCheck", "create"] },
+  { key: "booking", label: "จองเครื่องมือ", url: "/?tab=bookings&do=newBooking", roles: ["admin", "approver", "booking"], perm: ["bookings", "create"] },
+  { key: "job", label: "สร้างรหัสงาน", url: "/?app=analysis&tab=jobs&do=newJob", roles: ["admin", "approver"], perm: ["jobs", "create"] },
+  { key: "pr", label: "ออกใบขอซื้อ (PR)", url: "/?tab=purchase&do=newPR", roles: ["admin", "approver"], perm: ["purchase", "create"] },
+  { key: "equip", label: "เพิ่มเครื่องมือ", url: "/?app=calibration&new=1", roles: ["admin", "approver"], perm: ["instruments", "create"] },
   { key: "request", label: "ขอรับบริการวิเคราะห์", url: "https://centrallab-mpir.mitrphol.com/login/admin", external: true, roles: ["admin", "approver"] },
   { key: "requestPublic", label: "ขอรับบริการวิเคราะห์", url: "https://centrallab-mpir.mitrphol.com/", external: true, roles: ["booking"] },
 ];
@@ -66,7 +68,8 @@ function QuickActions({ role, onGo }) {
   const [open, setOpen] = useState(false);
   const box = useRef(null);
   useClickOutside(box, () => setOpen(false));
-  const items = QUICK_ACTIONS.filter(a => a.roles.includes(role));
+  const items = QUICK_ACTIONS.filter(a => a.roles.includes(role) && (!a.perm || can(...a.perm)));
+  if (!items.length) return null;
   return (
     <div ref={box} style={{ position: "relative" }}>
       <button style={styles.plusBtn} onClick={() => setOpen(o => !o)} aria-haspopup="menu" aria-expanded={open} title="ทำรายการด่วน">
@@ -103,12 +106,12 @@ function HeaderSearch({ onGo }) {
   const t = q.trim().toLowerCase();
   const results = [];
   if (t && data) {
-    data.equipment.filter(e => [e.code, e.name, e.serialNo].some(v => (v || "").toString().toLowerCase().includes(t))).slice(0, 6)
+    if (can("instruments", "view")) data.equipment.filter(e => [e.code, e.name, e.serialNo].some(v => (v || "").toString().toLowerCase().includes(t))).slice(0, 6)
       .forEach(e => results.push({ key: "e" + e.id, kind: "เครื่องมือ", label: `${e.code || ""} ${e.name || ""}`.trim(), url: `/?app=calibration&equip=${encodeURIComponent(e.id)}` }));
-    data.prs.filter(r => [r.requestNo, r.prNo].some(v => (v || "").toLowerCase().includes(t))).slice(0, 4)
+    if (can("purchase", "view")) data.prs.filter(r => [r.requestNo, r.prNo].some(v => (v || "").toLowerCase().includes(t))).slice(0, 4)
       .forEach(r => results.push({ key: "p" + r.id, kind: "ใบขอซื้อ", label: [r.requestNo, r.prNo].filter(Boolean).join(" · "), url: `/?tab=purchase&q=${encodeURIComponent(r.requestNo || r.prNo)}` }));
   }
-  if (t) results.push({ key: "jobs", kind: "งานวิเคราะห์", label: `ค้นหา “${q.trim()}” ในงานวิเคราะห์`, url: `/?app=analysis&tab=jobs&jq=${encodeURIComponent(q.trim())}` });
+  if (t && can("jobs", "view")) results.push({ key: "jobs", kind: "งานวิเคราะห์", label: `ค้นหา “${q.trim()}” ในงานวิเคราะห์`, url: `/?app=analysis&tab=jobs&jq=${encodeURIComponent(q.trim())}` });
   const go = (r) => { setOpen(false); setQ(""); onGo(r.url); };
   return (
     <div ref={box} style={{ position: "relative", flex: "1 1 220px", maxWidth: 340 }} className="appSearch">
@@ -139,7 +142,7 @@ const SECTION_URL_KEYS = ["app", "equip", "new", "edit", "view", "vid", "vround"
 function sectionFromUrl() {
   if (typeof window === "undefined") return "labtrack";
   const app = new URLSearchParams(window.location.search).get("app");
-  return app === "calibration" || app === "analysis" ? app : "labtrack";
+  return app === "calibration" || app === "analysis" || app === "users" ? app : "labtrack";
 }
 function urlForSection(key) {
   const url = new URL(window.location.href);
@@ -393,6 +396,15 @@ export default function App() {
   // Bumped on every in-app link so the target area re-reads the URL (page,
   // record, one-time action) even when it is already the open area.
   const [navKey, setNavKey] = useState(0);
+  // Height of the sticky top bar, so sticky table headers sit just below it.
+  const topbarRef = useRef(null);
+  useEffect(() => {
+    const el = topbarRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty("--mpir-header-h", `${el.offsetHeight}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
   function go(url) {
     window.history.pushState({ mpirSection: true }, "", url);
     setSectionState(sectionFromUrl());
@@ -423,6 +435,18 @@ export default function App() {
     return () => { window.removeEventListener("popstate", onPop); window.removeEventListener("mpir:navigate", onNavigate); };
   }, []);
   const [session, setSession] = useState(loadSession);
+  // Permissions (Release 5): who is signed in + the saved settings.
+  const [, setAccessTick] = useState(0);
+  useEffect(() => subscribeAccess(() => setAccessTick(x => x + 1)), []);
+  useEffect(() => { setDeniedNotifier((msg) => mpirAlert(msg)); }, []);
+  {
+    // Set synchronously so the very first render of each area already
+    // knows who is signed in (no flash of hidden/visible buttons).
+    const qr = guestLinkTab();
+    const asGuest = !session || (qr && session.role === "booking");
+    primeCurrentUser(asGuest ? null : session.username, asGuest ? "guest" : session.role);
+  }
+  useEffect(() => { loadAccessConfig(); }, [session]);
   const [autoLoggedOut, setAutoLoggedOut] = useState(false);
 
   // Auto-logout for restricted "booking" accounts after 30 minutes with no
@@ -463,6 +487,7 @@ export default function App() {
   // now open the calibration app. No staff login (or a booking-only login):
   // guest mode = Daily check form / read-only instrument info, as before.
   const qrTab = guestLinkTab();
+  const accessRole = session ? effectiveRole(session.username, session.role) : "guest";
   if (qrTab) {
     const params = new URLSearchParams(window.location.search);
     const equip = params.get("equip") || "";
@@ -485,10 +510,14 @@ export default function App() {
     return <PasswordGate onLogin={(s) => { setAutoLoggedOut(false); setSession(s); }} autoLoggedOut={autoLoggedOut} />;
   }
 
-  const isBookingOnly = session.role === "booking";
-  const canApprove = session.role === "admin" || session.role === "approver";
-  const visibleTabs = isBookingOnly ? TABS.filter(t => t.key === "labtrack") : TABS;
-  const activeSection = isBookingOnly ? "labtrack" : section;
+  // Role may be changed by an admin in ผู้ใช้และสิทธิ์ (accessRole).
+  const isBookingOnly = accessRole === "booking";
+  const canApprove = accessRole === "admin" || accessRole === "approver";
+  const AREA_PERM = { labtrack: null, calibration: "instruments", analysis: "jobs", users: "users" };
+  const allTabs = [...TABS, { key: "users", label: "ผู้ใช้และสิทธิ์", short: "ผู้ใช้และสิทธิ์", sub: "Admin", Icon: Users }];
+  const visibleTabs = isBookingOnly ? TABS.filter(t => t.key === "labtrack")
+    : allTabs.filter(t => !AREA_PERM[t.key] || can(AREA_PERM[t.key], "view"));
+  const activeSection = isBookingOnly || !visibleTabs.some(t => t.key === section) ? "labtrack" : section;
 
   function logout() {
     localStorage.removeItem(SESSION_KEY);
@@ -506,7 +535,10 @@ export default function App() {
     <div style={styles.page} className="appPage">
       <style>{`
         .appTabShort { display: none; }
-        @media (max-width: 1500px) { .appTabSub { display: none !important; } }
+        @media (max-width: 1919px) { .appTabSub { display: none !important; } }
+        @media (max-width: 1760px) { .appTabLong { display: none !important; } .appTabShort { display: inline !important; } }
+        @media (max-width: 1366px) { .appSearch { max-width: 200px !important; } .appTabBtn { padding: 8px 10px !important; } }
+        @media (max-width: 1760px) { .appHideMobile { display: none !important; } .appSearch { max-width: 260px !important; } }
         @media (max-width: 640px) {
           .appPage { padding: 10px 10px 18px !important; }
           .appTopbar { padding: 8px 10px !important; gap: 8px !important; }
@@ -519,7 +551,7 @@ export default function App() {
           .appSearch { order: 6; max-width: none !important; flex-basis: 100% !important; }
         }
       `}</style>
-      <div style={styles.topbar} className="appTopbar">
+      <div style={styles.topbar} className="appTopbar" ref={topbarRef}>
         <div style={styles.brand}>
           <img src="/logo.png" alt="MPIR Central Lab" style={styles.logo} />
           <div>
@@ -529,7 +561,7 @@ export default function App() {
         </div>
         {visibleTabs.length > 1 && (
           <div style={styles.tabRow} className="appTabRow">
-            {visibleTabs.map(({ key, label, sub, Icon }) => {
+            {visibleTabs.map(({ key, label, short, sub, Icon }) => {
               const active = activeSection === key;
               return (
                 <button
@@ -541,7 +573,7 @@ export default function App() {
                   <Icon size={16} />
                   <span>
                     <span style={styles.tabLabel} className="appTabLong">{label}</span>
-                    <span style={styles.tabLabel} className="appTabShort">{TABS.find(t => t.key === key).short}</span>
+                    <span style={styles.tabLabel} className="appTabShort">{short || label}</span>
                     <span style={styles.tabSub} className="appTabSub"> · {sub}</span>
                   </span>
                 </button>
@@ -551,7 +583,7 @@ export default function App() {
         )}
         {!isBookingOnly && <HeaderSearch onGo={go} />}
         <div style={styles.userBox}>
-          <QuickActions role={session.role} onGo={go} />
+          <QuickActions role={accessRole} onGo={go} />
           <span style={styles.userName}>{session.name || session.username}</span>
           <button onClick={logout} style={styles.logoutBtn} title="ออกจากระบบ">
             <LogOut size={14} />
@@ -563,6 +595,9 @@ export default function App() {
         {activeSection === "labtrack" && <LabTrackApp key={navKey} restrictToBooking={isBookingOnly} currentUsername={session.username} currentDisplayName={session.name} canApprove={canApprove} />}
         {activeSection === "calibration" && !isBookingOnly && <div style={styles.areaFrame}><CalibrationApp key={navKey} currentUsername={session.username} currentDisplayName={session.name} initial={calInitial} /></div>}
         {activeSection === "analysis" && !isBookingOnly && <AnalysisApp key={navKey} />}
+        {activeSection === "users" && can("users", "view") && <div style={{ ...styles.areaFrame, padding: 20, background: "var(--mpir-page)" }}>
+          <AccessAdmin me={session.username} accounts={ACCOUNTS.map(({ username, role, name }) => ({ username, role, name: name || username }))} />
+        </div>}
       </div>
     </div>
   );
