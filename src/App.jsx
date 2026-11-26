@@ -3,7 +3,33 @@ import { Wrench, FlaskConical, Lock, LogOut, ShieldCheck } from "lucide-react";
 import LabTrackApp from "./labtrack/LabTrackApp.jsx";
 import AnalysisApp from "./analysis/AnalysisApp.jsx";
 import CalibrationApp from "./calibration/CalibrationApp.jsx";
-import "./ui/tokens.css";
+
+// Shared design tokens (UI/UX proposal, section I). Kept in this file so a
+// release is only files that already exist in the repo.
+const TOKENS_CSS = `
+/* MPIR Central Lab — shared design tokens (UI/UX proposal, section I).
+   One place for colours, type and spacing used by all three work areas.
+   Print templates (LF-033, LF-045, LF-068, LF-069, Daily check logs) do not
+   use these and are unchanged. */
+:root {
+  --mpir-primary: #1F5FA8;
+  --mpir-primary-hover: #174A85;
+  --mpir-primary-light: #EAF2FB;
+  --mpir-page: #F6F8FB;
+  --mpir-surface: #FFFFFF;
+  --mpir-text: #1B2430;
+  --mpir-text-2: #5B6675;
+  --mpir-border: #D9E1EA;
+  --mpir-good: #1E8E5A;
+  --mpir-warn: #B7791F;
+  --mpir-bad: #C0392B;
+  --mpir-neutral: #7A8594;
+  --mpir-font: 'Sarabun', ui-sans-serif, system-ui, sans-serif;
+  --mpir-radius: 8px;
+  --mpir-touch: 44px;
+}
+body { margin: 0; font-family: var(--mpir-font); color: var(--mpir-text); background: var(--mpir-page); }
+`;
 
 // The three work areas share one shell (same header, same browser tab).
 // The calibration app used to open in a separate browser tab at
@@ -258,7 +284,17 @@ const gateStyles = {
   },
 };
 
+function useTokens() {
+  useEffect(() => {
+    if (document.getElementById("mpir-tokens")) return;
+    const el = document.createElement("style");
+    el.id = "mpir-tokens"; el.textContent = TOKENS_CSS;
+    document.head.appendChild(el);
+  }, []);
+}
+
 export default function App() {
+  useTokens();
   const [section, setSectionState] = useState(sectionFromUrl);
   function setSection(key) {
     if (key === section) return;
@@ -419,7 +455,7 @@ export default function App() {
   );
 }
 
-// Shared design tokens (see src/ui/tokens.css): blue #1F5FA8 + white, Sarabun.
+// Colours and font come from TOKENS_CSS above: blue #1F5FA8 + white, Sarabun.
 const styles = {
   areaFrame: { background: "#fff", border: "1px solid var(--mpir-border)", borderRadius: 12, overflow: "hidden" },
   page: {
