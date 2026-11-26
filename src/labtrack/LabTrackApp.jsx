@@ -2218,7 +2218,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             <ConsumablesTab consumables={consumables} setConsumables={persist.consumables} notify={notify} />
           )}
           {!restrictToBooking && tab === "purchase" && (
-            <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} currentDisplayName={currentDisplayName} />
+            <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} currentDisplayName={currentDisplayName} chemicals={chemicals} consumables={consumables} />
           )}
           {!restrictToBooking && tab === "reports" && (
             <ReportsTab equipment={equipment} setEquipment={persist.equipment} activities={activities} dailyChecks={dailyChecks} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests}
@@ -12642,7 +12642,22 @@ function getPRPos(r) {
   return [];
 }
 
-function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName = "" }) {
+function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName = "", chemicals = [], consumables = [] }) {
+  // Pick-list for the item lines: things ordered before (most often first),
+  // then the chemical and consumable registers. Read-only suggestions.
+  const itemSuggestions = useMemo(() => {
+    const seen = new Map();
+    requests.forEach(r => getPRItems(r).forEach(it => {
+      const t = (it.text || "").trim(); if (!t) return;
+      const cur = seen.get(t) || { text: t, count: 0, source: "" };
+      cur.count++; seen.set(t, cur);
+    }));
+    const list = [...seen.values()].sort((a, b) => b.count - a.count || a.text.localeCompare(b.text, "th"));
+    const add = (name, source) => { const t = (name || "").trim(); if (t && !seen.has(t)) { seen.set(t, true); list.push({ text: t, count: 0, source }); } };
+    chemicals.forEach(c => add(c.name, "สารเคมี"));
+    consumables.forEach(c => add(c.name, "พัสดุสิ้นเปลือง"));
+    return list;
+  }, [requests, chemicals, consumables]);
   const [q, setQ] = useState(() => urlParam("q") || "");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState(() => urlParam("prf") === "pending" ? "waitPR" : (PR_STAGES[urlParam("prf")] ? urlParam("prf") : "all"));
@@ -12792,7 +12807,7 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
         ])}
         empty={view === "history" ? "ยังไม่มี PR ที่รับของครบ" : "ยังไม่มีใบขอซื้อที่กำลังดำเนินการ"}
       />
-      {editing && <PurchaseRequestForm item={editing} saving={saving} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {editing && <PurchaseRequestForm item={editing} saving={saving} suggestions={itemSuggestions} onCancel={() => setEditing(null)} onSave={upsert} />}
     </div>
   );
 }
@@ -12966,7 +12981,46 @@ function PRItemsCell({ items, onUpdateItems, onReceiveAll }) {
   );
 }
 
-function PurchaseRequestForm({ item, saving = false, onCancel, onSave }) {
+// Searchable pick-list that adds one line to the item list (repeat orders).
+function PRItemPicker({ suggestions, lines, onPick }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+  useEffect(() => {
+    const h = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);
+  }, []);
+  const ql = q.trim().toLowerCase();
+  const shown = suggestions.filter(x => !ql || x.text.toLowerCase().includes(ql)).slice(0, 8);
+  const pick = (text) => { onPick(text); setQ(""); };
+  return (
+    <div ref={box} style={{ position: "relative", marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input style={{ ...S.input, flex: 1 }} value={q} placeholder={suggestions.length ? "เลือกจากรายการที่เคยสั่ง / สารเคมี / พัสดุ — พิมพ์เพื่อค้นหา" : "ยังไม่มีรายการให้เลือก — พิมพ์ในช่องด้านล่าง"}
+          onFocus={() => setOpen(true)} onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (shown[0]) pick(shown[0].text); else if (q.trim()) pick(q.trim()); } if (e.key === "Escape") setOpen(false); }}
+          aria-label="เลือกรายการที่ขอสั่งซื้อ" />
+        <button type="button" style={S.ghostBtn} disabled={!q.trim()} onClick={() => pick(q.trim())}><Plus size={13} /> เพิ่ม</button>
+      </div>
+      {open && shown.length > 0 && (
+        <div role="listbox" style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 5, background: "#fff", border: "1px solid var(--line)", borderRadius: 10, boxShadow: "0 8px 24px rgba(27,36,48,0.12)", padding: 4, maxHeight: 280, overflowY: "auto" }}>
+          {shown.map(x => {
+            const added = lines.includes(x.text);
+            return (
+              <button key={x.text} type="button" role="option" disabled={added} onClick={() => pick(x.text)}
+                style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minHeight: 40, textAlign: "left", background: "none", border: "none", borderRadius: 8, padding: "6px 10px", fontFamily: "inherit", fontSize: 13, cursor: added ? "default" : "pointer", color: added ? "var(--muted)" : "var(--ink)" }}>
+                <span style={{ flex: 1, minWidth: 0 }}>{x.text}</span>
+                <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>{added ? "เพิ่มแล้ว" : x.count ? `เคยสั่ง ${x.count} ครั้ง` : x.source}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PurchaseRequestForm({ item, saving = false, suggestions = [], onCancel, onSave }) {
   const [f, setF] = useState({ ...item, categories: item.categories || [], pos: getPRPos(item) });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const toggleCategory = (key) => {
@@ -13009,6 +13063,12 @@ function PurchaseRequestForm({ item, saving = false, onCancel, onSave }) {
           </div>
         </Field>
         <Field label="รายการที่ขอสั่งซื้อ (1 รายการต่อบรรทัด)" full>
+          <PRItemPicker suggestions={suggestions}
+            lines={(f.itemName || "").split("\n").map(l => l.trim()).filter(Boolean)}
+            onPick={(text) => setF(prev => {
+              const lines = (prev.itemName || "").split("\n").map(l => l.trim()).filter(Boolean);
+              return lines.includes(text) ? prev : { ...prev, itemName: [...lines, text].join("\n") };
+            })} />
           <textarea
             style={{ ...S.input, minHeight: 90, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
             value={f.itemName}
