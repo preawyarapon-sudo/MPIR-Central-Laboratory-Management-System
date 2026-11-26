@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { FlaskConical, Plus, X, RefreshCw, LayoutGrid, ListChecks, Users, Layers, Trash2, Play, CheckCircle2, CircleDot, Circle, ChevronRight, ChevronDown, AlertCircle, AlertTriangle, Clock, ClipboardPaste, Sparkles, Search, Wrench, BarChart3, FileSpreadsheet, Calendar, RotateCcw, Check } from "lucide-react";
 import { db } from "./firebase";
+import { can, guard } from "../labtrack/access.js";
 import { ref, onValue, set, remove, runTransaction } from "firebase/database";
 import * as XLSX from "xlsx";
 
@@ -24,21 +25,21 @@ function clearUrlParams(...names) {
 
 const C = {
   bg: "#FFFFFF",
-  bg2: "#F3F8FD",
+  bg2: "#F6F8FB",
   panel: "#FFFFFF",
   panel2: "#EAF3FB",
-  border: "#D3E6F5",
-  borderSoft: "#E4EFF9",
-  text: "#0B2A4A",
-  textMuted: "#5B7A96",
+  border: "#D9E1EA",
+  borderSoft: "#E6ECF2",
+  text: "#1B2430",
+  textMuted: "#5B6675",
   textFaint: "#9BB4C9",
   amber: "#C97F0E",
   amberDim: "#FBEBD3",
   green: "#1E9E6B",
   greenDim: "#DCF3E9",
   gray: "#7E93A6",
-  cyan: "#0E6FBA",
-  cyanDim: "#DCEDFB",
+  cyan: "#1F5FA8", // shared primary blue (design tokens in App.jsx)
+  cyanDim: "#EAF2FB",
   red: "#C6493B",
   redDim: "#FBE4E1",
 };
@@ -1439,6 +1440,7 @@ ${pages.map(page).join("")}
 <script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
 }
 function printLf045(job) {
+  if (!guard("analysisReports", "export")) return;
   const w = window.open("", "_blank");
   if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return; }
   w.document.open(); w.document.write(lf045Html(job)); w.document.close();
@@ -2397,6 +2399,7 @@ function ReportsTab({ jobs }) {
     }
 
     const stamp = tsToDateInputValue(nowTS()).replaceAll("-", "");
+    if (!guard("analysisReports", "export")) return;
     XLSX.writeFile(wb, `AnalysisTracker_Report_${stamp}.xlsx`);
     setJustExported(true);
     setTimeout(() => setJustExported(false), 2500);
@@ -2990,6 +2993,7 @@ export default function App({ restrictToCustomer = false } = {}) {
   // the onValue subscription above fires as soon as Firebase confirms the
   // write, for every connected user (including this one).
   const handleCreate = async (job) => {
+    if (!guard("jobs", "create")) return;
     setShowForm(false);
     try {
       await saveJob(job);
@@ -3000,6 +3004,7 @@ export default function App({ restrictToCustomer = false } = {}) {
   };
 
   const handleSaveEdit = async (updatedJob) => {
+    if (!guard("jobs", "edit")) return;
     setEditingJob(null);
     try {
       await saveJob(updatedJob);
@@ -3009,6 +3014,7 @@ export default function App({ restrictToCustomer = false } = {}) {
   };
 
   const handleUpdateParam = async (jobNo, paramId, action) => {
+    if (!guard("analysisProgress", "edit")) return;
     const job = jobs.find((j) => j.jobNo === jobNo);
     if (!job) return;
     const parameters = job.parameters.map((p) => {
@@ -3030,6 +3036,7 @@ export default function App({ restrictToCustomer = false } = {}) {
   // rework, without touching the parameter's own WAIT/RUN/DONE status or
   // any other registration number in the same parameter.
   const handleFlagRepair = async (jobNo, paramId, regNosText) => {
+    if (!guard("analysisProgress", "edit")) return;
     const job = jobs.find((j) => j.jobNo === jobNo);
     if (!job) return;
     const regNos = parseRegList(regNosText);
@@ -3060,6 +3067,7 @@ export default function App({ restrictToCustomer = false } = {}) {
   // then sends a single LINE message listing every registration number
   // resolved in that round (so 3 fixes on the same parameter = 1 message).
   const handleResolveRepair = async (jobNo, paramId, repairId) => {
+    if (!guard("analysisProgress", "edit")) return;
     const job = jobs.find((j) => j.jobNo === jobNo);
     if (!job) return;
     let targetParam = null;
@@ -3105,6 +3113,7 @@ export default function App({ restrictToCustomer = false } = {}) {
   // happen if we just called handleUpdateParam in a loop, since each call
   // would read the same stale `jobs` snapshot).
   const handleBulkUpdateParams = async (items, action) => {
+    if (!guard("analysisProgress", "edit")) return;
     const byJob = {};
     for (const it of items) {
       if (!byJob[it.jobNo]) byJob[it.jobNo] = new Set();
@@ -3132,6 +3141,7 @@ export default function App({ restrictToCustomer = false } = {}) {
   };
 
   const handleDeleteJob = async (jobNo) => {
+    if (!guard("jobs", "delete")) return;
     setSelected(null);
     setTab("jobs");
     try {
@@ -3358,7 +3368,7 @@ export default function App({ restrictToCustomer = false } = {}) {
               {!restrictToCustomer && (
                 <div style={{ display: "flex", gap: 8 }}>
                   <Btn small onClick={refresh}><RefreshCw size={13} /> รีเฟรช</Btn>
-                  <Btn kind="primary" small onClick={() => { setShowForm(true); setTab("jobs"); setSelected(null); }}><Plus size={13} /> สร้างรหัสงาน</Btn>
+                  {can("jobs", "create") && <Btn kind="primary" small onClick={() => { setShowForm(true); setTab("jobs"); setSelected(null); }}><Plus size={13} /> สร้างรหัสงาน</Btn>}
                 </div>
               )}
             </div>
