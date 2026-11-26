@@ -5,6 +5,22 @@ import { ref, onValue, set, remove, runTransaction } from "firebase/database";
 import * as XLSX from "xlsx";
 
 const ANALYSIS_TAB_KEYS = ["dashboard", "jobs", "analysts", "parameters", "reports"];
+// Deep links from the shell's "+" menu and search (Release 2): read a
+// one-time URL parameter, then drop it from the address bar so a reload
+// does not repeat the action. Read and clear are separate so React's
+// double-run of state initialisers in development cannot lose it.
+function urlParam(name) {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get(name);
+}
+function clearUrlParams(...names) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  let changed = false;
+  names.forEach(n => { if (url.searchParams.has(n)) { url.searchParams.delete(n); changed = true; } });
+  if (changed) window.history.replaceState(window.history.state, "", url);
+}
+
 
 const C = {
   bg: "#FFFFFF",
@@ -1566,7 +1582,8 @@ function jobMatchesSearch(job, query) {
 
 function JobsList({ jobs, onOpen }) {
   const [view, setView] = useState("active");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => urlParam("jq") || "");
+  useEffect(() => { clearUrlParams("jq"); }, []);
   const activeJobs = jobs.filter((job) => computeJobStats(job).status !== STATUS.DONE);
   const doneJobs = jobs.filter((job) => computeJobStats(job).status === STATUS.DONE);
   // A job can need repair even after every parameter shows Complete, so this
@@ -2845,6 +2862,7 @@ export default function App({ restrictToCustomer = false } = {}) {
   const [tab, setTabState] = useState(() => {
     if (typeof window === "undefined") return "dashboard";
     const fromUrl = new URLSearchParams(window.location.search).get("tab");
+    if (urlParam("job") || urlParam("do") === "newJob" || urlParam("jq")) return "jobs";
     return fromUrl && ANALYSIS_TAB_KEYS.includes(fromUrl) ? fromUrl : "dashboard";
   });
   function setTab(key) {
@@ -2855,8 +2873,9 @@ export default function App({ restrictToCustomer = false } = {}) {
       window.history.replaceState(null, "", url);
     }
   }
-  const [selected, setSelected] = useState(null);
-  const [showForm, setShowForm] = useState(false);
+  const [selected, setSelected] = useState(() => urlParam("job"));
+  const [showForm, setShowForm] = useState(() => urlParam("do") === "newJob");
+  useEffect(() => { clearUrlParams("job", "do"); }, []);
   const [editingJob, setEditingJob] = useState(null);
   const [error, setError] = useState(null);
 
