@@ -2150,7 +2150,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             </div>
           )}
           {!restrictToBooking && tab === "dashboard" && (
-            <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} />
+            <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} dailyChecks={dailyChecks} analysisJobs={analysisJobs} purchaseRequests={purchaseRequests} />
           )}
           {!restrictToBooking && tab === "equipment" && (
             <EquipmentTab equipment={equipment} setEquipment={persist.equipment} certificates={certificates}
@@ -2256,18 +2256,64 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
 }
 
 /* ================= DASHBOARD ================= */
-function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analysisStats, goto }) {
-  const activeCount = equipment.filter(e => e.status === "active").length;
-  const stats = [
-    { label: "เครื่องมือทั้งหมด", value: equipment.length, sub: `${activeCount} ใช้งานอยู่`, icon: Wrench, tint: "#E9F1FB", color: "var(--teal)", goto: "equipment" },
-    { label: "คำขอจอง/ยืมรออนุมัติ", value: alerts.pendingBookings.length, sub: `${bookings.filter(isBookingCurrent).length} รายการกำลังใช้งาน/จองอยู่`, icon: CalendarCheck, tint: "#FDF3E3", color: "var(--amber)", goto: "bookings" },
-    { label: "รายการสารเคมี", value: chemicals.length, sub: `${alerts.expiry.length} ใกล้/เลยหมดอายุ`, icon: FlaskConical, tint: "#FBE9E4", color: "#D9622E", goto: "chemicals" },
-    { label: "พัสดุสิ้นเปลือง", value: consumables.length, sub: `${alerts.lowStock.length} ใกล้หมด`, icon: Package, tint: "#F0EAFB", color: "#7A4FC2", goto: "consumables" },
-  ];
+function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analysisStats, goto, dailyChecks = [], analysisJobs = [], purchaseRequests = [] }) {
+  const today = todayISO();
+  const [showAllTasks, setShowAllTasks] = useState(false);
 
-  const calibOk = equipment.filter(e => statusOf(daysUntil(e.nextDue)) === "ok" && e.nextDue).length;
+  // ---- Daily check today (same rule as "Daily check วันนี้" in the calibration area)
+  const dailyEquip = equipment.filter(e => hasDailyForm(e) && e.status !== "inactive");
+  const todaysChecks = dailyChecks.filter(c => c.date === today);
+  const checkedIds = new Set(todaysChecks.map(c => c.equipmentId));
+  const dailyDone = dailyEquip.filter(e => checkedIds.has(e.id)).length;
+  const dailyFail = dailyEquip.filter(e => todaysChecks.some(c => c.equipmentId === e.id && c.result === false));
+  const dailyTodo = dailyEquip.length - dailyDone;
+
   const calibWarn = alerts.calib.filter(x => x.st === "warn").length;
   const calibDanger = alerts.calib.filter(x => x.st === "danger").length;
+  const calibOk = equipment.filter(e => statusOf(daysUntil(e.nextDue)) === "ok" && e.nextDue).length;
+  const jobsOpen = analysisStats.late + analysisStats.warn + analysisStats.todo;
+  const prPending = purchaseRequests.filter(r => !isPRFullyReceived(r) && !(r.prNo || "").trim());
+  const prOpen = purchaseRequests.filter(r => !isPRFullyReceived(r));
+  const expired = alerts.expiry.filter(x => x.st === "danger");
+
+  // Row 1: the four counts staff act on every day. Red only for fail / overdue.
+  const cards = [
+    { label: "Daily check วันนี้", icon: ClipboardCheck, value: dailyEquip.length ? `${dailyDone}/${dailyEquip.length}` : "—",
+      unit: dailyEquip.length ? "เครื่อง" : "",
+      sub: dailyFail.length ? `ไม่ผ่าน ${dailyFail.length}` : dailyTodo ? `ยังไม่ได้ตรวจ ${dailyTodo}` : "ตรวจครบแล้ว",
+      tone: dailyFail.length ? "bad" : dailyTodo ? "warn" : "good", go: () => openLink("/?app=calibration&view=dailyAll") },
+    { label: "สอบเทียบ/ทวนสอบ", icon: CalendarClock, value: calibWarn, unit: "ใกล้ครบกำหนด",
+      sub: calibDanger ? `เลยกำหนด ${calibDanger}` : "ไม่มีเครื่องเลยกำหนด", tone: calibDanger ? "bad" : calibWarn ? "warn" : "good",
+      go: () => openLink("/?app=calibration&view=verifyList") },
+    { label: "จอง/ยืม", icon: CalendarCheck, value: alerts.pendingBookings.length, unit: "รออนุมัติ",
+      sub: alerts.overdueBookings.length ? `เลยกำหนดคืน ${alerts.overdueBookings.length}` : `${bookings.filter(isBookingCurrent).length} รายการกำลังใช้งาน/จองอยู่`,
+      tone: alerts.overdueBookings.length ? "bad" : alerts.pendingBookings.length ? "warn" : "good", go: () => goto("bookings") },
+    { label: "งานวิเคราะห์", icon: FlaskConical, value: jobsOpen, unit: "กำลังดำเนินการ",
+      sub: analysisStats.late ? `ล่าช้า ${analysisStats.late}` : analysisStats.warn ? `ใกล้ครบกำหนด ${analysisStats.warn}` : "ไม่มีงานล่าช้า",
+      tone: analysisStats.late ? "bad" : analysisStats.warn ? "warn" : "good", go: () => openLink("/?app=analysis&tab=jobs") },
+  ];
+  const toneColor = { good: "var(--green)", warn: "var(--amber)", bad: "var(--red)" };
+
+  // Row 2: one task list built from the alerts the app already computes.
+  const tasks = [
+    ...dailyFail.map(e => ({ key: "df-" + e.id, st: "danger", title: `${e.code} · Daily check ไม่ผ่าน`, detail: e.name || "",
+      go: () => openLink(`/?app=calibration&view=instrument&vid=${encodeURIComponent(e.id)}&vtab=daily`) })),
+    ...alerts.overdueBookings.map(b => ({ key: "od-" + b.id, st: "danger", title: `${b.equipmentCode} · เลยกำหนดคืน`,
+      detail: `${Math.abs(daysUntil(b.dueBackDate))} วัน · ยืมโดย ${b.requestedBy || "-"}`, go: () => goto("bookings") })),
+    ...alerts.calib.filter(x => x.st === "danger").map(({ e, days }) => ({ key: "cd-" + e.id, st: "danger", title: `${e.code} · เลยกำหนดสอบเทียบ`,
+      detail: `${Math.abs(days)} วัน · ${e.name || ""}`, go: () => openLink(`/?app=calibration&equip=${encodeURIComponent(e.id)}`) })),
+    ...analysisJobs.filter(j => analysisJobDeadlineInfo(j).level === "late").map(j => ({ key: "jl-" + j.jobNo, st: "danger",
+      title: `${j.jobNo} · งานวิเคราะห์ล่าช้า`, detail: `${analysisJobDeadlineInfo(j).days} วัน`, go: () => openLink(`/?app=analysis&tab=jobs&job=${encodeURIComponent(j.jobNo)}`) })),
+    ...(expired.length ? [{ key: "chem-exp", st: "danger", title: `สารเคมีหมดอายุ ${expired.length} รายการ`, detail: expired.slice(0, 3).map(x => x.c.name).join(", "), go: () => goto("chemicals") }] : []),
+    ...(dailyTodo > 0 ? [{ key: "dt", st: "warn", title: `Daily check ยังไม่ได้ตรวจ ${dailyTodo} เครื่อง`, detail: fmtDate(today), go: () => openLink("/?app=calibration&view=dailyAll") }] : []),
+    ...alerts.pendingBookings.map(b => ({ key: "pb-" + b.id, st: "warn", title: `${b.equipmentCode} · คำขอรออนุมัติ`,
+      detail: `${BOOKING_TYPE_LABEL[b.type]} โดย ${b.requestedBy || "-"}`, go: () => goto("bookings") })),
+    ...alerts.calib.filter(x => x.st === "warn").map(({ e, days }) => ({ key: "cw-" + e.id, st: "warn", title: `${e.code} · ใกล้ครบกำหนดสอบเทียบ`,
+      detail: `เหลือ ${days} วัน (${fmtDate(e.nextDue)})`, go: () => openLink(`/?app=calibration&equip=${encodeURIComponent(e.id)}`) })),
+    ...(prPending.length ? [{ key: "pr", st: "warn", title: `ใบขอซื้อรอเลข PR ${prPending.length} รายการ`, detail: prPending.slice(0, 3).map(r => r.requestNo || "—").join(", "), go: () => openLink("/?tab=purchase&prf=pending") }] : []),
+  ];
+  const TASK_LIMIT = 8;
+  const shownTasks = showAllTasks ? tasks : tasks.slice(0, TASK_LIMIT);
 
   return (
     <div>
@@ -2275,42 +2321,66 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
         <div style={S.heroGrid} />
         <div style={S.heroPhoto} />
         <div style={{ position: "relative" }}>
-          <div style={S.eyebrow}>ภาพรวมวันนี้ · {fmtDate(todayISO())}</div>
+          <div style={S.eyebrow}>ภาพรวมวันนี้ · {fmtDate(today)}</div>
           <h1 style={S.h1} className="ltH1">สถานะห้องปฏิบัติการ</h1>
-          <p style={S.heroSub}>ติดตามกำหนดสอบเทียบ อายุสารเคมี และพัสดุใกล้หมด ในที่เดียว</p>
+          <p style={S.heroSub}>งานที่ต้องทำวันนี้ก่อน ตามด้วยสถานะเครื่องมือ สารเคมี พัสดุ และงานวิเคราะห์</p>
         </div>
       </div>
 
       <div style={S.statGrid} className="statGrid">
-        {stats.map((s, i) => {
-          const Icon = s.icon;
+        {cards.map((c) => {
+          const Icon = c.icon;
           return (
-            <div
-              key={i}
-              style={{ ...S.statCard, cursor: s.goto ? "pointer" : "default" }}
-              className="statCard"
-              onClick={s.goto ? () => goto(s.goto) : undefined}
-              role={s.goto ? "button" : undefined}
-            >
-              <div className="statIconTile" style={{ width: 38, height: 38, borderRadius: 10, background: s.tint, display: "none", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <Icon size={18} color={s.color} />
-              </div>
+            <div key={c.label} style={{ ...S.statCard, cursor: "pointer" }} className="statCard" onClick={c.go} role="button" tabIndex={0}
+              onKeyDown={(ev) => { if (ev.key === "Enter") c.go(); }}>
               <div>
                 <div style={S.statTop} className="statTop">
                   <Icon size={16} color="var(--teal)" className="statTopIcon" />
-                  <span style={S.statLabel}>{s.label}</span>
+                  <span style={S.statLabel}>{c.label}</span>
                 </div>
-                <div style={S.statValue}>{s.value}</div>
-                <div style={S.statSub}>{s.sub}</div>
+                <div style={S.statValue}>{c.value} {c.unit && <span style={{ fontSize: 13, fontWeight: 500, color: "var(--muted)" }}>{c.unit}</span>}</div>
+                <div style={{ ...S.statSub, color: toneColor[c.tone], fontWeight: c.tone === "good" ? 400 : 600 }}>{c.sub}</div>
               </div>
             </div>
           );
         })}
       </div>
 
+      <div style={{ ...S.panel, marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={S.panelHead}>
+            <AlertTriangle size={15} color="var(--ink)" />
+            <span style={S.panelTitle}>งานที่ต้องทำ</span>
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>({tasks.length})</span>
+          </div>
+        </div>
+        {tasks.length === 0 ? (
+          <EmptyState text="ไม่มีงานค้างหรือรายการที่ต้องติดตามวันนี้" small />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {shownTasks.map(t => (
+              <button key={t.key} onClick={t.go} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%", minHeight: 44,
+                background: "none", border: "none", borderTop: "1px solid var(--line)", padding: "8px 4px", cursor: "pointer", fontFamily: "inherit" }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, flexShrink: 0, background: t.st === "danger" ? "var(--red)" : "var(--amber)" }} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "block", fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{t.title}</span>
+                  {t.detail && <span style={{ display: "block", fontSize: 12, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.detail}</span>}
+                </span>
+                <ChevronRight size={15} color="var(--muted)" />
+              </button>
+            ))}
+            {tasks.length > TASK_LIMIT && (
+              <button onClick={() => setShowAllTasks(v => !v)} style={{ ...S.panelLink, alignSelf: "flex-start", marginTop: 8 }}>
+                {showAllTasks ? "แสดงน้อยลง" : `ดูทั้งหมด (${tasks.length})`} <ChevronRight size={13} />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
         {equipment.length > 0 && (
-          <div style={{ ...S.panel, flex: "1 1 380px", marginBottom: 0 }}>
+          <div style={{ ...S.panel, flex: "1 1 300px", marginBottom: 0 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div style={S.panelHead}>
                 <CalendarClock size={15} color="var(--ink)" />
@@ -2321,44 +2391,36 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
             <CalibrationDonut ok={calibOk} warn={calibWarn} danger={calibDanger} />
           </div>
         )}
-        <div style={{ ...S.panel, flex: "1 1 380px", marginBottom: 0 }}>
+        <div style={{ ...S.panel, flex: "1 1 300px", marginBottom: 0 }}>
+          <div style={S.panelHead}>
+            <Package size={15} color="var(--ink)" />
+            <span style={S.panelTitle}>สารเคมี · พัสดุ · ใบขอซื้อ</span>
+          </div>
+          {[
+            ["สารเคมีใกล้/เลยหมดอายุ", alerts.expiry.length, () => goto("chemicals")],
+            ["พัสดุ/สารเคมีใกล้หมด", alerts.lowStock.length + alerts.lowChem.length, () => goto("consumables")],
+            ["ใบขอซื้อกำลังดำเนินการ", prOpen.length, () => goto("purchase")],
+            ["ใบขอซื้อรอเลข PR", prPending.length, () => openLink("/?tab=purchase&prf=pending")],
+          ].map(([label, n, go]) => (
+            <button key={label} onClick={go} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", minHeight: 40,
+              background: "none", border: "none", borderTop: "1px solid var(--line)", padding: "6px 2px", fontFamily: "inherit", cursor: "pointer", fontSize: 13.5, color: "var(--ink)" }}>
+              <span>{label}</span><span style={{ fontWeight: 700, fontFamily: "var(--font-mono)" }}>{n}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ ...S.panel, flex: "1 1 300px", marginBottom: 0 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={S.panelHead}>
               <FlaskConical size={15} color="var(--ink)" />
-              <span style={S.panelTitle}>ติดตามงานวิเคราะห์ · Lab Analysis Tracker</span>
+              <span style={S.panelTitle}>ความคืบหน้างานวิเคราะห์</span>
             </div>
+            <button onClick={() => openLink("/?app=analysis&tab=jobs")} style={S.panelLink}>ดูทั้งหมด <ChevronRight size={13} /></button>
           </div>
           <AnalysisJobsDonut late={analysisStats.late} warn={analysisStats.warn} todo={analysisStats.todo} />
         </div>
       </div>
 
       <div style={S.alertCols}>
-        <AlertPanel
-          title="การจอง/ยืมที่ต้องติดตาม"
-          icon={CalendarCheck}
-          empty="ไม่มีคำขอรออนุมัติหรือรายการเลยกำหนดคืน"
-          onSeeAll={() => goto("bookings")}
-          items={[
-            ...alerts.pendingBookings.map(b => ({
-              key: b.id, st: "warn", title: `${b.equipmentCode} · ${b.equipmentName}`,
-              detail: `รออนุมัติ · ${BOOKING_TYPE_LABEL[b.type]} โดย ${b.requestedBy || "-"}`,
-            })),
-            ...alerts.overdueBookings.map(b => ({
-              key: "od-" + b.id, st: "danger", title: `${b.equipmentCode} · ${b.equipmentName}`,
-              detail: `เลยกำหนดคืน ${Math.abs(daysUntil(b.dueBackDate))} วัน · ยืมโดย ${b.requestedBy || "-"}`,
-            })),
-          ]}
-        />
-        <AlertPanel
-          title="กำหนดสอบเทียบ / บำรุงรักษา"
-          icon={CalendarClock}
-          empty="ไม่มีเครื่องมือที่ใกล้หรือเลยกำหนด"
-          onSeeAll={() => goto("equipment")}
-          items={alerts.calib.map(({ e, days, st }) => ({
-            key: e.id, st, title: `${e.code} · ${e.name}`,
-            detail: days < 0 ? `เลยกำหนด ${Math.abs(days)} วัน` : `เหลือ ${days} วัน (${fmtDate(e.nextDue)})`,
-          }))}
-        />
         <AlertPanel
           title="สารเคมีใกล้/เลยหมดอายุ"
           icon={Clock}
@@ -12484,11 +12546,11 @@ function getPRPos(r) {
 function PurchaseRequestsTab({ requests, setRequests, notify }) {
   const [q, setQ] = useState(() => urlParam("q") || "");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [prNoFilter, setPrNoFilter] = useState("all"); // "all" | "has" | "pending"
+  const [prNoFilter, setPrNoFilter] = useState(() => urlParam("prf") === "pending" ? "pending" : "all"); // "all" | "has" | "pending"
   const [view, setView] = useState("active"); // "active" | "history"
   const [editing, setEditing] = useState(() => urlParam("do") === "newPR"
     ? { id: uid(), prNo: "", date: todayISO(), categories: [], itemName: "", requestedBy: "", poNo: "", notes: "" } : null);
-  useEffect(() => { clearUrlParams("q"); if (urlParam("do") === "newPR") clearUrlParams("do"); }, []);
+  useEffect(() => { clearUrlParams("q", "prf"); if (urlParam("do") === "newPR") clearUrlParams("do"); }, []);
   const [showImport, setShowImport] = useState(false);
   const [showBackfill, setShowBackfill] = useState(false);
   const [saving, setSaving] = useState(false);
