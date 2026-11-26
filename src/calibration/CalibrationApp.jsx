@@ -584,7 +584,7 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null, onDelete = null
   const cal = rows.filter(r => r.cal);
   const count = (keys) => cal.filter(r => keys.includes(r.st.key)).length;
   const kpis = [
-    { label: "เครื่องมือที่ต้องสอบเทียบ", value: cal.length, sub: "ในทะเบียน", color: "#0B2A4A", f: "all" },
+    { label: "เครื่องมือที่ต้องสอบเทียบ", value: cal.length, sub: `จากทั้งหมด ${rows.length} เครื่องในทะเบียน`, color: "#0B2A4A", f: "all" },
     { label: "พร้อมใช้งาน", value: count(["ok", "soon"]), sub: "ผลผ่านและยังไม่ถึงกำหนด", color: "#187A52", f: "ok" },
     { label: "ครบกำหนดใน 30 วัน", value: count(["soon"]), sub: "วางแผนส่งสอบเทียบ", color: "#8A5200", f: "soon" },
     { label: "เกินกำหนด / ไม่ผ่าน", value: count(["overdue", "fail", "off"]), sub: "งดใช้จนกว่าจะแก้ไข", color: "#B42318", f: "bad" },
@@ -592,11 +592,17 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null, onDelete = null
   ];
   const groups = { all: null, ok: ["ok", "soon"], soon: ["soon"], bad: ["overdue", "fail", "off"], todo: ["verify", "report"], action: ["soon", "overdue", "fail", "off", "verify", "report"] };
   const ql = q.trim().toLowerCase();
-  const shown = cal
+  // "ทั้งหมด" lists every instrument in the register, grouped by type (as
+  // on the equipment page); instruments with no calibration set-up (e.g.
+  // air conditioners, or no interval/criteria yet) show a grey status. The
+  // other filters work on the calibrated ones, as before.
+  const typeKey = (r) => r.e.type || "ไม่ระบุประเภท";
+  const shown = (filter === "all" ? rows : cal)
     .filter(r => !groups[filter] || groups[filter].includes(r.st.key))
-    .filter(r => !ql || [r.e.code, r.e.name, r.e.brand, r.e.model, r.e.serialNo, r.e.location].some(x => String(x || "").toLowerCase().includes(ql)))
-    .sort((a, b) => String(a.e.code || a.e.name || "").localeCompare(String(b.e.code || b.e.name || ""), "en", { numeric: true, sensitivity: "base" }));
-  const nOver = count(["overdue", "fail", "off"]), nSoon = count(["soon"]);
+    .filter(r => !ql || [r.e.code, r.e.name, r.e.brand, r.e.model, r.e.serialNo, r.e.location, r.e.type].some(x => String(x || "").toLowerCase().includes(ql)))
+    .sort((a, b) => typeKey(a).localeCompare(typeKey(b), "th") || String(a.e.code || a.e.name || "").localeCompare(String(b.e.code || b.e.name || ""), "en", { numeric: true, sensitivity: "base" }));
+  const typeTotal = {};
+  rows.forEach(r => { typeTotal[typeKey(r)] = (typeTotal[typeKey(r)] || 0) + 1; });
   return (
     <div className="ca-stack">
       <header className="ca-head"><div><h1>ภาพรวมเครื่องมือ</h1><p className="ca-muted">กดเครื่องมือเพื่อเปิดหน้าเครื่อง · ข้อมูล สอบเทียบ/ทวนสอบ Daily check Intermediate check ความไม่แน่นอน และรายงาน อยู่ในหน้าเดียว</p></div>
@@ -608,13 +614,6 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null, onDelete = null
           </button>
         ))}
       </div>
-      {(nOver > 0 || nSoon > 0) && (
-        <div className="ca-alert">
-          <AlertTriangle size={18} />
-          <span>{[nOver ? `${nOver} เครื่องเกินกำหนดหรือไม่ผ่าน` : "", nSoon ? `${nSoon} เครื่องครบกำหนดภายใน 30 วัน` : ""].filter(Boolean).join(" · ")}</span>
-          <button className="ca-btn ca-btn-amber" onClick={() => setFilter("action")}>ดูเฉพาะเครื่องที่ต้องดำเนินการ</button>
-        </div>
-      )}
       <section className="ca-card ca-flush">
         <div className="ca-card-head">
           <h2>ทะเบียนเครื่องมือ</h2>
@@ -627,16 +626,24 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null, onDelete = null
           <table className="ca-table ca-sticky">
             <thead><tr><th>รหัส</th><th>เครื่องมือ</th><th className="ca-hide-sm">ยี่ห้อ / รุ่น</th><th className="ca-hide-sm">สอบเทียบล่าสุด</th><th>ครบกำหนด</th><th>สถานะ</th>{onDelete && <th aria-label="ลบ"></th>}</tr></thead>
             <tbody>
-              {shown.map(({ e, rounds, st }) => (
-                <tr key={e.id}>
+              {shown.map(({ e, rounds, st, cal: isCal }, i) => (
+                <Fragment key={e.id}>
+                {(i === 0 || typeKey(shown[i - 1]) !== typeKey(shown[i])) && (
+                  <tr className="ca-group-row"><td colSpan={onDelete ? 7 : 6}>
+                    <span className="ca-strong">{typeKey(shown[i])}</span>
+                    <span className="ca-small ca-muted"> · {typeTotal[typeKey(shown[i])]} เครื่อง</span>
+                  </td></tr>
+                )}
+                <tr>
                   <td><button className="ca-link ca-strong ca-codecell" onClick={() => onOpen(e.id)}><InstrumentPhoto e={e} size={36} />{e.code || e.name}</button></td>
                   <td><button className="ca-link" style={{ color: "inherit", textAlign: "left" }} onClick={() => onOpen(e.id)}>{e.name}</button>{e.location ? <div className="ca-small ca-muted">{e.location}</div> : null}</td>
                   <td className="ca-muted ca-hide-sm">{[e.brand, e.model].filter(Boolean).join(" / ") || "–"}{e.serialNo ? <div className="ca-small">S/N {e.serialNo}</div> : null}</td>
                   <td className="ca-hide-sm">{fmtDate(rounds[0]?.calibrationDate || e.lastCalibration)}</td>
                   <td style={{ color: st.days != null && st.days < 0 ? "#B42318" : undefined, fontWeight: st.days != null && st.days < 0 ? 600 : 400 }}>{fmtDate(st.due)}</td>
-                  <td><Pill tone={st.tone}>{st.label}</Pill></td>
+                  <td>{isCal ? <Pill tone={st.tone}>{st.label}</Pill> : <Pill tone="grey">{isAircon(e) ? "ไม่ต้องสอบเทียบ" : "ยังไม่ตั้งรอบสอบเทียบ"}</Pill>}</td>
                   {onDelete && <td style={{ width: 44 }}><button className="ca-icon" aria-label={`ลบ ${e.code || e.name}`} title="ลบออกจากทะเบียน" onClick={() => onDelete(e)}><Trash2 size={15} /></button></td>}
                 </tr>
+                </Fragment>
               ))}
               {!shown.length && <tr><td colSpan={7} className="ca-empty">ไม่พบเครื่องมือ</td></tr>}
             </tbody>
