@@ -76,12 +76,6 @@ export function UncertaintyList({ reports, certificates, equipment, onNew, onOpe
         <div><h1>ความไม่แน่นอนของการวัด</h1><p className="ca-muted">รายงานประจำปีของวิธีทดสอบ Brix, Pol และ Fibre · กรอกผลทดสอบซ้ำและเลือกใบรับรอง ระบบคำนวณให้ทั้งหมด</p></div>
         <button className="ca-btn ca-btn-primary" onClick={onNew}><Plus size={16} /> สร้างรายงานปีใหม่</button>
       </header>
-      {legacyCount > 0 && (
-        <div className="ca-alert" style={{ background: "#E3EFFA", borderColor: "#B9D3EA", color: "#0A4F9B" }}>
-          <span>มีรายงาน LF-069 เดิม {legacyCount} ฉบับ (2566–2568) ที่ยังไม่ได้นำเข้า · ระบบจะใช้เฉพาะผลทดสอบซ้ำและใบรับรอง แล้วคำนวณใหม่ให้ถูกต้อง</span>
-          <button className="ca-btn" onClick={onImportLegacy}>นำเข้ารายงานเดิม</button>
-        </div>
-      )}
       {!sorted.length && <section className="ca-card ca-empty">ยังไม่มีรายงาน · กด “สร้างรายงานปีใหม่”</section>}
       {sorted.map(rep => {
         const R = calcReport(rep, certificates, equipment);
