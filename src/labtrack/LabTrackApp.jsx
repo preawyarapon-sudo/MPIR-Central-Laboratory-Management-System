@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from "react";
+import { createRoot } from "react-dom/client";
 import { RefreshCw,
   LayoutDashboard, Wrench, FlaskConical, Package, FileDown,
   Search, Plus, X, Trash2, Pencil, AlertTriangle, CheckCircle2,
@@ -13,6 +14,7 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue, runTransaction } from "firebase/database";
 import * as XLSX from "xlsx";
 import { db as labtrackDb } from "./firebase.js";
+import { roundsOf, verifySummary, VERIFICATION_REQUIRED_FROM as LF068_REQUIRED_FROM } from "../calibration/calc.js";
 
 // Lab decision (14 ต.ค. 2569): no approvals inside the app — checks and
 // reports are downloaded and signed on paper, then filed.
@@ -2150,7 +2152,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             </div>
           )}
           {!restrictToBooking && tab === "dashboard" && (
-            <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} dailyChecks={dailyChecks} analysisJobs={analysisJobs} purchaseRequests={purchaseRequests} />
+            <Dashboard equipment={equipment} chemicals={chemicals} consumables={consumables} bookings={bookings} alerts={alerts} analysisStats={analysisStats} goto={setTab} dailyChecks={dailyChecks} analysisJobs={analysisJobs} purchaseRequests={purchaseRequests} certificates={certificates} verifications={verifications} />
           )}
           {!restrictToBooking && tab === "equipment" && (
             <EquipmentTab equipment={equipment} setEquipment={persist.equipment} certificates={certificates}
@@ -2216,7 +2218,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             <ConsumablesTab consumables={consumables} setConsumables={persist.consumables} notify={notify} />
           )}
           {!restrictToBooking && tab === "purchase" && (
-            <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} />
+            <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} currentDisplayName={currentDisplayName} />
           )}
           {!restrictToBooking && tab === "reports" && (
             <ReportsTab equipment={equipment} setEquipment={persist.equipment} activities={activities} dailyChecks={dailyChecks} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests}
@@ -2256,7 +2258,21 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
 }
 
 /* ================= DASHBOARD ================= */
-function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analysisStats, goto, dailyChecks = [], analysisJobs = [], purchaseRequests = [] }) {
+// Same rule as verifyState in the calibration area (CalibrationApp.jsx):
+// which calibration rounds still need LF-068 work.
+function lf068State(round, e) {
+  const v = round.verification;
+  if ((round.calibrationDate || "") < LF068_REQUIRED_FROM) return null; // older rounds: paper records
+  if (!v) return { key: "todo", st: "warn", label: "ยังไม่ได้ทวนสอบ (LF-068)" };
+  const vs = verifySummary(v, e, round.points);
+  if (vs && !vs.measOk) return { key: "fail", st: "danger", label: "ทวนสอบไม่ผ่าน (LF-068)" };
+  if (v.reprintNeeded) return { key: "reprint", st: "warn", label: "แก้ไขแล้ว · ต้องดาวน์โหลด LF-068 ใหม่" };
+  if (!v.downloadedAt) return { key: "report", st: "warn", label: "รอดาวน์โหลด LF-068" };
+  return null;
+}
+const isAirconEquip = (e) => e.type === "เครื่องปรับอากาศ" || /แอร์|เครื่องปรับอากาศ|air ?con/i.test(`${e.name || ""} ${e.type || ""}`);
+
+function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analysisStats, goto, dailyChecks = [], analysisJobs = [], purchaseRequests = [], certificates = [], verifications = [] }) {
   const today = todayISO();
   const [showAllTasks, setShowAllTasks] = useState(false);
 
@@ -2272,7 +2288,18 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
   const calibDanger = alerts.calib.filter(x => x.st === "danger").length;
   const calibOk = equipment.filter(e => statusOf(daysUntil(e.nextDue)) === "ok" && e.nextDue).length;
   const jobsOpen = analysisStats.late + analysisStats.warn + analysisStats.todo;
-  const prPending = purchaseRequests.filter(r => !isPRFullyReceived(r) && !(r.prNo || "").trim());
+  const prPending = purchaseRequests.filter(r => prStage(r) === "waitPR");
+  const prWaitPO = purchaseRequests.filter(r => prStage(r) === "waitPO");
+  // LF-068 work per calibration round (same data as the calibration area)
+  const lf068 = useMemo(() => {
+    const out = [];
+    equipment.filter(e => !isAirconEquip(e)).forEach(e => {
+      let rounds = [];
+      try { rounds = roundsOf(certificates, e.id, verifications); } catch { rounds = []; }
+      rounds.forEach(r => { const st = lf068State(r, e); if (st) out.push({ e, r, ...st }); });
+    });
+    return out;
+  }, [equipment, certificates, verifications]);
   const prOpen = purchaseRequests.filter(r => !isPRFullyReceived(r));
   const expired = alerts.expiry.filter(x => x.st === "danger");
 
@@ -2283,7 +2310,8 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
       sub: dailyFail.length ? `ไม่ผ่าน ${dailyFail.length}` : dailyTodo ? `ยังไม่ได้ตรวจ ${dailyTodo}` : "ตรวจครบแล้ว",
       tone: dailyFail.length ? "bad" : dailyTodo ? "warn" : "good", go: () => openLink("/?app=calibration&view=dailyAll") },
     { label: "สอบเทียบ/ทวนสอบ", icon: CalendarClock, value: calibWarn, unit: "ใกล้ครบกำหนด",
-      sub: calibDanger ? `เลยกำหนด ${calibDanger}` : "ไม่มีเครื่องเลยกำหนด", tone: calibDanger ? "bad" : calibWarn ? "warn" : "good",
+      sub: calibDanger ? `เลยกำหนด ${calibDanger}` : lf068.length ? `รอทวนสอบ/LF-068 ${lf068.length}` : "ไม่มีเครื่องเลยกำหนด",
+      tone: calibDanger || lf068.some(x => x.key === "fail") ? "bad" : calibWarn || lf068.length ? "warn" : "good",
       go: () => openLink("/?app=calibration&view=verifyList") },
     { label: "จอง/ยืม", icon: CalendarCheck, value: alerts.pendingBookings.length, unit: "รออนุมัติ",
       sub: alerts.overdueBookings.length ? `เลยกำหนดคืน ${alerts.overdueBookings.length}` : `${bookings.filter(isBookingCurrent).length} รายการกำลังใช้งาน/จองอยู่`,
@@ -2302,6 +2330,8 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
       detail: `${Math.abs(daysUntil(b.dueBackDate))} วัน · ยืมโดย ${b.requestedBy || "-"}`, go: () => goto("bookings") })),
     ...alerts.calib.filter(x => x.st === "danger").map(({ e, days }) => ({ key: "cd-" + e.id, st: "danger", title: `${e.code} · เลยกำหนดสอบเทียบ`,
       detail: `${Math.abs(days)} วัน · ${e.name || ""}`, go: () => openLink(`/?app=calibration&equip=${encodeURIComponent(e.id)}`) })),
+    ...lf068.filter(x => x.st === "danger").map(x => ({ key: "lf-" + x.e.id + x.r.key, st: "danger", title: `${x.e.code} · ${x.label}`,
+      detail: `รอบสอบเทียบ ${fmtDate(x.r.calibrationDate)}`, go: () => openLink(`/?app=calibration&view=verifyRound&vid=${encodeURIComponent(x.e.id)}&vround=${encodeURIComponent(x.r.key)}`) })),
     ...analysisJobs.filter(j => analysisJobDeadlineInfo(j).level === "late").map(j => ({ key: "jl-" + j.jobNo, st: "danger",
       title: `${j.jobNo} · งานวิเคราะห์ล่าช้า`, detail: `${analysisJobDeadlineInfo(j).days} วัน`, go: () => openLink(`/?app=analysis&tab=jobs&job=${encodeURIComponent(j.jobNo)}`) })),
     ...(expired.length ? [{ key: "chem-exp", st: "danger", title: `สารเคมีหมดอายุ ${expired.length} รายการ`, detail: expired.slice(0, 3).map(x => x.c.name).join(", "), go: () => goto("chemicals") }] : []),
@@ -2310,7 +2340,13 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
       detail: `${BOOKING_TYPE_LABEL[b.type]} โดย ${b.requestedBy || "-"}`, go: () => goto("bookings") })),
     ...alerts.calib.filter(x => x.st === "warn").map(({ e, days }) => ({ key: "cw-" + e.id, st: "warn", title: `${e.code} · ใกล้ครบกำหนดสอบเทียบ`,
       detail: `เหลือ ${days} วัน (${fmtDate(e.nextDue)})`, go: () => openLink(`/?app=calibration&equip=${encodeURIComponent(e.id)}`) })),
-    ...(prPending.length ? [{ key: "pr", st: "warn", title: `ใบขอซื้อรอเลข PR ${prPending.length} รายการ`, detail: prPending.slice(0, 3).map(r => r.requestNo || "—").join(", "), go: () => openLink("/?tab=purchase&prf=pending") }] : []),
+    ...lf068.filter(x => x.st === "warn").map(x => ({ key: "lf-" + x.e.id + x.r.key, st: "warn", title: `${x.e.code} · ${x.label}`,
+      detail: `รอบสอบเทียบ ${fmtDate(x.r.calibrationDate)}`,
+      go: () => openLink(x.r.verification
+        ? `/?app=calibration&view=verifyRound&vid=${encodeURIComponent(x.e.id)}&vround=${encodeURIComponent(x.r.key)}`
+        : `/?app=calibration&view=instrument&vid=${encodeURIComponent(x.e.id)}&vtab=cal`) })),
+    ...(prPending.length ? [{ key: "pr", st: "warn", title: `ใบขอซื้อรอสั่งซื้อ (รอเลข PR) ${prPending.length} รายการ`, detail: prPending.slice(0, 3).map(r => r.requestNo || "—").join(", "), go: () => openLink("/?tab=purchase&prf=waitPR") }] : []),
+    ...(prWaitPO.length ? [{ key: "po", st: "warn", title: `ใบขอซื้อรอเลข PO ${prWaitPO.length} รายการ`, detail: prWaitPO.slice(0, 3).map(r => r.requestNo || r.prNo).join(", "), go: () => openLink("/?tab=purchase&prf=waitPO") }] : []),
   ];
   const TASK_LIMIT = 8;
   const shownTasks = showAllTasks ? tasks : tasks.slice(0, TASK_LIMIT);
@@ -2400,7 +2436,8 @@ function Dashboard({ equipment, chemicals, consumables, bookings, alerts, analys
             ["สารเคมีใกล้/เลยหมดอายุ", alerts.expiry.length, () => goto("chemicals")],
             ["พัสดุ/สารเคมีใกล้หมด", alerts.lowStock.length + alerts.lowChem.length, () => goto("consumables")],
             ["ใบขอซื้อกำลังดำเนินการ", prOpen.length, () => goto("purchase")],
-            ["ใบขอซื้อรอเลข PR", prPending.length, () => openLink("/?tab=purchase&prf=pending")],
+            ["ใบขอซื้อรอสั่งซื้อ (รอเลข PR)", prPending.length, () => openLink("/?tab=purchase&prf=waitPR")],
+            ["ใบขอซื้อรอเลข PO", prWaitPO.length, () => openLink("/?tab=purchase&prf=waitPO")],
           ].map(([label, n, go]) => (
             <button key={label} onClick={go} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", minHeight: 40,
               background: "none", border: "none", borderTop: "1px solid var(--line)", padding: "6px 2px", fontFamily: "inherit", cursor: "pointer", fontSize: 13.5, color: "var(--ink)" }}>
@@ -4592,19 +4629,19 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   // Deletes also go through commit(): removing a certificate imported to the
   // wrong instrument used to leave that instrument's "สอบเทียบล่าสุด /
   // ครบกำหนด" pointing at the deleted certificate.
-  function remove(id) {
+  async function remove(id) {
     const target = certificates.find(c => c.id === id);
     if (target?.approvedBy) { notify("ลบไม่ได้: ใบรับรองที่อนุมัติแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) — ยกเลิกการอนุมัติก่อน หรือแก้ไขพร้อมระบุเหตุผล", 6000); return; }
-    if (!window.confirm("ลบจุดสอบเทียบนี้หรือไม่?")) return;
+    if (!await mpirConfirm("ลบจุดสอบเทียบนี้หรือไม่?")) return;
     const r = clearSignoffs(certificates.filter(c => c.id !== id), target?.instrumentId, target?.certificateNo, target?.calibrationDate);
     commit(r.list, "ลบจุดสอบเทียบแล้ว" + (r.cleared ? SIGNOFF_CLEARED_MSG : ""));
   }
-  function removeGroup(groupKey) {
+  async function removeGroup(groupKey) {
     const [no, date] = groupKey.split("|||");
     const match = (c) => inGroup(c, selectedInstrumentId, no, date);
     const n = certificates.filter(match).length;
     if (certificates.some(c => match(c) && c.approvedBy)) { notify("ลบไม่ได้: ใบรับรองที่อนุมัติแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) — ยกเลิกการอนุมัติก่อน หรือแก้ไขพร้อมระบุเหตุผล", 6000); return; }
-    if (!window.confirm(`ลบใบรับรอง ${no || "-"} ทั้งใบ (${n} จุด) หรือไม่?`)) return;
+    if (!await mpirConfirm(`ลบใบรับรอง ${no || "-"} ทั้งใบ (${n} จุด) หรือไม่?`)) return;
     commit(certificates.filter(c => !match(c)), "ลบใบรับรองแล้ว");
     setSelectedGroupKey(null);
   }
@@ -4637,7 +4674,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
   }
 
   // Saves whatever the user pasted (text or JSON) through buildRowsFromExtracted.
-  function handlePasteImport(instrumentId) {
+  async function handlePasteImport(instrumentId) {
     try {
       const found = pasteMode === "text" ? parsePastedCertificateText(pasteText) : parsePastedCertificateJson(pasteText);
       const newRows = buildRowsFromExtracted(found, instrumentId);
@@ -4648,7 +4685,7 @@ function CertificateDataTab({ equipment, certificates, setCertificates, notify, 
       let base = certificates;
       if (dup.length) {
         const names = [...new Set(dup.map(c => c.certificateNo || "-"))].join(", ");
-        if (!window.confirm(`ใบรับรอง ${names} มีอยู่ในระบบแล้ว (${dup.length} จุด)\nกด OK เพื่อแทนที่ด้วยข้อมูลที่วางใหม่ หรือ Cancel เพื่อยกเลิก`)) return;
+        if (!await mpirConfirm(`ใบรับรอง ${names} มีอยู่ในระบบแล้ว (${dup.length} จุด)\nกด OK เพื่อแทนที่ด้วยข้อมูลที่วางใหม่ หรือ Cancel เพื่อยกเลิก`)) return;
         const dupIds = new Set(dup.map(c => c.id));
         base = certificates.filter(c => !dupIds.has(c.id));
       }
@@ -6181,8 +6218,8 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
     notify(`บันทึก Uncertainty Budget ${id} แล้ว`);
     setWiDlg(null);
   }
-  function removeBudget(id) {
-    if (!window.confirm(`ลบ Budget ${id} ทั้งชุดหรือไม่?`)) return;
+  async function removeBudget(id) {
+    if (!await mpirConfirm(`ลบ Budget ${id} ทั้งชุดหรือไม่?`)) return;
     setBudgets(budgets.filter(b => b.budgetId !== id)); notify("ลบ Budget แล้ว");
   }
   const byId = Object.fromEntries(equipment.map(e => [e.id, e]));
@@ -6198,7 +6235,7 @@ function UncertaintyBudgetTab({ equipment, budgets, setBudgets, certificates = [
     notify("บันทึก Uncertainty component แล้ว");
     setEditing(null);
   }
-  function remove(id) { if (!window.confirm("ลบองค์ประกอบนี้หรือไม่?")) return; setBudgets(budgets.filter(b => b.id !== id)); notify("ลบรายการแล้ว"); }
+  async function remove(id) { if (!await mpirConfirm("ลบองค์ประกอบนี้หรือไม่?")) return; setBudgets(budgets.filter(b => b.id !== id)); notify("ลบรายการแล้ว"); }
   function newBudget() {
     const inst = equipment[0];
     return { ...blankUncertaintyRow(inst?.id || ""), parameter: inst?.measuredParameter || "", unit: inst?.calUnit || "" };
@@ -6590,7 +6627,7 @@ function ActionImpactTab({ equipment, actionImpacts, setActionImpacts, certifica
     else setActionImpacts([row, ...actionImpacts]);
     notify("บันทึกแล้ว"); setEditing(null);
   }
-  function remove(id) { if (!window.confirm("ลบรายการนี้หรือไม่?")) return; setActionImpacts(actionImpacts.filter(a => a.id !== id)); notify("ลบรายการแล้ว"); }
+  async function remove(id) { if (!await mpirConfirm("ลบรายการนี้หรือไม่?")) return; setActionImpacts(actionImpacts.filter(a => a.id !== id)); notify("ลบรายการแล้ว"); }
   const proposal = proposeActionImpact(equipment[0], certificates, intermediateChecks, dailyChecks);
   return (
     <div>
@@ -6715,7 +6752,7 @@ function ApprovalRecordTab({ equipment, approvalRecords, setApprovalRecords, cer
     else setApprovalRecords([row, ...approvalRecords]);
     notify("บันทึกการอนุมัติแล้ว"); setEditing(null);
   }
-  function remove(id) { if (!window.confirm("ลบบันทึกนี้หรือไม่?")) return; setApprovalRecords(approvalRecords.filter(a => a.id !== id)); notify("ลบรายการแล้ว"); }
+  async function remove(id) { if (!await mpirConfirm("ลบบันทึกนี้หรือไม่?")) return; setApprovalRecords(approvalRecords.filter(a => a.id !== id)); notify("ลบรายการแล้ว"); }
   function newRecord() {
     const inst = equipment[0];
     const own = certificates.filter(c => c.instrumentId === inst?.id);
@@ -7509,6 +7546,44 @@ function CalibrationGuideModal({ onClose }) {
 // back), so returning lands on the same instrument and page instead of the
 // picker. Also keeps the picker's filters.
 const MOVED_TABS = ["calibrationRecords", "dailyCheck"];
+/* ---- In-app confirm / alert (UI design system: one dialog style) ----
+   Replaces the browser's own confirm()/alert() boxes, which look different
+   in every browser and are blocked in some. Same wording, same choices:
+   mpirConfirm resolves true (ยืนยัน) or false (ยกเลิก). */
+function MpirDialog({ message, confirmLabel, cancelLabel, danger, onDone }) {
+  useEffect(() => {
+    const k = (e) => { if (e.key === "Escape") onDone(false); if (e.key === "Enter") onDone(true); };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, []);
+  return (
+    <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, background: "rgba(10,18,20,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16, fontFamily: "var(--mpir-font, 'Sarabun', sans-serif)" }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget && cancelLabel) onDone(false); }}>
+      <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 420, padding: "20px 20px 16px", boxShadow: "0 12px 32px rgba(27,36,48,0.2)" }}>
+        <div style={{ fontSize: 14.5, lineHeight: 1.6, color: "#1B2430", whiteSpace: "pre-line" }}>{message}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+          {cancelLabel && <button autoFocus={!danger} onClick={() => onDone(false)} style={{ minHeight: 40, padding: "0 16px", borderRadius: 8, border: "1px solid #D9E1EA", background: "#fff", color: "#1B2430", fontSize: 14, fontFamily: "inherit", cursor: "pointer" }}>{cancelLabel}</button>}
+          <button autoFocus={!!danger || !cancelLabel} onClick={() => onDone(true)} style={{ minHeight: 40, padding: "0 16px", borderRadius: 8, border: "none", background: danger ? "#C0392B" : "#1F5FA8", color: "#fff", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function showMpirDialog(props) {
+  return new Promise((resolve) => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const done = (v) => { root.unmount(); host.remove(); resolve(v); };
+    root.render(<MpirDialog {...props} onDone={done} />);
+  });
+}
+export function mpirConfirm(message, { confirmLabel = "ยืนยัน", cancelLabel = "ยกเลิก", danger = /ลบ/.test(String(message)) } = {}) {
+  return showMpirDialog({ message, confirmLabel, cancelLabel, danger });
+}
+export function mpirAlert(message) {
+  return showMpirDialog({ message, confirmLabel: "ตกลง", cancelLabel: null, danger: false });
+}
+
 // Links inside the app (e.g. /?app=calibration…) stay in this browser tab:
 // the shell (App.jsx) switches area when it hears "mpir:navigate"; with no
 // shell listening, it falls back to a normal same-tab load. Outside links
@@ -7900,7 +7975,7 @@ ${pg === 1 ? `<h3><b>1</b>ข้อมูลเครื่องมือ</h3><
 <div class="ft"><span>อ้างอิง MPIR-LP-002 ข้อ 6.3.3, 6.4.3 · ISO/IEC 17025:2017 ข้อ 6.4.4 · บันทึกฉบับจริงอยู่ในระบบ LabTrack</span><span>MPIR-LF-068 Rev.02</span></div></div>`).join("")}
 <script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
   const w = window.open("", "_blank");
-  if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return; }
+  if (!w) { mpirAlert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return; }
   w.document.open(); w.document.write(html); w.document.close();
 }
 
@@ -7920,7 +7995,7 @@ function VerificationCard({ instrument, cert, verification, canApprove, currentD
     : v.approvedBy ? { t: `อนุมัติให้ใช้งานแล้ว · ${v.approvedBy}`, c: "var(--green)" }
     : v.evaluatedBy ? { t: `ประเมินผลแล้ว · รอ Lab manager อนุมัติ`, c: "var(--amber)" }
     : { t: `บันทึกแล้ว · รอ TM/QM ประเมินผล`, c: "var(--amber)" };
-  const signPatch = (field) => {
+  const signPatch = async (field) => {
     if (!v) return;
     if (field === "approved") {
       if (!canApprove) { notify("เฉพาะผู้มีสิทธิ์อนุมัติ (Lab manager)"); return; }
@@ -7928,7 +8003,7 @@ function VerificationCard({ instrument, cert, verification, canApprove, currentD
       if (!res.pass) { notify("ผลทวนสอบยังไม่ผ่าน — อนุมัติให้ใช้งานไม่ได้ ดำเนินการตาม MPIR-LP-012"); return; }
     }
     const name = currentDisplayName || "-";
-    if (!window.confirm(field === "approved" ? `อนุมัติให้ใช้งานในนาม ${name}?` : `ลงชื่อผู้ประเมินผลในนาม ${name}?`)) return;
+    if (!await mpirConfirm(field === "approved" ? `อนุมัติให้ใช้งานในนาม ${name}?` : `ลงชื่อผู้ประเมินผลในนาม ${name}?`)) return;
     onSave(field === "approved" ? { ...v, approvedBy: name, approvalDate: todayISO() } : { ...v, evaluatedBy: name, evaluationDate: todayISO() },
       field === "approved" ? "อนุมัติผลการทวนสอบแล้ว" : "ลงชื่อผู้ประเมินผลการทวนสอบแล้ว");
   };
@@ -9166,7 +9241,7 @@ function CheckHistoryTable({ instrument, dailyChecks = [], checks = [], certific
                           <td style={S.td} onClick={e => e.stopPropagation()}>
                             <div style={{ display: "flex", gap: 4 }}>
                               <button style={S.iconBtnSm} onClick={() => (r.kind === "daily" ? onEditDaily(c) : onEditIc(c))}><Pencil size={13} /></button>
-                              <button style={S.iconBtnSm} onClick={() => { if (window.confirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) (r.kind === "daily" ? onDeleteDaily(c.id) : onDeleteIc(c.id)); }}><Trash2 size={13} /></button>
+                              <button style={S.iconBtnSm} onClick={async () => { if (await mpirConfirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) (r.kind === "daily" ? onDeleteDaily(c.id) : onDeleteIc(c.id)); }}><Trash2 size={13} /></button>
                             </div>
                           </td>
                         )}
@@ -9307,7 +9382,7 @@ function CheckLogTable({ rows, unitLabel, onEdit, onDelete, emptyText, onShowAll
         onSave={() => { onApprove(apDlg.r.rec, apDlg.date, apDlg.edit); setApDlg(null); }} />
     </Modal>
   );
-  const askDelete = (r) => { if (window.confirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) onDelete(r); };
+  const askDelete = async (r) => { if (await mpirConfirm("ต้องการลบรายการตรวจสอบนี้ใช่ไหม การลบไม่สามารถกู้คืนได้")) onDelete(r); };
   const empty = (
     <>{emptyText}{onShowAll && <> · <button type="button" onClick={onShowAll} style={{ background: "none", border: "none", padding: 0, color: "var(--teal)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}>ดูทั้งหมด</button></>}</>
   );
@@ -9463,11 +9538,11 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
     notify(message);
     setEditing(null);
   }
-  function remove(id) {
+  async function remove(id) {
     if (guestMode) { notify("ลบรายการได้เฉพาะเจ้าหน้าที่ที่ล็อกอิน", 5000); return; }
     const rec = dailyChecks.find(c => c.id === id);
     if (rec?.approved === true) { notify("ลบไม่ได้: Daily check ที่อนุมัติแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) ให้แก้ไขพร้อมระบุเหตุผลแทน", 6000); return; }
-    if (!window.confirm("ลบบันทึก Daily check นี้หรือไม่?")) return;
+    if (!await mpirConfirm("ลบบันทึก Daily check นี้หรือไม่?")) return;
     setDailyChecks(dailyChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว");
   }
   const canIc = !guestMode && !!setIntermediateChecks;
@@ -9478,16 +9553,16 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
     notify("บันทึก Intermediate check แล้ว");
     setEditingIc(null);
   }
-  function removeIc(id) {
+  async function removeIc(id) {
     const rec = intermediateChecks.find(c => c.id === id);
     if (rec?.reviewedBy) { notify("ลบไม่ได้: Intermediate check ที่ทบทวนแล้วห้ามลบ (MPIR-LP-002 ข้อ 6.7.3) ให้แก้ไขพร้อมระบุเหตุผลแทน", 6000); return; }
-    if (!window.confirm("ลบบันทึก Intermediate check นี้หรือไม่?")) return;
+    if (!await mpirConfirm("ลบบันทึก Intermediate check นี้หรือไม่?")) return;
     setIntermediateChecks(intermediateChecks.filter(c => c.id !== id)); notify("ลบรายการแล้ว");
   }
   const unlockedIc = icForEquip.filter(c => !c.criteriaAt);
-  function lockLegacyIc() {
+  async function lockLegacyIc() {
     if (!equip || !snapshotCriteria(equip)) return;
-    if (!window.confirm(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการเก่า ด้วยเกณฑ์ที่ใช้ ณ วันตรวจของแต่ละรายการ (ตามประวัติเกณฑ์ในข้อมูลเครื่องมือ)?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
+    if (!await mpirConfirm(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการเก่า ด้วยเกณฑ์ที่ใช้ ณ วันตรวจของแต่ละรายการ (ตามประวัติเกณฑ์ในข้อมูลเครื่องมือ)?\nหลังจากนี้แก้ Tolerance จะไม่กระทบผลของรายการเหล่านี้`)) return;
     setIntermediateChecks(intermediateChecks.map(c => (c.instrumentId === equipId && !c.criteriaAt ? { ...c, criteriaAt: snapshotCriteria(equip, c.checkDate) } : c)));
     notify(`ล็อกเกณฑ์ให้ ${unlockedIc.length} รายการแล้ว`);
   }
@@ -9510,11 +9585,11 @@ function DailyCheckTab({ equipment, certificates = [], dailyChecks, setDailyChec
   // the old range/result is kept in criteriaHistory.
   const reevals = useMemo(() => (!equip || guestMode) ? [] : dailyChecks.filter(c => c.equipmentId === equipId)
     .map(c => reevaluateDailyCheck(c, equip)).filter(Boolean), [dailyChecks, equip, equipId, guestMode]);
-  function applyReevals() {
+  async function applyReevals() {
     if (!reevals.length) return;
     const flips = reevals.filter(x => x.from.result !== x.to.result);
     const lines = flips.slice(0, 8).map(x => `• ${fmtDate(x.next.date)}: ${x.from.result ? "ผ่าน" : "ไม่ผ่าน"} → ${x.to.result ? "ผ่าน" : x.to.result === false ? "ไม่ผ่าน" : "-"}`);
-    if (!window.confirm(`ปรับเกณฑ์ย้อนหลัง ${reevals.length} รายการ ตามเกณฑ์ที่มีผล ณ วันตรวจของแต่ละรายการ (ตั้งแต่วันที่ทวนสอบ)\n` +
+    if (!await mpirConfirm(`ปรับเกณฑ์ย้อนหลัง ${reevals.length} รายการ ตามเกณฑ์ที่มีผล ณ วันตรวจของแต่ละรายการ (ตั้งแต่วันที่ทวนสอบ)\n` +
       `ค่าที่อ่านได้ไม่เปลี่ยน · เกณฑ์และผลเดิมเก็บไว้ในประวัติ\n\n` +
       (flips.length ? `ผลเปลี่ยน ${flips.length} รายการ:\n${lines.join("\n")}${flips.length > 8 ? "\n…" : ""}` : "ผลผ่าน/ไม่ผ่านไม่เปลี่ยน"))) return;
     const now = new Date().toISOString(), by = currentDisplayName || currentUsername;
@@ -10007,7 +10082,7 @@ function printAllEquipQR(equipmentList, mode, scopeLabel = "ทุกเคร�
     return { code: e.code, name: e.name, qrSrc };
   });
   const win = window.open("", "_blank");
-  if (!win) { alert("เบราว์เซอร์บล็อกป๊อปอัพ กรุณาอนุญาตป๊อปอัพสำหรับหน้านี้แล้วลองอีกครั้ง"); return; }
+  if (!win) { mpirAlert("เบราว์เซอร์บล็อกป๊อปอัพ กรุณาอนุญาตป๊อปอัพสำหรับหน้านี้แล้วลองอีกครั้ง"); return; }
   const pageTitle = `${mode === "equipmentView" ? "QR ดูข้อมูลเครื่องมือ" : "QR เดลี่เช็ค"} — ${scopeLabel}`;
   const showDailyCheckLabel = mode === "dailyCheck";
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(pageTitle)}</title>
@@ -12509,6 +12584,30 @@ async function reserveRequestNos(year, count, requests) {
   return Number(res.snapshot.val()) - count + 1;
 }
 const hasOfficialPR = (r) => !!(r.prNo || "").trim();
+const hasPO = (r) => getPRPos(r).some(p => (p.poNo || "").trim());
+/* Purchase flow (lab decision 26 พ.ย. 2569):
+   1. someone issues a request → Request No. (รอสั่งซื้อ)
+   2. the buyer orders in the company system and enters the PR No. → สั่งซื้อแล้ว
+   3. purchasing places the order; the buyer enters the PO No. → จัดซื้อสั่งของแล้ว
+   4. items are received (existing ticks) → รับของครบแล้ว
+   The stage is read from the numbers themselves, so older records fall into
+   the right stage with no change to them. */
+const PR_STAGES = {
+  waitPR: { label: "รอสั่งซื้อ · รอเลข PR", fg: "#8A5A00", bg: "#FFF4D6", bd: "#F0D58C" },
+  waitPO: { label: "สั่งซื้อแล้ว · รอเลข PO", fg: "#1F5FA8", bg: "#EAF2FB", bd: "#B9D3EE" },
+  waitGoods: { label: "จัดซื้อสั่งของแล้ว · รอรับของ", fg: "#5B3FA6", bg: "#F1ECFB", bd: "#D3C6F0" },
+  received: { label: "รับของครบแล้ว", fg: "#1E7A4F", bg: "#E6F4EC", bd: "#B5DEC6" },
+};
+function prStage(r) {
+  if (isPRFullyReceived(r)) return "received";
+  if (!hasOfficialPR(r)) return "waitPR";
+  if (!hasPO(r)) return "waitPO";
+  return "waitGoods";
+}
+function PRStageBadge({ r }) {
+  const st = PR_STAGES[prStage(r)];
+  return <span style={{ display: "inline-block", fontSize: 11, fontWeight: 600, color: st.fg, background: st.bg, border: `1px solid ${st.bd}`, borderRadius: 999, padding: "1px 8px", whiteSpace: "nowrap" }}>{st.label}</span>;
+}
 function PendingPRBadge() {
   return <span style={{ display: "inline-block", fontSize: 11, fontWeight: 600, color: "#8A5A00", background: "#FFF4D6", border: "1px solid #F0D58C", borderRadius: 999, padding: "1px 8px" }}>รอเลข PR</span>;
 }
@@ -12543,10 +12642,10 @@ function getPRPos(r) {
   return [];
 }
 
-function PurchaseRequestsTab({ requests, setRequests, notify }) {
+function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName = "" }) {
   const [q, setQ] = useState(() => urlParam("q") || "");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [prNoFilter, setPrNoFilter] = useState(() => urlParam("prf") === "pending" ? "pending" : "all"); // "all" | "has" | "pending"
+  const [stageFilter, setStageFilter] = useState(() => urlParam("prf") === "pending" ? "waitPR" : (PR_STAGES[urlParam("prf")] ? urlParam("prf") : "all"));
   const [view, setView] = useState("active"); // "active" | "history"
   const [editing, setEditing] = useState(() => urlParam("do") === "newPR"
     ? { id: uid(), prNo: "", date: todayISO(), categories: [], itemName: "", requestedBy: "", poNo: "", notes: "" } : null);
@@ -12562,7 +12661,7 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
   const filtered = requests
     .filter(r => ((r.requestNo || "") + " " + (r.prNo || "") + " " + getPRItems(r).map(i => i.text).join(" ") + " " + (r.requestedBy || "") + " " + getPRPos(r).map(p => p.poNo).join(" ")).toLowerCase().includes(q.toLowerCase()))
     .filter(r => categoryFilter === "all" || (r.categories || []).includes(categoryFilter))
-    .filter(r => prNoFilter === "all" || (prNoFilter === "has" ? hasOfficialPR(r) : !hasOfficialPR(r)))
+    .filter(r => stageFilter === "all" || prStage(r) === stageFilter)
     .filter(r => view === "history" ? isPRFullyReceived(r) : !isPRFullyReceived(r))
     .slice()
     .sort((a, b) => (b.date || "").localeCompare(a.date || "")); // most recent PR first
@@ -12571,6 +12670,11 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
     const existing = requests.find(r => r.id === item.id);
     const items = reconcilePRItems(existing?.items, item.itemName);
     const record = { ...item, items };
+    // Who/when each step was acknowledged: PR No. entered = ordered,
+    // first PO No. entered = purchasing has ordered.
+    const now = new Date().toISOString();
+    if (hasOfficialPR(record) && !(existing && hasOfficialPR(existing))) { record.prEnteredAt = now; record.prEnteredBy = currentDisplayName; }
+    if (hasPO(record) && !(existing && hasPO(existing))) { record.poEnteredAt = now; record.poEnteredBy = currentDisplayName; }
     if (existing) {
       setRequests(requests.map(r => r.id === item.id ? { ...record, requestNo: existing.requestNo || record.requestNo } : r));
       notify("บันทึกใบขอซื้อแล้ว");
@@ -12643,10 +12747,9 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
           <option value="all">ทุกหมวด</option>
           {Object.entries(PR_CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <select value={prNoFilter} onChange={e => setPrNoFilter(e.target.value)} style={S.select} aria-label="สถานะเลข PR บริษัท">
-          <option value="all">เลข PR: ทั้งหมด</option>
-          <option value="has">มีเลข PR แล้ว</option>
-          <option value="pending">รอเลข PR</option>
+        <select value={stageFilter} onChange={e => setStageFilter(e.target.value)} style={S.select} aria-label="ขั้นตอนใบขอซื้อ">
+          <option value="all">ทุกขั้นตอน</option>
+          {Object.entries(PR_STAGES).filter(([k]) => k !== "received").map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
@@ -12663,11 +12766,9 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
         rows={filtered.map(r => [
           <div>
             <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 13.5, whiteSpace: "nowrap" }}>{r.requestNo || "—"}</div>
-            <div style={{ fontSize: 11.5, marginTop: 3, whiteSpace: "nowrap" }}>
-              {hasOfficialPR(r)
-                ? <span style={{ fontFamily: "var(--font-mono)", color: "var(--ink)" }}>PR: {r.prNo}</span>
-                : <PendingPRBadge />}
-            </div>
+            <div style={{ marginTop: 4 }}><PRStageBadge r={r} /></div>
+            {hasOfficialPR(r) && <div style={{ fontSize: 11.5, marginTop: 3, whiteSpace: "nowrap", fontFamily: "var(--font-mono)", color: "var(--ink)" }}>PR: {r.prNo}</div>}
+            {r.prEnteredAt && <div style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>สั่งซื้อ {fmtDate(r.prEnteredAt.slice(0, 10))}{r.prEnteredBy ? ` · ${r.prEnteredBy}` : ""}</div>}
             {getPRPos(r).map(p => (
               <div key={p.id} style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
                 PO: {p.fileUrl ? (
@@ -12675,6 +12776,7 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
                 ) : p.poNo}
               </div>
             ))}
+            {r.poEnteredAt && <div style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>จัดซื้อสั่งของ {fmtDate(r.poEnteredAt.slice(0, 10))}{r.poEnteredBy ? ` · ${r.poEnteredBy}` : ""}</div>}
           </div>,
           fmtDate(r.date),
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -12892,8 +12994,8 @@ function PurchaseRequestForm({ item, saving = false, onCancel, onSave }) {
           </div>
         </Field>
         <Field label="เลขที่ PR (บริษัท)">
-          <input style={S.input} value={f.prNo || ""} onChange={set("prNo")} placeholder="ใส่หลังบริษัทออกเลข PR เช่น PR-2569-0045" />
-          {!(f.prNo || "").trim() && <div style={{ marginTop: 4 }}><PendingPRBadge /></div>}
+          <input style={S.input} value={f.prNo || ""} onChange={set("prNo")} placeholder="ใส่เมื่อสั่งซื้อในระบบบริษัทแล้ว เช่น PR-2569-0045" />
+          <div style={{ marginTop: 4 }}><PRStageBadge r={{ ...f, items: f.items || getPRItems(item) }} /></div>
         </Field>
         <Field label="วันที่ออก PR"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="หมวดหมู่ (เลือกได้มากกว่า 1 ถ้าสั่งรวมกัน)" full plain>
@@ -14168,8 +14270,8 @@ function QRPrintPanel({ equipment, setEquipment }) {
             <CheckCircle2 size={13} /> ติดแล้ว — ทำเครื่องหมายว่าพิมพ์แล้ว ({justPrinted.length})
           </button>
         ) : sel.length > 0 && (
-          <button style={S.smallBtn} title="ใช้กับเครื่องที่เคยพิมพ์ติดไว้แล้วก่อนมีระบบนี้" onClick={() => {
-            if (window.confirm(`ทำเครื่องหมายว่าพิมพ์ ${modeLabel} แล้ว ${sel.length} รายการ (ไม่พิมพ์ใหม่)?`)) markPrinted(sel.map(e => e.id));
+          <button style={S.smallBtn} title="ใช้กับเครื่องที่เคยพิมพ์ติดไว้แล้วก่อนมีระบบนี้" onClick={async () => {
+            if (await mpirConfirm(`ทำเครื่องหมายว่าพิมพ์ ${modeLabel} แล้ว ${sel.length} รายการ (ไม่พิมพ์ใหม่)?`)) markPrinted(sel.map(e => e.id));
           }}>ทำเครื่องหมายว่าเคยพิมพ์แล้ว</button>
         )}
       </div>
@@ -14475,7 +14577,7 @@ function WizardModal({ title, steps, onCancel, onSave, saveDisabled = false }) {
 
   // Overlay click / X: once the person has moved past the first card, confirm
   // before throwing the half-filled form away. The "ยกเลิก" button always closes.
-  const guardedClose = () => { if (idx === 0 || window.confirm("ยังกรอกไม่เสร็จ ต้องการปิดและทิ้งข้อมูลที่กรอกไว้หรือไม่?")) onCancel(); };
+  const guardedClose = async () => { if (idx === 0 || await mpirConfirm("ยังกรอกไม่เสร็จ ต้องการปิดและทิ้งข้อมูลที่กรอกไว้หรือไม่?")) onCancel(); };
   return (
     <Modal onClose={guardedClose} title={title} wide>
       <div ref={topRef}>
