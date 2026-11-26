@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Wrench, FlaskConical, Lock, LogOut, ShieldCheck } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Wrench, FlaskConical, Lock, LogOut, ShieldCheck, Plus, Search, ExternalLink } from "lucide-react";
 import LabTrackApp from "./labtrack/LabTrackApp.jsx";
 import AnalysisApp from "./analysis/AnalysisApp.jsx";
 import CalibrationApp from "./calibration/CalibrationApp.jsx";
@@ -35,10 +35,104 @@ body { margin: 0; font-family: var(--mpir-font); color: var(--mpir-text); backgr
 // The calibration app used to open in a separate browser tab at
 // /?app=calibration — that URL still works and now opens this tab.
 const TABS = [
-  { key: "labtrack", label: "จัดการห้องแล็บ", sub: "LabTrack", Icon: Wrench },
-  { key: "calibration", label: "Instrument Assurance System", sub: "สอบเทียบ · Daily check", Icon: ShieldCheck },
-  { key: "analysis", label: "ติดตามงานวิเคราะห์", sub: "Lab Analysis Tracker", Icon: FlaskConical },
+  { key: "labtrack", label: "จัดการห้องแล็บ", short: "จัดการห้องแล็บ", sub: "LabTrack", Icon: Wrench },
+  { key: "calibration", label: "Instrument Assurance System", short: "Instrument Assurance", sub: "สอบเทียบ · Daily check", Icon: ShieldCheck },
+  { key: "analysis", label: "ติดตามงานวิเคราะห์", short: "งานวิเคราะห์", sub: "Lab Analysis Tracker", Icon: FlaskConical },
 ];
+
+/* ---- Release 2: header quick actions ("+") and search ----
+   Each quick action is a deep link into an existing page that opens the
+   existing form (do=…); nothing here saves data. Booking accounts see only
+   what their role already reaches. */
+const QUICK_ACTIONS = [
+  { key: "daily", label: "บันทึก Daily check", url: "/?app=calibration&view=dailyAll", roles: ["admin", "approver"] },
+  { key: "booking", label: "จองเครื่องมือ", url: "/?tab=bookings&do=newBooking", roles: ["admin", "approver", "booking"] },
+  { key: "job", label: "สร้างรหัสงาน", url: "/?app=analysis&tab=jobs&do=newJob", roles: ["admin", "approver"] },
+  { key: "pr", label: "ออกใบขอซื้อ (PR)", url: "/?tab=purchase&do=newPR", roles: ["admin", "approver"] },
+  { key: "equip", label: "เพิ่มเครื่องมือ", url: "/?app=calibration&new=1", roles: ["admin", "approver"] },
+  { key: "request", label: "ขอรับบริการวิเคราะห์", url: "https://centrallab-mpir.mitrphol.com/login/admin", external: true, roles: ["admin", "approver"] },
+  { key: "requestPublic", label: "ขอรับบริการวิเคราะห์", url: "https://centrallab-mpir.mitrphol.com/", external: true, roles: ["booking"] },
+];
+
+function useClickOutside(ref, onOutside) {
+  useEffect(() => {
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) onOutside(); };
+    document.addEventListener("mousedown", h); document.addEventListener("touchstart", h);
+    return () => { document.removeEventListener("mousedown", h); document.removeEventListener("touchstart", h); };
+  }, [ref, onOutside]);
+}
+
+function QuickActions({ role, onGo }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+  useClickOutside(box, () => setOpen(false));
+  const items = QUICK_ACTIONS.filter(a => a.roles.includes(role));
+  return (
+    <div ref={box} style={{ position: "relative" }}>
+      <button style={styles.plusBtn} onClick={() => setOpen(o => !o)} aria-haspopup="menu" aria-expanded={open} title="ทำรายการด่วน">
+        <Plus size={16} /> <span className="appHideMobile">ทำรายการด่วน</span>
+      </button>
+      {open && (
+        <div role="menu" style={styles.menu}>
+          {items.map(a => (
+            <button key={a.key} role="menuitem" style={styles.menuItem}
+              onClick={() => { setOpen(false); a.external ? window.open(a.url, "_blank", "noopener,noreferrer") : onGo(a.url); }}>
+              {a.label}{a.external && <ExternalLink size={13} style={{ marginLeft: 6, opacity: 0.6 }} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Searches instruments and PR numbers already in the LabTrack database, and
+// hands any text to the analysis job list. Read-only.
+function HeaderSearch({ onGo }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState(null);
+  const box = useRef(null);
+  useClickOutside(box, () => setOpen(false));
+  async function load() {
+    if (data || !window.storage) return;
+    const read = async (k) => { try { return JSON.parse((await window.storage.get(k)).value) || []; } catch { return []; } };
+    const [equipment, prs] = await Promise.all([read("equipment"), read("purchaseRequests")]);
+    setData({ equipment, prs });
+  }
+  const t = q.trim().toLowerCase();
+  const results = [];
+  if (t && data) {
+    data.equipment.filter(e => [e.code, e.name, e.serialNo].some(v => (v || "").toString().toLowerCase().includes(t))).slice(0, 6)
+      .forEach(e => results.push({ key: "e" + e.id, kind: "เครื่องมือ", label: `${e.code || ""} ${e.name || ""}`.trim(), url: `/?app=calibration&equip=${encodeURIComponent(e.id)}` }));
+    data.prs.filter(r => [r.requestNo, r.prNo].some(v => (v || "").toLowerCase().includes(t))).slice(0, 4)
+      .forEach(r => results.push({ key: "p" + r.id, kind: "ใบขอซื้อ", label: [r.requestNo, r.prNo].filter(Boolean).join(" · "), url: `/?tab=purchase&q=${encodeURIComponent(r.requestNo || r.prNo)}` }));
+  }
+  if (t) results.push({ key: "jobs", kind: "งานวิเคราะห์", label: `ค้นหา “${q.trim()}” ในงานวิเคราะห์`, url: `/?app=analysis&tab=jobs&jq=${encodeURIComponent(q.trim())}` });
+  const go = (r) => { setOpen(false); setQ(""); onGo(r.url); };
+  return (
+    <div ref={box} style={{ position: "relative", flex: "1 1 220px", maxWidth: 340 }} className="appSearch">
+      <div style={styles.searchBox}>
+        <Search size={15} style={{ color: "var(--mpir-text-2)", flexShrink: 0 }} />
+        <input value={q} placeholder="ค้นหาเครื่องมือ, เลขที่คำขอ/PR, เลขงาน"
+          onFocus={() => { setOpen(true); load(); }}
+          onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && results[0]) go(results[0]); if (e.key === "Escape") setOpen(false); }}
+          style={styles.searchInput} aria-label="ค้นหา" />
+      </div>
+      {open && t && (
+        <div role="listbox" style={{ ...styles.menu, left: 0, right: 0, minWidth: 0 }}>
+          {!data && <div style={{ padding: "8px 12px", fontSize: 12.5, color: "var(--mpir-text-2)" }}>กำลังโหลด…</div>}
+          {results.map(r => (
+            <button key={r.key} role="option" style={styles.menuItem} onClick={() => go(r)}>
+              <span style={styles.resultKind}>{r.kind}</span>{r.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 // URL keys owned by one area; cleared when moving to another area so a
 // reload lands where the person is now.
 const SECTION_URL_KEYS = ["app", "equip", "new", "edit", "view", "vid", "vround", "vtab", "tab"];
@@ -296,6 +390,15 @@ function useTokens() {
 export default function App() {
   useTokens();
   const [section, setSectionState] = useState(sectionFromUrl);
+  // Bumped on every in-app link so the target area re-reads the URL (page,
+  // record, one-time action) even when it is already the open area.
+  const [navKey, setNavKey] = useState(0);
+  function go(url) {
+    window.history.pushState({ mpirSection: true }, "", url);
+    setSectionState(sectionFromUrl());
+    setNavKey(k => k + 1);
+    window.scrollTo(0, 0);
+  }
   function setSection(key) {
     if (key === section) return;
     window.history.pushState({ mpirSection: key }, "", urlForSection(key));
@@ -312,6 +415,7 @@ export default function App() {
       e.preventDefault();
       window.history.pushState({ mpirSection: true }, "", url);
       setSectionState(sectionFromUrl());
+      setNavKey(k => k + 1);
       window.scrollTo(0, 0);
     };
     window.addEventListener("popstate", onPop);
@@ -401,12 +505,18 @@ export default function App() {
   return (
     <div style={styles.page} className="appPage">
       <style>{`
+        .appTabShort { display: none; }
+        @media (max-width: 1500px) { .appTabSub { display: none !important; } }
         @media (max-width: 640px) {
           .appPage { padding: 10px 10px 18px !important; }
-          .appTopbar { padding: 8px 10px !important; }
-          .appTabRow { width: 100%; }
-          .appTabBtn { flex: 1 1 auto !important; justify-content: center !important; }
-          .appTabSub { display: none !important; }
+          .appTopbar { padding: 8px 10px !important; gap: 8px !important; }
+          .appTabRow { width: 100%; flex-wrap: nowrap !important; order: 5; gap: 6px !important; }
+          .appTabBtn { flex: 1 1 0 !important; min-width: 0; justify-content: center !important; text-align: center; white-space: normal; line-height: 1.25; padding: 6px 6px !important; font-size: 12px !important; }
+          .appTabBtn svg { display: none; }
+          .appTabLong { display: none !important; }
+          .appTabShort { display: inline !important; }
+          .appHideMobile { display: none !important; }
+          .appSearch { order: 6; max-width: none !important; flex-basis: 100% !important; }
         }
       `}</style>
       <div style={styles.topbar} className="appTopbar">
@@ -430,7 +540,8 @@ export default function App() {
                 >
                   <Icon size={16} />
                   <span>
-                    <span style={styles.tabLabel}>{label}</span>
+                    <span style={styles.tabLabel} className="appTabLong">{label}</span>
+                    <span style={styles.tabLabel} className="appTabShort">{TABS.find(t => t.key === key).short}</span>
                     <span style={styles.tabSub} className="appTabSub"> · {sub}</span>
                   </span>
                 </button>
@@ -438,7 +549,9 @@ export default function App() {
             })}
           </div>
         )}
+        {!isBookingOnly && <HeaderSearch onGo={go} />}
         <div style={styles.userBox}>
+          <QuickActions role={session.role} onGo={go} />
           <span style={styles.userName}>{session.name || session.username}</span>
           <button onClick={logout} style={styles.logoutBtn} title="ออกจากระบบ">
             <LogOut size={14} />
@@ -447,9 +560,9 @@ export default function App() {
       </div>
 
       <div style={styles.content}>
-        {activeSection === "labtrack" && <LabTrackApp restrictToBooking={isBookingOnly} currentUsername={session.username} currentDisplayName={session.name} canApprove={canApprove} />}
-        {activeSection === "calibration" && !isBookingOnly && <div style={styles.areaFrame}><CalibrationApp currentUsername={session.username} currentDisplayName={session.name} initial={calInitial} /></div>}
-        {activeSection === "analysis" && !isBookingOnly && <AnalysisApp />}
+        {activeSection === "labtrack" && <LabTrackApp key={navKey} restrictToBooking={isBookingOnly} currentUsername={session.username} currentDisplayName={session.name} canApprove={canApprove} />}
+        {activeSection === "calibration" && !isBookingOnly && <div style={styles.areaFrame}><CalibrationApp key={navKey} currentUsername={session.username} currentDisplayName={session.name} initial={calInitial} /></div>}
+        {activeSection === "analysis" && !isBookingOnly && <AnalysisApp key={navKey} />}
       </div>
     </div>
   );
@@ -514,4 +627,28 @@ const styles = {
     padding: 7, cursor: "pointer", color: "#5B7A96",
   },
   content: {},
+  plusBtn: {
+    display: "flex", alignItems: "center", gap: 6, minHeight: 36, padding: "0 12px",
+    background: "var(--mpir-primary)", color: "#fff", border: "1px solid var(--mpir-primary)",
+    borderRadius: 9, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", whiteSpace: "nowrap",
+  },
+  menu: {
+    position: "absolute", top: "calc(100% + 6px)", right: 0, minWidth: 220, zIndex: 40,
+    background: "#fff", border: "1px solid var(--mpir-border)", borderRadius: 10,
+    boxShadow: "0 8px 24px rgba(27,36,48,0.12)", padding: 6, display: "flex", flexDirection: "column",
+  },
+  menuItem: {
+    display: "flex", alignItems: "center", gap: 8, textAlign: "left", width: "100%", minHeight: 40,
+    background: "none", border: "none", borderRadius: 8, padding: "8px 12px",
+    fontSize: 13.5, fontFamily: "inherit", color: "var(--mpir-text)", cursor: "pointer",
+  },
+  resultKind: {
+    fontSize: 11, color: "var(--mpir-primary)", background: "var(--mpir-primary-light)",
+    borderRadius: 999, padding: "1px 8px", whiteSpace: "nowrap", flexShrink: 0,
+  },
+  searchBox: {
+    display: "flex", alignItems: "center", gap: 8, height: 38, padding: "0 12px",
+    background: "#fff", border: "1px solid var(--mpir-border)", borderRadius: 9,
+  },
+  searchInput: { flex: 1, minWidth: 0, border: "none", outline: "none", fontSize: 13.5, fontFamily: "inherit", background: "transparent", color: "var(--mpir-text)" },
 };
