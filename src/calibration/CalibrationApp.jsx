@@ -246,7 +246,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
           <button className={`ca-nav ${["overview", "instrument", "equipEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "overview" })}><LayoutGrid size={17} /> ทะเบียนเครื่องมือ</button>
           {can("dailyCheck", "view") && <button className={`ca-nav ${page.name === "dailyAll" ? "on" : ""}`} onClick={() => go({ name: "dailyAll" })}><ClipboardCheck size={17} /> Daily check วันนี้</button>}
           {can("calibration", "view") && <button className={`ca-nav ${inVerify ? "on" : ""}`} onClick={() => go({ name: "verifyList" })}><ShieldCheck size={17} /> ต้องสอบเทียบ/ทวนสอบ</button>}
-          {can("uncertainty", "view") && <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน (LF-069)</button>}
+          {can("uncertainty", "view") && <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน</button>}
           <div className="ca-side-foot">{me ? `ผู้ใช้: ${me}` : ""}<br />ข้อมูลชุดเดียวกับ LabTrack</div>
         </>)}
       </nav>
@@ -359,12 +359,6 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
           })()}
           {page.name === "uncList" && (
             <UncertaintyList reports={data.uncertaintyReports} certificates={data.certificates} equipment={data.equipment}
-              legacyCount={legacyReports(LF069_REPORTS, data.uncertaintyReports, data.equipment, data.certificates, me).length}
-              onImportLegacy={async () => {
-                const add = legacyReports(LF069_REPORTS, data.uncertaintyReports, data.equipment, data.certificates, me);
-                await mutate("uncertaintyReports", list => [...list, ...add.filter(a => !list.some(x => x.legacyKey === a.legacyKey))]);
-                setToast(`นำเข้ารายงานเดิม ${add.length} ฉบับ · คำนวณใหม่แล้ว`);
-              }}
               onNew={() => {
                 const prev = [...data.uncertaintyReports].sort((a, b) => (b.reportDate || "").localeCompare(a.reportDate || ""))[0];
                 go({ name: "uncEdit", draft: newReport(prev, data.equipment, data.certificates, me) });
