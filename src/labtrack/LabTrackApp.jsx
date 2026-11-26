@@ -2218,7 +2218,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
             <ConsumablesTab consumables={consumables} setConsumables={persist.consumables} notify={notify} />
           )}
           {!restrictToBooking && tab === "purchase" && (
-            <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} currentDisplayName={currentDisplayName} chemicals={chemicals} consumables={consumables} />
+            <PurchaseRequestsTab requests={purchaseRequests} setRequests={persist.purchaseRequests} notify={notify} currentDisplayName={currentDisplayName} chemicals={chemicals} consumables={consumables} setChemicals={persist.chemicals} setConsumables={persist.consumables} />
           )}
           {!restrictToBooking && tab === "reports" && (
             <ReportsTab equipment={equipment} setEquipment={persist.equipment} activities={activities} dailyChecks={dailyChecks} chemicals={chemicals} consumables={consumables} purchaseRequests={purchaseRequests}
@@ -12642,7 +12642,35 @@ function getPRPos(r) {
   return [];
 }
 
-function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName = "", chemicals = [], consumables = [] }) {
+function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName = "", chemicals = [], consumables = [], setChemicals = null, setConsumables = null }) {
+  const [receiving, setReceiving] = useState(null); // request being received into stock
+  // Same transaction shape as ChemicalsTab/ConsumablesTab addTransaction, so
+  // each item's own history shows these exactly like a receive made there.
+  function receiveToStock(request, { date, poNo, by, rows }) {
+    const note = `รับจากใบขอซื้อ ${request.requestNo || ""}${request.prNo ? ` (PR ${request.prNo})` : ""}`.trim();
+    const apply = (list, kind) => list.map(c => {
+      const mine = rows.filter(r => r.stock && r.stock.kind === kind && r.stock.item.id === c.id);
+      if (!mine.length) return c;
+      let qty = c.quantity || 0; let txs = c.transactions || [];
+      mine.forEach(r => {
+        const q = Number(r.qty) || 0;
+        qty += q;
+        const tx = { id: uid(), type: "receive", date, qty: q, poNo, by, note, needsReturn: false, returned: false, prId: request.id, prRequestNo: request.requestNo || "" };
+        if (kind === "chemical") tx.expiryDate = r.expiryDate || "";
+        txs = [tx, ...txs];
+      });
+      return { ...c, quantity: Math.max(0, qty), transactions: txs };
+    });
+    const chemRows = rows.filter(r => r.stock?.kind === "chemical").length;
+    const consRows = rows.filter(r => r.stock?.kind === "consumable").length;
+    if (chemRows && setChemicals) setChemicals(apply(chemicals, "chemical"));
+    if (consRows && setConsumables) setConsumables(apply(consumables, "consumable"));
+    const done = new Set(rows.map(r => r.id));
+    setRequests(requests.map(r => r.id === request.id
+      ? { ...r, items: getPRItems(r).map(it => done.has(it.id) ? { ...it, received: true, receivedDate: date } : it) } : r));
+    notify(`รับของแล้ว ${rows.length} รายการ${chemRows + consRows ? ` · เข้าสต็อก ${chemRows + consRows} รายการ` : ""}`);
+    setReceiving(null);
+  }
   // Pick-list for the item lines: things ordered before (most often first),
   // then the chemical and consumable registers. Read-only suggestions.
   const itemSuggestions = useMemo(() => {
@@ -12800,13 +12828,16 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
               : "-"}
           </div>,
           <div>
-            <PRItemsCell items={getPRItems(r)} onUpdateItems={(items) => updateItems(r.id, items)} onReceiveAll={() => receiveAll(r)} />
+            <PRItemsCell items={getPRItems(r)} onUpdateItems={(items) => updateItems(r.id, items)} onReceiveAll={() => receiveAll(r)}
+              onReceiveToStock={setChemicals && setConsumables ? () => setReceiving(r) : null} />
             {r.requestedBy && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>ผู้ขอ: {r.requestedBy}</div>}
           </div>,
           <RowActions onEdit={() => setEditing({ ...r, itemName: getPRItems(r).map(i => i.text).join("\n") })} onDelete={() => remove(r.id)} />,
         ])}
         empty={view === "history" ? "ยังไม่มี PR ที่รับของครบ" : "ยังไม่มีใบขอซื้อที่กำลังดำเนินการ"}
       />
+      {receiving && <PRReceiveDialog request={receiving} chemicals={chemicals} consumables={consumables}
+        onCancel={() => setReceiving(null)} onConfirm={(data) => receiveToStock(receiving, data)} />}
       {editing && <PurchaseRequestForm item={editing} saving={saving} suggestions={itemSuggestions} onCancel={() => setEditing(null)} onSave={upsert} />}
     </div>
   );
@@ -12921,7 +12952,100 @@ function ViewTab({ active, onClick, label, count, warnCount = 0, icon: Icon, com
 // once — matches the 1 PR = 1 PO assumption, so the PO number lives on the
 // PR itself rather than per line. Shows the first 2 lines with a "+N more"
 // expander.
-function PRItemsCell({ items, onUpdateItems, onReceiveAll }) {
+// Receive goods from a purchase request straight into stock: one screen for
+// every line of the request. Each line can go to a chemical or consumable
+// record (as the same "รับเข้า" transaction the item page records, so its
+// history stays as before) or be ticked received without stock (e.g. a
+// repair). The request's own lines are marked received with the date.
+function matchStockItem(text, chemicals, consumables) {
+  const t = (text || "").toLowerCase();
+  const all = [
+    ...chemicals.map(c => ({ kind: "chemical", id: c.id, name: c.name || "" })),
+    ...consumables.map(c => ({ kind: "consumable", id: c.id, name: c.name || "" })),
+  ].filter(x => x.name.trim());
+  const exact = all.find(x => x.name.toLowerCase() === t);
+  if (exact) return `${exact.kind}:${exact.id}`;
+  const partial = all.filter(x => t.includes(x.name.toLowerCase())).sort((a, b) => b.name.length - a.name.length)[0];
+  return partial ? `${partial.kind}:${partial.id}` : "";
+}
+function PRReceiveDialog({ request, chemicals, consumables, onCancel, onConfirm }) {
+  const open = getPRItems(request).filter(it => !it.received);
+  const firstPO = getPRPos(request).find(p => (p.poNo || "").trim())?.poNo || "";
+  const [date, setDate] = useState(todayISO());
+  const [poNo, setPoNo] = useState(firstPO);
+  const [by, setBy] = useState("");
+  const [rows, setRows] = useState(() => open.map(it => ({ id: it.id, text: it.text, take: true, target: matchStockItem(it.text, chemicals, consumables), qty: "", expiryDate: "" })));
+  const setRow = (id, patch) => setRows(rs => rs.map(r => r.id === id ? { ...r, ...patch } : r));
+  const lookup = (target) => {
+    const [kind, id] = (target || "").split(":");
+    const item = kind === "chemical" ? chemicals.find(c => c.id === id) : kind === "consumable" ? consumables.find(c => c.id === id) : null;
+    return item ? { kind, item } : null;
+  };
+  const taken = rows.filter(r => r.take);
+  const invalid = taken.some(r => r.target && !(Number(r.qty) > 0));
+  const cell = { padding: "8px 6px", borderBottom: "1px solid var(--line)", verticalAlign: "top" };
+  return (
+    <Modal onClose={onCancel} title={`รับของเข้าสต็อก · ${request.requestNo || request.prNo || "ใบขอซื้อ"}`} xwide>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 10, lineHeight: 1.6 }}>
+        เลือกรายการที่ได้รับครั้งนี้ แล้วเลือกว่าจะรับเข้าสารเคมีหรือพัสดุตัวไหน · ระบบจะบันทึก "รับเข้า" ในประวัติของรายการนั้นเหมือนกดจากหน้ารายการเอง
+        และติ๊ก "รับแล้ว" ในใบขอซื้อให้ · เลือก "ไม่เข้าสต็อก" สำหรับงานซ่อมหรือของที่ไม่ได้เก็บในคลัง
+      </div>
+      <div style={S.formGrid} className="ltFormGrid">
+        <Field label="วันที่รับ"><input type="date" style={S.input} value={date} onChange={e => setDate(e.target.value)} /></Field>
+        <Field label="เลขที่ใบสั่งซื้อ (PO)"><input style={S.input} value={poNo} onChange={e => setPoNo(e.target.value)} placeholder="เช่น PO-2569-0123" /></Field>
+        <Field label="ผู้รับของ" full><input style={S.input} value={by} onChange={e => setBy(e.target.value)} placeholder="ชื่อผู้รับ (ไม่บังคับ)" /></Field>
+      </div>
+      {open.length === 0 ? <EmptyState text="ทุกรายการในใบขอซื้อนี้รับแล้ว" small /> : (
+        <div style={{ overflowX: "auto", marginTop: 6 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+            <thead>
+              <tr style={{ background: "#F5F8FB", textAlign: "left" }}>
+                {["รับ", "รายการในใบขอซื้อ", "รับเข้า", "จำนวน", "วันหมดอายุ (สารเคมี)"].map(h => <th key={h} style={{ ...cell, fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => {
+                const st = lookup(r.target);
+                return (
+                  <tr key={r.id} style={{ opacity: r.take ? 1 : 0.5 }}>
+                    <td style={cell}><input type="checkbox" checked={r.take} onChange={e => setRow(r.id, { take: e.target.checked })} style={{ width: 18, height: 18 }} aria-label={`รับ ${r.text}`} /></td>
+                    <td style={{ ...cell, minWidth: 180 }}>{r.text}</td>
+                    <td style={cell}>
+                      <select style={{ ...S.select, width: 230 }} value={r.target} disabled={!r.take} onChange={e => setRow(r.id, { target: e.target.value })} aria-label={`รับเข้า ${r.text}`}>
+                        <option value="">ไม่เข้าสต็อก</option>
+                        <optgroup label="สารเคมี">{chemicals.map(c => <option key={c.id} value={`chemical:${c.id}`}>{c.name}</option>)}</optgroup>
+                        <optgroup label="พัสดุสิ้นเปลือง">{consumables.map(c => <option key={c.id} value={`consumable:${c.id}`}>{c.name}</option>)}</optgroup>
+                      </select>
+                      {st && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>คงเหลือตอนนี้ {st.item.quantity || 0} {st.item.unit || ""}</div>}
+                    </td>
+                    <td style={cell}>
+                      {st ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input type="number" min="0" style={{ ...S.input, width: 90 }} value={r.qty} disabled={!r.take} onChange={e => setRow(r.id, { qty: e.target.value })} aria-label={`จำนวน ${r.text}`} />
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>{st.item.unit || ""}</span>
+                        </div>
+                      ) : <span style={{ color: "var(--muted)" }}>—</span>}
+                    </td>
+                    <td style={cell}>
+                      {st?.kind === "chemical"
+                        ? <input type="date" style={{ ...S.input, width: 150 }} value={r.expiryDate} disabled={!r.take} onChange={e => setRow(r.id, { expiryDate: e.target.value })} />
+                        : <span style={{ color: "var(--muted)" }}>—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {invalid && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>ใส่จำนวนที่รับให้ทุกรายการที่เลือกรับเข้าสต็อก</div>}
+      <ModalFooter onCancel={onCancel} disabled={!date || taken.length === 0 || invalid}
+        onSave={() => onConfirm({ date, poNo, by, rows: taken.map(r => ({ ...r, stock: lookup(r.target) })) })} />
+    </Modal>
+  );
+}
+
+function PRItemsCell({ items, onUpdateItems, onReceiveAll, onReceiveToStock = null }) {
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? items : items.slice(0, 2);
   const rest = items.length - shown.length;
@@ -12967,6 +13091,12 @@ function PRItemsCell({ items, onUpdateItems, onReceiveAll }) {
           style={{ fontSize: 12, color: "var(--teal)", background: "none", border: "none", cursor: "pointer", padding: 0, marginRight: 12 }}
         >
           {expanded ? "ย่อกลับ" : `+${rest} รายการเพิ่มเติม`}
+        </button>
+      )}
+      {!allReceived && onReceiveToStock && (
+        <button onClick={onReceiveToStock}
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600, color: "#fff", background: "var(--teal)", border: "none", borderRadius: 999, padding: "4px 10px", cursor: "pointer", marginTop: 4, marginRight: 10 }}>
+          <Package size={12} /> รับของเข้าสต็อก
         </button>
       )}
       {!allReceived && (
