@@ -18,7 +18,7 @@ import TrendChart from "./TrendChart.jsx";
 import { EquipmentEditor, InstrumentInfo, InstrumentPhoto, blankInstrument, STATUS_LABEL } from "./EquipmentEditor.jsx";
 import {
   LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable, newIntermediateCheckFor,
-  saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm, dailyCheckPoints, LF069_REPORTS, toDisplayImageUrl,
+  saveIntermediateCheckInto, calcIntermediateCheck, hasDailyForm, dailyCheckPoints, LF069_REPORTS, toDisplayImageUrl, mpirConfirm, mpirAlert,
 } from "../labtrack/LabTrackApp.jsx";
 import { UncertaintyList, UncertaintyEditor, newReport, legacyReports, printLf069 } from "./UncertaintyPage.jsx";
 
@@ -202,7 +202,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
     const msg = has
       ? `ลบ ${e.code} ${e.name} ออกจากทะเบียน พร้อมบันทึกทั้งหมดของเครื่องนี้\n(รอบสอบเทียบ ${n.cert} · ทวนสอบ ${n.ver} · Daily check ${n.daily} · Intermediate check ${n.ic})\nลบแล้วกู้คืนไม่ได้ — พิมพ์รหัสเครื่อง "${e.code}" เพื่อยืนยัน`
       : `ลบ ${e.code} ${e.name} ออกจากทะเบียน?`;
-    if (has ? window.prompt(msg) !== String(e.code) : !window.confirm(msg)) return;
+    if (has ? window.prompt(msg) !== String(e.code) : !await mpirConfirm(msg)) return;
     await mutate("equipment", list => list.filter(x => x.id !== e.id));
     if (n.cert) await mutate("certificates", list => list.filter(c => c.instrumentId !== e.id));
     if (n.ver) await mutate("verifications", list => list.filter(v => v.instrumentId !== e.id));
@@ -211,7 +211,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
     setToast(`ลบ ${e.code} แล้ว`);
   }
   async function deleteRound(inst, round) {
-    if (!window.confirm(`ลบรอบสอบเทียบ ${fmtDate(round.calibrationDate)} (ใบรับรอง ${round.certificateNo || "–"}) ของ ${inst.code}${round.verification ? " พร้อมผลทวนสอบ" : ""}?\nลบแล้วกู้คืนไม่ได้`)) return;
+    if (!await mpirConfirm(`ลบรอบสอบเทียบ ${fmtDate(round.calibrationDate)} (ใบรับรอง ${round.certificateNo || "–"}) ของ ${inst.code}${round.verification ? " พร้อมผลทวนสอบ" : ""}?\nลบแล้วกู้คืนไม่ได้`)) return;
     const same = (x) => x.instrumentId === inst.id && roundKey(x.certificateNo, x.calibrationDate) === round.key;
     await mutate("certificates", list => list.filter(c => !same(c)));
     if (round.verification) await mutate("verifications", list => list.filter(v => !(v.id === round.verification.id || same(v))));
@@ -367,7 +367,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
               }}
               onOpen={(id) => go({ name: "uncEdit", draft: data.uncertaintyReports.find(r => r.id === id) })}
               onDelete={async (rep) => {
-                if (!window.confirm(`ลบรายงาน LF-069 ประจำปี ${rep.year || ""}?`)) return;
+                if (!await mpirConfirm(`ลบรายงาน LF-069 ประจำปี ${rep.year || ""}?`)) return;
                 await mutate("uncertaintyReports", list => list.filter(r => r.id !== rep.id));
                 setToast("ลบรายงานแล้ว");
               }}
@@ -403,7 +403,7 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
               onSave={async ({ points, verification, oldKey, newKey, calDate }) => {
                 const at = new Date().toISOString();
                 const clash = (roundsById[instrument.id] || []).some(r => r.key === newKey && r.key !== oldKey);
-                if (clash) { alert("มีใบรับรองเลขที่และวันที่นี้อยู่แล้ว"); return false; }
+                if (clash) { mpirAlert("มีใบรับรองเลขที่และวันที่นี้อยู่แล้ว"); return false; }
                 await mutate("certificates", list => {
                   const old = list.filter(c => c.instrumentId === instrument.id && roundKey(c.certificateNo, c.calibrationDate) === oldKey);
                   const byId = Object.fromEntries(old.map(c => [c.id, c]));
@@ -1008,7 +1008,7 @@ function EquipHistory({ e, rounds, canEdit, onSave, me, readOnly = false }) {
     setAdding(null);
   }
   async function remove(id) {
-    if (!window.confirm("ลบรายการนี้ออกจากประวัติเครื่องมือ?")) return;
+    if (!await mpirConfirm("ลบรายการนี้ออกจากประวัติเครื่องมือ?")) return;
     await onSave(e.id, { historyLog: log.filter(x => x.id !== id) });
   }
   return (<>
@@ -1315,7 +1315,7 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
     const rows = lines.filter(p => p.length >= 3 && num(p[0]) != null).map(p => d.adjusted && p.length >= 4
       ? { id: null, beforeId: null, range: "", ref: p[0], before: p[1], reading: p[2], U: p[3], k: 2 }
       : { id: null, beforeId: null, range: "", ref: p[0], reading: p[1], U: p[2], before: "", k: 2 });
-    if (!rows.length) { alert("อ่านข้อมูลไม่ได้ — วางทีละบรรทัด: ค่าอ้างอิง ค่าที่อ่านได้ U"); return; }
+    if (!rows.length) { mpirAlert("อ่านข้อมูลไม่ได้ — วางทีละบรรทัด: ค่าอ้างอิง ค่าที่อ่านได้ U"); return; }
     setD({ ...d, rows }); setPaste(null);
   }
 
@@ -1478,7 +1478,7 @@ function RoundEditor({ instrument, rounds, roundKeyToEdit, me, onCancel, onSave 
               const out = buildRecords(d, instrument, roundKeyToEdit, true);
               const ok = await onSave({ points: out.points, verification: d.doVerify ? out.verification : null, oldKey: roundKeyToEdit, newKey: roundKey(d.certificateNo.trim(), d.calibrationDate), calDate: d.calibrationDate });
               if (!ok) setSaving(false);
-            } catch (err) { alert("บันทึกไม่สำเร็จ: " + (err?.message || err)); setSaving(false); }
+            } catch (err) { mpirAlert("บันทึกไม่สำเร็จ: " + (err?.message || err)); setSaving(false); }
           }}><Check size={16} /> {saving ? "กำลังบันทึก…" : "บันทึก"}</button>
         </div>
       </div>
