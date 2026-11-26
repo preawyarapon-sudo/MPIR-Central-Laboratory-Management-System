@@ -1,3 +1,4 @@
+import { guard } from "../labtrack/access.js";
 // Printable MPIR-LF-068 Rev.02 (verification report). Opens a print window;
 // the browser's "Save as PDF" produces the file. Signature boxes are left
 // blank — the report is signed on paper and filed (lab decision).
@@ -91,6 +92,7 @@ ${pages.map((b, i) => page(i + 1, b)).join("")}
 }
 
 export function printLf068(round, instrument) {
+  if (!guard("calibration", "export")) return;
   const w = window.open("", "_blank");
   if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return false; }
   w.document.open(); w.document.write(lf068Html(round, instrument)); w.document.close();
@@ -134,6 +136,7 @@ ${nFail ? `<div class="note">มีรายการไม่ผ่าน — �
 <script>document.fonts.ready.then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
 }
 export function printCheckLog(args) {
+  if (!guard("dailyCheck", "export")) return;
   const w = window.open("", "_blank");
   if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return false; }
   w.document.open(); w.document.write(checkLogHtml(args)); w.document.close();
@@ -167,6 +170,7 @@ ${info.map(([l, v]) => `<div>${esc(l)}: <b>${esc(v || "-")}</b></div>`).join("")
 <script>Promise.all([document.fonts.ready].concat([].slice.call(document.images).map(function(i){return i.complete?0:new Promise(function(r){i.onload=i.onerror=r})}))).then(function(){setTimeout(function(){window.print()},300)});</script></body></html>`;
 }
 export function printEquipHistory(args) {
+  if (!guard("history", "export")) return;
   const w = window.open("", "_blank");
   if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return false; }
   w.document.open(); w.document.write(equipHistoryHtml(args)); w.document.close();

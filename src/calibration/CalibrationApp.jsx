@@ -15,6 +15,7 @@ import {
 } from "./calc.js";
 import { printLf068, printCheckLog, printEquipHistory, VERIFY_REASONS } from "./report.js";
 import TrendChart from "./TrendChart.jsx";
+import { can, guardList } from "../labtrack/access.js";
 import { EquipmentEditor, InstrumentInfo, InstrumentPhoto, blankInstrument, STATUS_LABEL } from "./EquipmentEditor.jsx";
 import {
   LABTRACK_CSS, DailyCheckTab, IntermediateCheckForm, CheckHistoryTable, newIntermediateCheckFor,
@@ -104,6 +105,9 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
   async function mutate(key, fn) {
     const fresh = await loadKey(key);
     const next = fn(fresh);
+    // Release 5: check the user's permission for this change before saving.
+    const MOD = { equipment: "instruments", certificates: "calibration", verifications: "calibration", dailyChecks: "dailyCheck", intermediateChecks: "intermediateCheck", uncertaintyReports: "uncertainty" };
+    if (MOD[key] && !guardList(MOD[key], fresh, next)) return fresh;
     await saveKey(key, next);
     setData(d => ({ ...d, [key]: next }));
     return next;
@@ -240,9 +244,9 @@ export default function CalibrationApp({ currentUsername = "", currentDisplayNam
               instrument (data, calibration/LF-068, Daily, IC, uncertainty,
               reports) lives on its instrument page — every list links there. */}
           <button className={`ca-nav ${["overview", "instrument", "equipEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "overview" })}><LayoutGrid size={17} /> ทะเบียนเครื่องมือ</button>
-          <button className={`ca-nav ${page.name === "dailyAll" ? "on" : ""}`} onClick={() => go({ name: "dailyAll" })}><ClipboardCheck size={17} /> Daily check วันนี้</button>
-          <button className={`ca-nav ${inVerify ? "on" : ""}`} onClick={() => go({ name: "verifyList" })}><ShieldCheck size={17} /> ต้องสอบเทียบ/ทวนสอบ</button>
-          <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน (LF-069)</button>
+          {can("dailyCheck", "view") && <button className={`ca-nav ${page.name === "dailyAll" ? "on" : ""}`} onClick={() => go({ name: "dailyAll" })}><ClipboardCheck size={17} /> Daily check วันนี้</button>}
+          {can("calibration", "view") && <button className={`ca-nav ${inVerify ? "on" : ""}`} onClick={() => go({ name: "verifyList" })}><ShieldCheck size={17} /> ต้องสอบเทียบ/ทวนสอบ</button>}
+          {can("uncertainty", "view") && <button className={`ca-nav ${["uncList", "uncEdit"].includes(page.name) ? "on" : ""}`} onClick={() => go({ name: "uncList" })}><Calculator size={17} /> ความไม่แน่นอน (LF-069)</button>}
           <div className="ca-side-foot">{me ? `ผู้ใช้: ${me}` : ""}<br />ข้อมูลชุดเดียวกับ LabTrack</div>
         </>)}
       </nav>

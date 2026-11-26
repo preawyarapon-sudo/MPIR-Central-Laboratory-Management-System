@@ -1,3 +1,4 @@
+import { guard } from "../labtrack/access.js";
 // LF-069 · Measurement uncertainty of the test methods (Brix, Pol in cane juice,
 // Fibre in prepared cane). Same layout as the yearly paper form; users type only
 // the repeat results and pick the calibration certificate — everything else is
@@ -334,6 +335,7 @@ ${p1}${p2}${p3}${p4}${p5}${p6}
 }
 
 export function printLf069(rep, certificates, equipment) {
+  if (!guard("uncertainty", "export")) return;
   const w = window.open("", "_blank");
   if (!w) { alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up แล้วลองอีกครั้ง"); return false; }
   w.document.open(); w.document.write(lf069Html(rep, certificates, equipment)); w.document.close();
