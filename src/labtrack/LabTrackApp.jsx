@@ -7456,6 +7456,21 @@ function openLink(url) {
   const handled = !window.dispatchEvent(new CustomEvent("mpir:navigate", { detail: url, cancelable: true }));
   if (!handled) window.location.assign(url);
 }
+// Deep links from the shell's "+" menu and search (Release 2): read a
+// one-time URL parameter, then drop it from the address bar so a reload
+// does not repeat the action. Read and clear are separate so React's
+// double-run of state initialisers in development cannot lose it.
+function urlParam(name) {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get(name);
+}
+function clearUrlParams(...names) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  let changed = false;
+  names.forEach(n => { if (url.searchParams.has(n)) { url.searchParams.delete(n); changed = true; } });
+  if (changed) window.history.replaceState(window.history.state, "", url);
+}
 const calibrationAppUrl = (equip) => `/?app=calibration${equip ? `&equip=${encodeURIComponent(equip)}` : ""}`;
 const calibHubMemory = { instrumentId: null, view: null, q: "", typeFilter: "", statusFilter: "", dueFilter: "", layout: "cards", sortBy: "code" };
 /* ---------- Calibration records: one certificate = one calibration round ----------
@@ -10446,7 +10461,8 @@ function BookingsTab({ bookings, setBookings, equipment, items = [], notify, res
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [view, setView] = useState("pending"); // "pending" | "current" | "history-equipment" | "history-item" | "calendar" | "catalog"
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(() => urlParam("do") === "newBooking");
+  useEffect(() => { if (urlParam("do") === "newBooking") clearUrlParams("do"); }, []);
   const [actorName, setActorName] = useState("");
   const isMobile = useIsMobile();
 
@@ -12466,11 +12482,13 @@ function getPRPos(r) {
 }
 
 function PurchaseRequestsTab({ requests, setRequests, notify }) {
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => urlParam("q") || "");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [prNoFilter, setPrNoFilter] = useState("all"); // "all" | "has" | "pending"
   const [view, setView] = useState("active"); // "active" | "history"
-  const [editing, setEditing] = useState(null);
+  const [editing, setEditing] = useState(() => urlParam("do") === "newPR"
+    ? { id: uid(), prNo: "", date: todayISO(), categories: [], itemName: "", requestedBy: "", poNo: "", notes: "" } : null);
+  useEffect(() => { clearUrlParams("q"); if (urlParam("do") === "newPR") clearUrlParams("do"); }, []);
   const [showImport, setShowImport] = useState(false);
   const [showBackfill, setShowBackfill] = useState(false);
   const [saving, setSaving] = useState(false);
