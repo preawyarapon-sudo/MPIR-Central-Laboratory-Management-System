@@ -930,7 +930,7 @@ function DailyToday({ equipment, dailyChecks, onOpen }) {
 }
 
 /* ---------- ประวัติเครื่องมือวัดและทดสอบ (MPIR-LF-033) ---------- */
-const HISTORY_ACTIONS = ["สอบเทียบ", "สอบเทียบ/ปรับแต่ง", "ทวนสอบ", "ปรับแต่ง", "บำรุงรักษา", "ซ่อม", "อื่นๆ"];
+const HISTORY_ACTIONS = ["สอบเทียบ", "ทวนสอบ", "ปรับแต่ง", "บำรุงรักษา", "ซ่อม", "อื่นๆ"];
 const freqText = (m) => { const n = num(m); return !n ? "" : 12 % n === 0 ? `${12 / n} ครั้ง/ปี` : `ทุก ${n} เดือน`; };
 function tolText(crit, unit) {
   if (!crit || crit.tolerance == null || crit.tolerance === "") return "";
@@ -961,14 +961,19 @@ function historyOf(e, rounds) {
   ];
   const auto = rounds.map(r => {
     const cs = certSummary(r.points, e);
-    const adjusted = r.points.some(p => /adjust|ปรับ/i.test(String(p.adjustmentStatus || "")) && !/not|ไม่/i.test(String(p.adjustmentStatus || "")));
     const v = r.verification;
     const res = cs.incomplete ? "สอบเทียบแล้ว" : cs.pass ? "ผ่านเกณฑ์สอบเทียบ" : "ไม่ผ่านเกณฑ์สอบเทียบ";
-    return { id: `round:${r.key}`, auto: true, date: r.calibrationDate, action: adjusted ? "สอบเทียบ/ปรับแต่ง" : "สอบเทียบ",
+    return { id: `round:${r.key}`, auto: true, date: r.calibrationDate, action: "สอบเทียบ",
       criteria: tolText(critOfRound(r), unit), result: v ? `${res} · ทวนสอบ ${fmtDate(v.verifyDate)}` : res,
       nextDue: r.calibrationDate ? addMonthsISO(r.calibrationDate, num(e.intervalMonths) || 12) : "", ref: r.certificateNo, by: v?.verifiedBy || "" };
   });
-  const manual = (Array.isArray(e.historyLog) ? e.historyLog : []).map(x => ({ ...x, auto: false }));
+  // Hand-added rows: "สอบเทียบ/ปรับแต่ง" is shown as plain "สอบเทียบ"; a
+  // calibration row without a next-due date gets date + calibration interval.
+  const manual = (Array.isArray(e.historyLog) ? e.historyLog : []).map(x => {
+    const action = x.action === "สอบเทียบ/ปรับแต่ง" ? "สอบเทียบ" : x.action;
+    const nextDue = x.nextDue || (action === "สอบเทียบ" && x.date ? addMonthsISO(x.date, num(e.intervalMonths) || 12) : "");
+    return { ...x, action, nextDue, auto: false };
+  });
   const rows = [...auto, ...manual].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
   return { info, rows };
 }
@@ -981,7 +986,15 @@ function EquipHistory({ e, rounds, canEdit, onSave, me, readOnly = false }) {
   const blank = () => ({ date: todayISO(), action: "บำรุงรักษา", criteria: "", result: "", nextDue: "", ref: "", by: me || "" });
   const [adding, setAdding] = useState(null);
   const log = Array.isArray(e.historyLog) ? e.historyLog : [];
-  const set = (k) => (ev) => setAdding({ ...adding, [k]: ev.target.value });
+  const dueFor = (date) => date ? addMonthsISO(date, num(e.intervalMonths) || 12) : "";
+  // Calibration rows: next due = date + calibration interval, filled in
+  // automatically (still editable) whenever the date or action changes.
+  const set = (k) => (ev) => {
+    const next = { ...adding, [k]: ev.target.value };
+    if ((k === "date" || k === "action") && next.action === "สอบเทียบ") next.nextDue = dueFor(next.date);
+    if (k === "action" && next.action !== "สอบเทียบ" && adding.action === "สอบเทียบ") next.nextDue = "";
+    setAdding(next);
+  };
   // adding.id set → editing an existing hand-added row (kept in place, with
   // who/when it was last edited); otherwise a new row.
   async function save() {
