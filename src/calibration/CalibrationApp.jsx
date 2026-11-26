@@ -624,7 +624,7 @@ function Overview({ equipment, roundsById, onOpen, onAdd = null, onDelete = null
           </div>
         </div>
         <div className="ca-scroll">
-          <table className="ca-table">
+          <table className="ca-table ca-sticky">
             <thead><tr><th>รหัส</th><th>เครื่องมือ</th><th className="ca-hide-sm">ยี่ห้อ / รุ่น</th><th className="ca-hide-sm">สอบเทียบล่าสุด</th><th>ครบกำหนด</th><th>สถานะ</th>{onDelete && <th aria-label="ลบ"></th>}</tr></thead>
             <tbody>
               {shown.map(({ e, rounds, st }) => (
@@ -745,7 +745,7 @@ function InstrumentPage({ instrument: e, rounds, onBack, onOpenRound, onEditRoun
           <div className="ca-card-head"><h2>รายงานความไม่แน่นอน (MPIR-LF-069) ที่ใช้เครื่องนี้</h2>
             <button className="ca-link" onClick={onAllUnc}>ดูรายงานทุกปี ›</button></div>
           {uncReports.length ? (
-            <div className="ca-scroll"><table className="ca-table">
+            <div className="ca-scroll"><table className="ca-table ca-sticky">
               <thead><tr><th>ประจำปี</th><th>ลงวันที่</th><th>ดาวน์โหลดล่าสุด</th><th></th></tr></thead>
               <tbody>{[...uncReports].sort((a, b) => (b.reportDate || "").localeCompare(a.reportDate || "")).map(r => (
                 <tr key={r.id}><td className="ca-strong">{r.year || fmtDate(r.reportDate)}</td><td>{fmtDate(r.reportDate)}</td>
@@ -766,7 +766,7 @@ function InstrumentPage({ instrument: e, rounds, onBack, onOpenRound, onEditRoun
         <section className="ca-card">
           <h2 style={{ marginTop: 0 }}>รายงานทวนสอบหลังสอบเทียบ (MPIR-LF-068)</h2>
           {rounds.length ? (
-            <div className="ca-scroll"><table className="ca-table">
+            <div className="ca-scroll"><table className="ca-table ca-sticky">
               <thead><tr><th>รอบสอบเทียบ</th><th>ใบรับรอง</th><th>สถานะ</th><th></th></tr></thead>
               <tbody>{rounds.map((r, i) => { const st = verifyState(r, e); const v = r.verification; return (
                 <tr key={r.key}><td className="ca-strong">{fmtDate(r.calibrationDate)}{i === 0 ? <span className="ca-small ca-muted"> · ล่าสุด</span> : null}</td><td>{r.certificateNo || "–"}</td>
@@ -908,7 +908,7 @@ function DailyToday({ equipment, dailyChecks, onOpen }) {
       {!shown.length ? <section className="ca-card ca-empty">{filter === "todo" ? "ตรวจครบทุกเครื่องแล้ววันนี้" : "ไม่มีรายการ"}</section> : (
         <section className="ca-card ca-pad0">
           <div className="ca-scroll">
-            <table className="ca-table">
+            <table className="ca-table ca-sticky">
               <thead><tr><th>เครื่องมือ</th><th>วันนี้</th><th className="ca-hide-sm">ตรวจล่าสุด</th><th>รออนุมัติ</th><th></th></tr></thead>
               <tbody>{shown.map(({ e, mine, todays, last, st, pending }) => {
                 const n = recordsInMonth("daily", mine, month).length;
@@ -1577,6 +1577,15 @@ const CSS = `
 .ca-search{display:flex;align-items:center;gap:6px;border:1px solid #B9D3EA;border-radius:10px;padding:0 10px;min-height:42px;color:var(--muted);background:#fff}
 .ca-search input{border:none;outline:none;font-size:14px;min-width:180px;background:none}
 .ca-scroll{overflow-x:auto}
+/* Table standard (same as LabTrack): on desktop, list headers stay visible
+   under the app's top bar while scrolling; quiet row hover; 44px rows. The
+   wide LF-033 history table keeps its own sideways scroll. */
+.ca-table tbody tr:hover td:not(.calc){background:#F7FAFD}
+@media (min-width:1100px){
+  .ca-scroll:has(> .ca-sticky){overflow-x:visible}
+  .ca-sticky thead th{position:sticky;top:var(--mpir-header-h,0px);z-index:2}
+  .ca-sticky tbody td{height:44px}
+}
 .ca-table{width:100%;border-collapse:collapse;font-size:14px}
 .ca-table th{text-align:left;font-weight:600;font-size:12.5px;color:var(--muted);background:var(--paper);padding:9px 10px;white-space:nowrap}
 .ca-card.ca-flush .ca-table th:first-child,.ca-card.ca-flush .ca-table td:first-child{padding-left:20px}
