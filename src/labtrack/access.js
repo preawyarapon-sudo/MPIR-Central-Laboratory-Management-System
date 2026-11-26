@@ -34,7 +34,7 @@ export const MODULES = [
   { key: "calibration", area: "Instrument Assurance System", label: "สอบเทียบ/ทวนสอบ (LF-068)", actions: VCEDAP },
   { key: "dailyCheck", area: "Instrument Assurance System", label: "Daily check", actions: VCEDAP },
   { key: "intermediateCheck", area: "Instrument Assurance System", label: "Intermediate check", actions: VCEDAP },
-  { key: "uncertainty", area: "Instrument Assurance System", label: "ความไม่แน่นอน (LF-069)", actions: VCEDP },
+  { key: "uncertainty", area: "Instrument Assurance System", label: "ความไม่แน่นอน", actions: VCEDP },
   { key: "qr", area: "Instrument Assurance System", label: "พิมพ์ QR", actions: ["view", "export"] },
   { key: "jobs", area: "ติดตามงานวิเคราะห์", label: "งานวิเคราะห์", actions: VCEDP },
   { key: "analysisProgress", area: "ติดตามงานวิเคราะห์", label: "ความคืบหน้า (Parameters/Analysts)", actions: ["view", "edit"] },
