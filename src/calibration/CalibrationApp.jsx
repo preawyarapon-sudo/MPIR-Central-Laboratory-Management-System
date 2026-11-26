@@ -930,6 +930,8 @@ function DailyToday({ equipment, dailyChecks, onOpen }) {
 }
 
 /* ---------- ประวัติเครื่องมือวัดและทดสอบ (MPIR-LF-033) ---------- */
+const NW = { whiteSpace: "nowrap" };
+const ICONBTN = { padding: "0 8px", height: 26, minHeight: 0 };
 const HISTORY_ACTIONS = ["สอบเทียบ", "ทวนสอบ", "ปรับแต่ง", "บำรุงรักษา", "ซ่อม", "อื่นๆ"];
 const freqText = (m) => { const n = num(m); return !n ? "" : 12 % n === 0 ? `${12 / n} ครั้ง/ปี` : `ทุก ${n} เดือน`; };
 function tolText(crit, unit) {
@@ -1057,11 +1059,13 @@ function EquipHistory({ e, rounds, canEdit, onSave, me, readOnly = false }) {
       <div className="ca-scroll"><table className="ca-table">
         <thead><tr><th>วันที่</th><th>การดำเนินการ</th><th>เกณฑ์การยอมรับ</th><th>ผลการดำเนินการ</th><th>กำหนดสอบเทียบครั้งต่อไป</th><th>เอกสารอ้างอิง</th><th>ผู้บันทึก</th>{!readOnly && <th></th>}</tr></thead>
         <tbody>{rows.length ? rows.map(r => (
-          <tr key={r.id}><td>{fmtDate(r.date)}</td><td>{r.action}</td><td>{r.criteria || "–"}</td><td>{r.result || "–"}</td><td>{fmtDate(r.nextDue) || "–"}</td><td>{r.ref || "–"}</td><td>{r.by || "–"}</td>
-            {!readOnly && <td style={{ textAlign: "right" }}>{r.auto ? <span className="ca-small ca-muted">จากรอบสอบเทียบ</span>
+          // Short columns never wrap, so every row has the same height; only the
+          // result text may wrap.
+          <tr key={r.id} style={{ height: 44 }}><td style={NW}>{fmtDate(r.date)}</td><td style={NW}>{r.action}</td><td style={NW}>{r.criteria || "–"}</td><td>{r.result || "–"}</td><td style={NW}>{fmtDate(r.nextDue) || "–"}</td><td style={NW}>{r.ref || "–"}</td><td style={NW}>{String(r.by || "").replace(/\s+/g, " ").trim() || "–"}</td>
+            {!readOnly && <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{r.auto ? <span className="ca-small ca-muted">จากรอบสอบเทียบ</span>
               : canEdit ? <span style={{ whiteSpace: "nowrap" }}>
-                  <button className="ca-btn" title="แก้ไข" onClick={() => setAdding({ ...blank(), ...r, criteria: r.criteria || "", result: r.result || "", nextDue: r.nextDue || "", ref: r.ref || "", by: r.by || "" })}><Pencil size={14} /></button>{" "}
-                  <button className="ca-btn" title="ลบ" onClick={() => remove(r.id)}><Trash2 size={14} /></button></span> : null}</td>}</tr>
+                  <button className="ca-btn" style={ICONBTN} title="แก้ไข" onClick={() => setAdding({ ...blank(), ...r, criteria: r.criteria || "", result: r.result || "", nextDue: r.nextDue || "", ref: r.ref || "", by: r.by || "" })}><Pencil size={14} /></button>{" "}
+                  <button className="ca-btn" style={ICONBTN} title="ลบ" onClick={() => remove(r.id)}><Trash2 size={14} /></button></span> : null}</td>}</tr>
         )) : <tr><td colSpan={8} className="ca-muted">ยังไม่มีประวัติ</td></tr>}</tbody>
       </table></div>
       )}
