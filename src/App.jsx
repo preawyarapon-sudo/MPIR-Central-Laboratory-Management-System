@@ -1,13 +1,32 @@
 import { useState, useEffect } from "react";
-import { Wrench, FlaskConical, Lock, LogOut } from "lucide-react";
+import { Wrench, FlaskConical, Lock, LogOut, ShieldCheck } from "lucide-react";
 import LabTrackApp from "./labtrack/LabTrackApp.jsx";
 import AnalysisApp from "./analysis/AnalysisApp.jsx";
 import CalibrationApp from "./calibration/CalibrationApp.jsx";
+import "./ui/tokens.css";
 
+// The three work areas share one shell (same header, same browser tab).
+// The calibration app used to open in a separate browser tab at
+// /?app=calibration — that URL still works and now opens this tab.
 const TABS = [
   { key: "labtrack", label: "จัดการห้องแล็บ", sub: "LabTrack", Icon: Wrench },
+  { key: "calibration", label: "Instrument Assurance System", sub: "สอบเทียบ · Daily check", Icon: ShieldCheck },
   { key: "analysis", label: "ติดตามงานวิเคราะห์", sub: "Lab Analysis Tracker", Icon: FlaskConical },
 ];
+// URL keys owned by one area; cleared when moving to another area so a
+// reload lands where the person is now.
+const SECTION_URL_KEYS = ["app", "equip", "new", "edit", "view", "vid", "vround", "vtab", "tab"];
+function sectionFromUrl() {
+  if (typeof window === "undefined") return "labtrack";
+  const app = new URLSearchParams(window.location.search).get("app");
+  return app === "calibration" || app === "analysis" ? app : "labtrack";
+}
+function urlForSection(key) {
+  const url = new URL(window.location.href);
+  SECTION_URL_KEYS.forEach(k => url.searchParams.delete(k));
+  if (key !== "labtrack") url.searchParams.set("app", key);
+  return url.pathname + (url.search ? url.search : "") + url.hash;
+}
 
 // Shared team accounts, kept out of source control ideally (see .env.local /
 // README) — the original shared login stays configurable via env vars for
@@ -201,8 +220,8 @@ function PasswordGate({ onLogin, autoLoggedOut }) {
 
 const gateStyles = {
   page: {
-    fontFamily: "'Prompt', ui-sans-serif, system-ui, sans-serif",
-    background: "#EAF3FB",
+    fontFamily: "var(--mpir-font)",
+    background: "var(--mpir-page)",
     minHeight: "100vh",
     display: "flex",
     alignItems: "center",
@@ -240,7 +259,29 @@ const gateStyles = {
 };
 
 export default function App() {
-  const [section, setSection] = useState("labtrack");
+  const [section, setSectionState] = useState(sectionFromUrl);
+  function setSection(key) {
+    if (key === section) return;
+    window.history.pushState({ mpirSection: key }, "", urlForSection(key));
+    setSectionState(key);
+    window.scrollTo(0, 0);
+  }
+  useEffect(() => {
+    const onPop = () => setSectionState(sectionFromUrl());
+    // In-app links from any area (e.g. LabTrack → /?app=calibration&equip=…)
+    // switch area here instead of opening a new browser tab.
+    const onNavigate = (e) => {
+      const url = String(e.detail || "");
+      if (!url.startsWith("/")) return;
+      e.preventDefault();
+      window.history.pushState({ mpirSection: true }, "", url);
+      setSectionState(sectionFromUrl());
+      window.scrollTo(0, 0);
+    };
+    window.addEventListener("popstate", onPop);
+    window.addEventListener("mpir:navigate", onNavigate);
+    return () => { window.removeEventListener("popstate", onPop); window.removeEventListener("mpir:navigate", onNavigate); };
+  }, []);
   const [session, setSession] = useState(loadSession);
   const [autoLoggedOut, setAutoLoggedOut] = useState(false);
 
@@ -314,15 +355,12 @@ export default function App() {
     setSession(null);
   }
 
-  // The calibration app runs in its own tab: /?app=calibration (opened from
-  // LabTrack's menu). Same login (session in localStorage) and same data.
-  if (!isBookingOnly && new URLSearchParams(window.location.search).get("app") === "calibration") {
-    const q = new URLSearchParams(window.location.search);
-    const equip = q.get("equip");
-    const initial = q.get("new") === "1" ? { name: "equipNew" }
-      : equip ? (q.get("edit") === "1" ? { name: "equipEdit", instrumentId: equip } : { name: "instrument", instrumentId: equip }) : null;
-    return <CalibrationApp currentUsername={session.username} currentDisplayName={session.name} initial={initial} />;
-  }
+  // Deep links into the calibration area (?app=calibration&equip=…&new=1 /
+  // &edit=1) keep working: they are read once when that area opens.
+  const calQ = new URLSearchParams(window.location.search);
+  const calEquip = calQ.get("equip");
+  const calInitial = calQ.get("new") === "1" ? { name: "equipNew" }
+    : calEquip ? (calQ.get("edit") === "1" ? { name: "equipEdit", instrumentId: calEquip } : { name: "instrument", instrumentId: calEquip }) : null;
 
   return (
     <div style={styles.page} className="appPage">
@@ -374,16 +412,19 @@ export default function App() {
 
       <div style={styles.content}>
         {activeSection === "labtrack" && <LabTrackApp restrictToBooking={isBookingOnly} currentUsername={session.username} currentDisplayName={session.name} canApprove={canApprove} />}
+        {activeSection === "calibration" && !isBookingOnly && <div style={styles.areaFrame}><CalibrationApp currentUsername={session.username} currentDisplayName={session.name} initial={calInitial} /></div>}
         {activeSection === "analysis" && !isBookingOnly && <AnalysisApp />}
       </div>
     </div>
   );
 }
 
+// Shared design tokens (see src/ui/tokens.css): blue #1F5FA8 + white, Sarabun.
 const styles = {
+  areaFrame: { background: "#fff", border: "1px solid var(--mpir-border)", borderRadius: 12, overflow: "hidden" },
   page: {
-    fontFamily: "'Prompt', ui-sans-serif, system-ui, sans-serif",
-    background: "#EAF3FB",
+    fontFamily: "var(--mpir-font)",
+    background: "var(--mpir-page)",
     minHeight: "100vh",
     padding: "16px 20px 28px",
   },
@@ -394,7 +435,7 @@ const styles = {
     flexWrap: "wrap",
     gap: 12,
     background: "#fff",
-    border: "1px solid #D3E6F5",
+    border: "1px solid var(--mpir-border)",
     borderRadius: 12,
     padding: "10px 16px",
     marginBottom: 16,
@@ -405,31 +446,32 @@ const styles = {
   },
   brand: { display: "flex", alignItems: "center", gap: 10 },
   logo: { width: 40, height: 40, objectFit: "contain" },
-  brandName: { fontWeight: 700, fontSize: 15, color: "#0B2A4A" },
-  brandSub: { fontSize: 11, color: "#5B7A96" },
+  brandName: { fontWeight: 700, fontSize: 15, color: "var(--mpir-text)" },
+  brandSub: { fontSize: 11, color: "var(--mpir-text-2)" },
   tabRow: { display: "flex", gap: 8, flexWrap: "wrap" },
   tabBtn: {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    background: "#F3F8FD",
-    color: "#5B7A96",
-    border: "1px solid #D3E6F5",
+    background: "#fff",
+    color: "var(--mpir-text-2)",
+    border: "1px solid var(--mpir-border)",
     borderRadius: 9,
     padding: "8px 14px",
+    minHeight: 40,
     fontSize: 13,
     fontFamily: "inherit",
     cursor: "pointer",
   },
   tabBtnActive: {
-    background: "#0E6FBA",
+    background: "var(--mpir-primary)",
     color: "#fff",
-    borderColor: "#0E6FBA",
+    border: "1px solid var(--mpir-primary)",
   },
   tabLabel: { fontWeight: 600 },
   tabSub: { fontSize: 11, opacity: 0.85 },
   userBox: { display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" },
-  userName: { fontSize: 12.5, fontWeight: 600, color: "#0B2A4A" },
+  userName: { fontSize: 12.5, fontWeight: 600, color: "var(--mpir-text)" },
   logoutBtn: {
     display: "flex", alignItems: "center", justifyContent: "center",
     background: "#F3F8FD", border: "1px solid #D3E6F5", borderRadius: 8,

@@ -1,0 +1,22 @@
+/* MPIR Central Lab — shared design tokens (UI/UX proposal, section I).
+   One place for colours, type and spacing used by all three work areas.
+   Print templates (LF-033, LF-045, LF-068, LF-069, Daily check logs) do not
+   use these and are unchanged. */
+:root {
+  --mpir-primary: #1F5FA8;
+  --mpir-primary-hover: #174A85;
+  --mpir-primary-light: #EAF2FB;
+  --mpir-page: #F6F8FB;
+  --mpir-surface: #FFFFFF;
+  --mpir-text: #1B2430;
+  --mpir-text-2: #5B6675;
+  --mpir-border: #D9E1EA;
+  --mpir-good: #1E8E5A;
+  --mpir-warn: #B7791F;
+  --mpir-bad: #C0392B;
+  --mpir-neutral: #7A8594;
+  --mpir-font: 'Sarabun', ui-sans-serif, system-ui, sans-serif;
+  --mpir-radius: 8px;
+  --mpir-touch: 44px;
+}
+body { margin: 0; font-family: var(--mpir-font); color: var(--mpir-text); background: var(--mpir-page); }
