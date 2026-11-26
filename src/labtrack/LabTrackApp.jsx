@@ -1731,7 +1731,8 @@ const NAV = [
   // The calibration app opens in its own browser tab (/?app=calibration, see
   // src/calibration). The former hub stays reachable while Intermediate
   // check and Uncertainty move over.
-  { key: "calibrationApp", label: "Instrument Assurance System", icon: FileCheck2, parent: "equipment", external: "/?app=calibration" },
+  // Instrument Assurance System is now its own area in the top bar (App.jsx),
+  // so it is no longer repeated here under "เครื่องมือ".
   // Hidden from the menu (hidden: true) but still reachable by URL
   // (/?tab=calibrationRecords) from the calibration app's links, for
   // Intermediate check, Uncertainty and the one-time import of old data.
@@ -12644,10 +12645,32 @@ function getPRPos(r) {
 
 function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName = "", chemicals = [], consumables = [], setChemicals = null, setConsumables = null }) {
   const [receiving, setReceiving] = useState(null); // request being received into stock
+  const [numbering, setNumbering] = useState(null); // { r, kind: "pr" | "po" }
+  // Buyer's steps: PR No. entered = ordered; first PO No. = purchasing ordered.
+  function saveNumbers(r, patch) {
+    const next = { ...r, ...patch };
+    const now = new Date().toISOString();
+    if (hasOfficialPR(next) && !hasOfficialPR(r)) { next.prEnteredAt = now; next.prEnteredBy = currentDisplayName; }
+    if (hasPO(next) && !hasPO(r)) { next.poEnteredAt = now; next.poEnteredBy = currentDisplayName; }
+    setRequests(requests.map(x => x.id === r.id ? next : x));
+    notify(patch.prNo !== undefined ? "บันทึกเลข PR แล้ว" : "บันทึกเลข PO แล้ว");
+    setNumbering(null);
+  }
   // Same transaction shape as ChemicalsTab/ConsumablesTab addTransaction, so
   // each item's own history shows these exactly like a receive made there.
   function receiveToStock(request, { date, poNo, by, rows }) {
     const note = `รับจากใบขอซื้อ ${request.requestNo || ""}${request.prNo ? ` (PR ${request.prNo})` : ""}`.trim();
+    // New register records first (same blank shape as "เพิ่ม" on each page).
+    const newChem = [], newCons = [];
+    rows.forEach(r => {
+      if (!r.stock?.isNew) return;
+      const base = { id: uid(), name: r.stock.item.name.trim(), unit: (r.stock.item.unit || "").trim(), quantity: 0, minThreshold: 0, transactions: [] };
+      const rec = r.stock.kind === "chemical" ? { ...base, expiryDate: "", location: "", formula: "", brand: "" } : base;
+      (r.stock.kind === "chemical" ? newChem : newCons).push(rec);
+      r.stock = { kind: r.stock.kind, item: rec };
+    });
+    const chemAll = [...newChem, ...chemicals];
+    const consAll = [...newCons, ...consumables];
     const apply = (list, kind) => list.map(c => {
       const mine = rows.filter(r => r.stock && r.stock.kind === kind && r.stock.item.id === c.id);
       if (!mine.length) return c;
@@ -12663,12 +12686,13 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
     });
     const chemRows = rows.filter(r => r.stock?.kind === "chemical").length;
     const consRows = rows.filter(r => r.stock?.kind === "consumable").length;
-    if (chemRows && setChemicals) setChemicals(apply(chemicals, "chemical"));
-    if (consRows && setConsumables) setConsumables(apply(consumables, "consumable"));
+    if (chemRows && setChemicals) setChemicals(apply(chemAll, "chemical"));
+    if (consRows && setConsumables) setConsumables(apply(consAll, "consumable"));
     const done = new Set(rows.map(r => r.id));
     setRequests(requests.map(r => r.id === request.id
       ? { ...r, items: getPRItems(r).map(it => done.has(it.id) ? { ...it, received: true, receivedDate: date } : it) } : r));
-    notify(`รับของแล้ว ${rows.length} รายการ${chemRows + consRows ? ` · เข้าสต็อก ${chemRows + consRows} รายการ` : ""}`);
+    const created = newChem.length + newCons.length;
+    notify(`รับของแล้ว ${rows.length} รายการ${chemRows + consRows ? ` · เข้าสต็อก ${chemRows + consRows} รายการ` : ""}${created ? ` · สร้างรายการใหม่ ${created}` : ""}`);
     setReceiving(null);
   }
   // Pick-list for the item lines: things ordered before (most often first),
@@ -12677,13 +12701,13 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
     const seen = new Map();
     requests.forEach(r => getPRItems(r).forEach(it => {
       const t = (it.text || "").trim(); if (!t) return;
-      const cur = seen.get(t) || { text: t, count: 0, source: "" };
-      cur.count++; seen.set(t, cur);
+      const cur = seen.get(t) || { text: t, count: 0, source: "", unit: "" };
+      cur.count++; if (it.unit) cur.unit = it.unit; seen.set(t, cur);
     }));
     const list = [...seen.values()].sort((a, b) => b.count - a.count || a.text.localeCompare(b.text, "th"));
-    const add = (name, source) => { const t = (name || "").trim(); if (t && !seen.has(t)) { seen.set(t, true); list.push({ text: t, count: 0, source }); } };
-    chemicals.forEach(c => add(c.name, "สารเคมี"));
-    consumables.forEach(c => add(c.name, "พัสดุสิ้นเปลือง"));
+    const add = (name, source, unit) => { const t = (name || "").trim(); if (t && !seen.has(t)) { seen.set(t, true); list.push({ text: t, count: 0, source, unit: unit || "" }); } };
+    chemicals.forEach(c => add(c.name, "สารเคมี", c.unit));
+    consumables.forEach(c => add(c.name, "พัสดุสิ้นเปลือง", c.unit));
     return list;
   }, [requests, chemicals, consumables]);
   const [q, setQ] = useState(() => urlParam("q") || "");
@@ -12711,7 +12735,11 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
 
   async function upsert(item) {
     const existing = requests.find(r => r.id === item.id);
-    const items = reconcilePRItems(existing?.items, item.itemName);
+    // Rows from the form carry their ids; keep each row's received state.
+    const items = item.items
+      ? item.items.map(it => { const old = (existing?.items || []).find(o => o.id === it.id);
+          return old ? { ...old, text: it.text, qty: it.qty, unit: it.unit } : { id: it.id || uid(), text: it.text, qty: it.qty, unit: it.unit, received: false, receivedDate: null }; })
+      : reconcilePRItems(existing?.items, item.itemName);
     const record = { ...item, items };
     // Who/when each step was acknowledged: PR No. entered = ordered,
     // first PO No. entered = purchasing has ordered.
@@ -12812,6 +12840,12 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
             <div style={{ marginTop: 4 }}><PRStageBadge r={r} /></div>
             {hasOfficialPR(r) && <div style={{ fontSize: 11.5, marginTop: 3, whiteSpace: "nowrap", fontFamily: "var(--font-mono)", color: "var(--ink)" }}>PR: {r.prNo}</div>}
             {r.prEnteredAt && <div style={{ fontSize: 10.5, color: "var(--muted)", whiteSpace: "nowrap" }}>สั่งซื้อ {fmtDate(r.prEnteredAt.slice(0, 10))}{r.prEnteredBy ? ` · ${r.prEnteredBy}` : ""}</div>}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+              {prStage(r) === "waitPR" && <button style={S.prStepBtn} onClick={() => setNumbering({ r, kind: "pr" })}>ใส่เลข PR</button>}
+              {prStage(r) === "waitPO" && <button style={S.prStepBtn} onClick={() => setNumbering({ r, kind: "po" })}>ใส่เลข PO</button>}
+              {hasOfficialPR(r) && <button style={S.prStepLink} onClick={() => setNumbering({ r, kind: "pr" })}>แก้เลข PR</button>}
+              {hasPO(r) && <button style={S.prStepLink} onClick={() => setNumbering({ r, kind: "po" })}>แก้/เพิ่ม PO</button>}
+            </div>
             {getPRPos(r).map(p => (
               <div key={p.id} style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
                 PO: {p.fileUrl ? (
@@ -12836,6 +12870,8 @@ function PurchaseRequestsTab({ requests, setRequests, notify, currentDisplayName
         ])}
         empty={view === "history" ? "ยังไม่มี PR ที่รับของครบ" : "ยังไม่มีใบขอซื้อที่กำลังดำเนินการ"}
       />
+      {numbering?.kind === "pr" && <PRNumberDialog request={numbering.r} onCancel={() => setNumbering(null)} onSave={(patch) => saveNumbers(numbering.r, patch)} />}
+      {numbering?.kind === "po" && <PONumberDialog request={numbering.r} onCancel={() => setNumbering(null)} onSave={(patch) => saveNumbers(numbering.r, patch)} />}
       {receiving && <PRReceiveDialog request={receiving} chemicals={chemicals} consumables={consumables}
         onCancel={() => setReceiving(null)} onConfirm={(data) => receiveToStock(receiving, data)} />}
       {editing && <PurchaseRequestForm item={editing} saving={saving} suggestions={itemSuggestions} onCancel={() => setEditing(null)} onSave={upsert} />}
@@ -12974,21 +13010,33 @@ function PRReceiveDialog({ request, chemicals, consumables, onCancel, onConfirm 
   const [date, setDate] = useState(todayISO());
   const [poNo, setPoNo] = useState(firstPO);
   const [by, setBy] = useState("");
-  const [rows, setRows] = useState(() => open.map(it => ({ id: it.id, text: it.text, take: true, target: matchStockItem(it.text, chemicals, consumables), qty: "", expiryDate: "" })));
+  // Not in either register yet: suggest a new record from the request's
+  // category (chemical / consumable); repairs and "other" stay out of stock.
+  const cats = request.categories || [];
+  const newDefault = cats.includes("chemical") && !cats.includes("consumable") ? "new:chemical"
+    : cats.includes("consumable") && !cats.includes("chemical") ? "new:consumable" : "";
+  const [rows, setRows] = useState(() => open.map(it => ({
+    id: it.id, text: it.text, take: true, reqQty: it.qty, reqUnit: it.unit || "",
+    target: matchStockItem(it.text, chemicals, consumables) || newDefault,
+    qty: it.qty !== undefined && it.qty !== null && it.qty !== "" ? String(it.qty) : "", expiryDate: "",
+    newName: it.text, newUnit: it.unit || "",
+  })));
   const setRow = (id, patch) => setRows(rs => rs.map(r => r.id === id ? { ...r, ...patch } : r));
-  const lookup = (target) => {
+  const lookup = (target, row) => {
     const [kind, id] = (target || "").split(":");
+    if (kind === "new") return { kind: id, isNew: true, item: { name: row?.newName || "", unit: row?.newUnit || "", quantity: 0 } };
     const item = kind === "chemical" ? chemicals.find(c => c.id === id) : kind === "consumable" ? consumables.find(c => c.id === id) : null;
     return item ? { kind, item } : null;
   };
   const taken = rows.filter(r => r.take);
-  const invalid = taken.some(r => r.target && !(Number(r.qty) > 0));
+  const invalid = taken.some(r => r.target && (!(Number(r.qty) > 0) || (r.target.startsWith("new:") && !r.newName.trim())));
   const cell = { padding: "8px 6px", borderBottom: "1px solid var(--line)", verticalAlign: "top" };
   return (
     <Modal onClose={onCancel} title={`รับของเข้าสต็อก · ${request.requestNo || request.prNo || "ใบขอซื้อ"}`} xwide>
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 10, lineHeight: 1.6 }}>
         เลือกรายการที่ได้รับครั้งนี้ แล้วเลือกว่าจะรับเข้าสารเคมีหรือพัสดุตัวไหน · ระบบจะบันทึก "รับเข้า" ในประวัติของรายการนั้นเหมือนกดจากหน้ารายการเอง
-        และติ๊ก "รับแล้ว" ในใบขอซื้อให้ · เลือก "ไม่เข้าสต็อก" สำหรับงานซ่อมหรือของที่ไม่ได้เก็บในคลัง
+        และติ๊ก "รับแล้ว" ในใบขอซื้อให้ · ของที่ยังไม่มีในทะเบียน เลือก "+ สร้างสารเคมีใหม่" หรือ "+ สร้างพัสดุใหม่" ·
+        "ไม่เข้าสต็อก" = ติ๊กรับแล้วในใบขอซื้ออย่างเดียว ไม่นับยอดคงเหลือ (เช่น งานซ่อม ค่าบริการ ของใช้ครั้งเดียว)
       </div>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="วันที่รับ"><input type="date" style={S.input} value={date} onChange={e => setDate(e.target.value)} /></Field>
@@ -13005,18 +13053,26 @@ function PRReceiveDialog({ request, chemicals, consumables, onCancel, onConfirm 
             </thead>
             <tbody>
               {rows.map(r => {
-                const st = lookup(r.target);
+                const st = lookup(r.target, r);
                 return (
                   <tr key={r.id} style={{ opacity: r.take ? 1 : 0.5 }}>
                     <td style={cell}><input type="checkbox" checked={r.take} onChange={e => setRow(r.id, { take: e.target.checked })} style={{ width: 18, height: 18 }} aria-label={`รับ ${r.text}`} /></td>
-                    <td style={{ ...cell, minWidth: 180 }}>{r.text}</td>
+                    <td style={{ ...cell, minWidth: 180 }}>{r.text}{r.reqQty !== undefined && r.reqQty !== "" && r.reqQty !== null && <div style={{ fontSize: 11, color: "var(--muted)" }}>ขอซื้อ {r.reqQty} {r.reqUnit}</div>}</td>
                     <td style={cell}>
                       <select style={{ ...S.select, width: 230 }} value={r.target} disabled={!r.take} onChange={e => setRow(r.id, { target: e.target.value })} aria-label={`รับเข้า ${r.text}`}>
                         <option value="">ไม่เข้าสต็อก</option>
+                        <option value="new:chemical">+ สร้างสารเคมีใหม่</option>
+                        <option value="new:consumable">+ สร้างพัสดุใหม่</option>
                         <optgroup label="สารเคมี">{chemicals.map(c => <option key={c.id} value={`chemical:${c.id}`}>{c.name}</option>)}</optgroup>
                         <optgroup label="พัสดุสิ้นเปลือง">{consumables.map(c => <option key={c.id} value={`consumable:${c.id}`}>{c.name}</option>)}</optgroup>
                       </select>
-                      {st && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>คงเหลือตอนนี้ {st.item.quantity || 0} {st.item.unit || ""}</div>}
+                      {st && !st.isNew && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>คงเหลือตอนนี้ {st.item.quantity || 0} {st.item.unit || ""}</div>}
+                      {st?.isNew && (
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <input style={{ ...S.input, width: 150, padding: "6px 8px", fontSize: 12.5 }} value={r.newName} onChange={e => setRow(r.id, { newName: e.target.value })} placeholder="ชื่อในทะเบียน" aria-label={`ชื่อรายการใหม่ ${r.text}`} />
+                          <input style={{ ...S.input, width: 74, padding: "6px 8px", fontSize: 12.5 }} value={r.newUnit} onChange={e => setRow(r.id, { newUnit: e.target.value })} placeholder="หน่วย" aria-label={`หน่วยรายการใหม่ ${r.text}`} />
+                        </div>
+                      )}
                     </td>
                     <td style={cell}>
                       {st ? (
@@ -13040,7 +13096,7 @@ function PRReceiveDialog({ request, chemicals, consumables, onCancel, onConfirm 
       )}
       {invalid && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>ใส่จำนวนที่รับให้ทุกรายการที่เลือกรับเข้าสต็อก</div>}
       <ModalFooter onCancel={onCancel} disabled={!date || taken.length === 0 || invalid}
-        onSave={() => onConfirm({ date, poNo, by, rows: taken.map(r => ({ ...r, stock: lookup(r.target) })) })} />
+        onSave={() => onConfirm({ date, poNo, by, rows: taken.map(r => ({ ...r, stock: lookup(r.target, r) })) })} />
     </Modal>
   );
 }
@@ -13069,7 +13125,7 @@ function PRItemsCell({ items, onUpdateItems, onReceiveAll, onReceiveToStock = nu
             textDecoration: it.received ? "line-through" : "none",
             color: it.received ? "var(--muted)" : "var(--ink)",
           }}>
-            {it.text}
+            {it.text}{prItemQtyText(it) && <span style={{ fontWeight: 600, color: "var(--teal-dark)" }}>{prItemQtyText(it)}</span>}
           </span>
           <button
             onClick={() => toggleReceived(it.id)}
@@ -13099,7 +13155,10 @@ function PRItemsCell({ items, onUpdateItems, onReceiveAll, onReceiveToStock = nu
           <Package size={12} /> รับของเข้าสต็อก
         </button>
       )}
-      {!allReceived && (
+      {/* "รับของเข้าสต็อก" already covers receiving everything (lines can be
+          set to "ไม่เข้าสต็อก"), so the older shortcut shows only where that
+          button is not offered. */}
+      {!allReceived && !onReceiveToStock && (
         <button
           onClick={onReceiveAll}
           style={{ fontSize: 12, color: "var(--teal-dark)", background: "none", border: "none", cursor: "pointer", padding: 0, marginTop: 4, fontWeight: 600, textDecoration: "underline" }}
@@ -13151,37 +13210,42 @@ function PRItemPicker({ suggestions, lines, onPick }) {
 }
 
 function PurchaseRequestForm({ item, saving = false, suggestions = [], onCancel, onSave }) {
-  const [f, setF] = useState({ ...item, categories: item.categories || [], pos: getPRPos(item) });
+  const [f, setF] = useState({ ...item, categories: item.categories || [] });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  // One row per item: name + quantity + unit. Received state stays on the
+  // row (by id), so editing a request never un-ticks what was received.
+  const [rows, setRows] = useState(() => {
+    const its = getPRItems(item).map(it => ({ ...it, qty: it.qty ?? "", unit: it.unit || "" }));
+    return its.length ? its : [{ id: uid(), text: "", qty: "", unit: "", received: false, receivedDate: null }];
+  });
+  const setRow = (id, patch) => setRows(rs => rs.map(r => r.id === id ? { ...r, ...patch } : r));
+  const addRow = (text = "", unit = "") => setRows(rs => {
+    const blank = rs.find(r => !r.text.trim());
+    if (blank) return rs.map(r => r.id === blank.id ? { ...r, text, unit: unit || r.unit } : r);
+    return [...rs, { id: uid(), text, qty: "", unit, received: false, receivedDate: null }];
+  });
+  const filled = rows.filter(r => r.text.trim());
   const toggleCategory = (key) => {
-    setF({
-      ...f,
-      categories: f.categories.includes(key) ? f.categories.filter(c => c !== key) : [...f.categories, key],
-    });
+    setF({ ...f, categories: f.categories.includes(key) ? f.categories.filter(c => c !== key) : [...f.categories, key] });
   };
-  function addPO() {
-    setF({ ...f, pos: [...f.pos, { id: uid(), poNo: "", fileUrl: "" }] });
+  function save() {
+    const items = filled.map(r => ({ ...r, text: r.text.trim(), qty: r.qty === "" ? "" : Number(r.qty), unit: (r.unit || "").trim() }));
+    onSave({ ...f, items, itemName: items.map(i => i.text).join("\n") });
   }
-  function updatePO(id, patch) {
-    setF({ ...f, pos: f.pos.map(p => p.id === id ? { ...p, ...patch } : p) });
-  }
-  function removePO(id) {
-    setF({ ...f, pos: f.pos.filter(p => p.id !== id) });
-  }
+  const cellIn = { ...S.input, padding: "8px 10px" };
   return (
     <Modal onClose={onCancel} title={item.itemName ? "แก้ไขใบขอซื้อ" : "ออกใบขอซื้อ (PR)"} wide>
       <div style={S.formGrid} className="ltFormGrid">
         <Field label="เลขที่คำขอ" full plain>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#F5F8FB", border: "1px solid var(--line)", borderRadius: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#F5F8FB", border: "1px solid var(--line)", borderRadius: 10, flexWrap: "wrap" }}>
             <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15 }}>{f.requestNo || "—"}</span>
             <span style={{ fontSize: 12, color: "var(--muted)" }}>{f.requestNo ? "สร้างโดยระบบ · แก้ไขไม่ได้" : "สร้างอัตโนมัติเมื่อบันทึก"}</span>
+            <span style={{ marginLeft: "auto" }}><PRStageBadge r={{ ...item, items: rows }} /></span>
           </div>
-        </Field>
-        <Field label="เลขที่ PR (บริษัท)">
-          <input style={S.input} value={f.prNo || ""} onChange={set("prNo")} placeholder="ใส่เมื่อสั่งซื้อในระบบบริษัทแล้ว เช่น PR-2569-0045" />
-          <div style={{ marginTop: 4 }}><PRStageBadge r={{ ...f, items: f.items || getPRItems(item) }} /></div>
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>เลข PR และเลข PO ใส่แยกจากหน้ารายการ (ปุ่ม "ใส่เลข PR" / "ใส่เลข PO")</div>
         </Field>
         <Field label="วันที่ออก PR"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
+        <Field label="ผู้ขอซื้อ"><input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} /></Field>
         <Field label="หมวดหมู่ (เลือกได้มากกว่า 1 ถ้าสั่งรวมกัน)" full plain>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "4px 0" }}>
             {Object.entries(PR_CATEGORY_LABEL).map(([k, v]) => (
@@ -13192,53 +13256,76 @@ function PurchaseRequestForm({ item, saving = false, suggestions = [], onCancel,
             ))}
           </div>
         </Field>
-        <Field label="รายการที่ขอสั่งซื้อ (1 รายการต่อบรรทัด)" full>
-          <PRItemPicker suggestions={suggestions}
-            lines={(f.itemName || "").split("\n").map(l => l.trim()).filter(Boolean)}
-            onPick={(text) => setF(prev => {
-              const lines = (prev.itemName || "").split("\n").map(l => l.trim()).filter(Boolean);
-              return lines.includes(text) ? prev : { ...prev, itemName: [...lines, text].join("\n") };
-            })} />
-          <textarea
-            style={{ ...S.input, minHeight: 90, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
-            value={f.itemName}
-            onChange={set("itemName")}
-            placeholder={"ขึ้นบรรทัดใหม่ทีละรายการ เช่น:\nNitric acid 65% 2.5 L (Merck 100456)\nSodium Hydroxide 1 kg (Merck 106498)\nซ่อมแอร์ห้อง C1 น้ำหยด"}
-          />
-        </Field>
-        <Field label="ผู้ขอซื้อ"><input style={S.input} value={f.requestedBy} onChange={set("requestedBy")} /></Field>
-        <div />
-        <Field label="เลขที่ PO (1 PR ออกได้หลาย PO — ใส่ลิงก์ไฟล์ PO ได้ถ้ามี)" full plain>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {f.pos.map(p => (
-              <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input
-                  style={{ ...S.input, flex: "0 0 160px" }}
-                  value={p.poNo}
-                  onChange={(e) => updatePO(p.id, { poNo: e.target.value })}
-                  placeholder="เลขที่ PO"
-                />
-                <input
-                  style={{ ...S.input, flex: 1 }}
-                  value={p.fileUrl}
-                  onChange={(e) => updatePO(p.id, { fileUrl: e.target.value })}
-                  placeholder="ลิงก์ไฟล์ PO (SharePoint, Google Drive ฯลฯ) — ไม่บังคับ"
-                />
-                <button type="button" onClick={() => removePO(p.id)} style={{ ...S.iconBtnSm, color: "var(--red)", flexShrink: 0 }}><Trash2 size={13} /></button>
+        <Field label="รายการที่ขอสั่งซื้อ" full plain>
+          <PRItemPicker suggestions={suggestions} lines={filled.map(r => r.text.trim())}
+            onPick={(text) => { const s = suggestions.find(x => x.text === text); addRow(text, s?.unit || ""); }} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 36px", gap: 6, fontSize: 11.5, color: "var(--muted)", padding: "0 2px" }}>
+              <span>รายการ</span><span>จำนวน</span><span>หน่วย</span><span />
+            </div>
+            {rows.map((r, i) => (
+              <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 36px", gap: 6, alignItems: "center" }}>
+                <input style={cellIn} value={r.text} onChange={e => setRow(r.id, { text: e.target.value })} placeholder={i === 0 ? "เช่น Nitric acid 65% (Merck 100456)" : "ชื่อรายการ"} aria-label={`รายการที่ ${i + 1}`} />
+                <input type="number" min="0" style={cellIn} value={r.qty} onChange={e => setRow(r.id, { qty: e.target.value })} placeholder="0" aria-label={`จำนวน รายการที่ ${i + 1}`} />
+                <input style={cellIn} value={r.unit} onChange={e => setRow(r.id, { unit: e.target.value })} placeholder="ขวด, L, กล่อง" aria-label={`หน่วย รายการที่ ${i + 1}`} />
+                <button type="button" title="ลบแถว" onClick={() => setRows(rs => rs.length > 1 ? rs.filter(x => x.id !== r.id) : [{ ...rs[0], text: "", qty: "", unit: "" }])}
+                  disabled={r.received} style={{ ...S.iconBtnSm, color: "var(--red)", opacity: r.received ? 0.3 : 1 }}><Trash2 size={13} /></button>
               </div>
             ))}
-            <button type="button" onClick={addPO} style={{ ...S.ghostBtn, alignSelf: "flex-start" }}>
-              <Plus size={13} /> เพิ่มเลขที่ PO
-            </button>
+            <button type="button" onClick={() => addRow()} style={{ ...S.ghostBtn, alignSelf: "flex-start" }}><Plus size={13} /> เพิ่มแถว</button>
           </div>
         </Field>
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.notes} onChange={set("notes")} /></Field>
       </div>
-      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.itemName || saving}
+      <ModalFooter onCancel={onCancel} onSave={save} disabled={filled.length === 0 || saving}
         extra={saving ? <span style={{ fontSize: 12.5, color: "var(--muted)" }}>กำลังออกเลขที่คำขอ…</span> : null} />
     </Modal>
   );
 }
+
+// Buyer's own steps, kept apart from the request form: enter the company PR
+// No. (= ordered), then the PO No. (= purchasing has ordered).
+function PRNumberDialog({ request, onCancel, onSave }) {
+  const [prNo, setPrNo] = useState(request.prNo || "");
+  return (
+    <Modal onClose={onCancel} title={`${request.prNo ? "แก้เลข PR" : "ใส่เลข PR"} · ${request.requestNo || ""}`}>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 10 }}>ใส่เลข PR จากระบบบริษัทเมื่อสั่งซื้อแล้ว · สถานะจะเปลี่ยนเป็น "สั่งซื้อแล้ว · รอเลข PO"</div>
+      <PRRequestSummary r={request} />
+      <Field label="เลขที่ PR (บริษัท)"><input autoFocus style={S.input} value={prNo} onChange={e => setPrNo(e.target.value)} placeholder="เช่น PR-2569-0045" /></Field>
+      <ModalFooter onCancel={onCancel} onSave={() => onSave({ prNo: prNo.trim() })} disabled={!prNo.trim() && !request.prNo} />
+    </Modal>
+  );
+}
+function PONumberDialog({ request, onCancel, onSave }) {
+  const [pos, setPos] = useState(() => { const p = getPRPos(request); return p.length ? p : [{ id: uid(), poNo: "", fileUrl: "" }]; });
+  const upd = (id, patch) => setPos(ps => ps.map(p => p.id === id ? { ...p, ...patch } : p));
+  return (
+    <Modal onClose={onCancel} title={`${getPRPos(request).length ? "แก้/เพิ่มเลข PO" : "ใส่เลข PO"} · ${request.requestNo || ""}`} wide>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 10 }}>ใส่เลข PO เมื่อฝ่ายจัดซื้อสั่งของแล้ว · 1 PR มีได้หลาย PO · สถานะจะเปลี่ยนเป็น "จัดซื้อสั่งของแล้ว · รอรับของ"</div>
+      <PRRequestSummary r={request} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {pos.map((p, i) => (
+          <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input autoFocus={i === 0} style={{ ...S.input, flex: "0 0 180px" }} value={p.poNo} onChange={e => upd(p.id, { poNo: e.target.value })} placeholder="เลขที่ PO" aria-label={`เลขที่ PO ${i + 1}`} />
+            <input style={{ ...S.input, flex: "1 1 220px" }} value={p.fileUrl} onChange={e => upd(p.id, { fileUrl: e.target.value })} placeholder="ลิงก์ไฟล์ PO (SharePoint, Google Drive ฯลฯ) — ไม่บังคับ" />
+            <button type="button" onClick={() => setPos(ps => ps.filter(x => x.id !== p.id))} style={{ ...S.iconBtnSm, color: "var(--red)" }} title="ลบ PO นี้"><Trash2 size={13} /></button>
+          </div>
+        ))}
+        <button type="button" onClick={() => setPos(ps => [...ps, { id: uid(), poNo: "", fileUrl: "" }])} style={{ ...S.ghostBtn, alignSelf: "flex-start" }}><Plus size={13} /> เพิ่มเลขที่ PO</button>
+      </div>
+      <ModalFooter onCancel={onCancel} onSave={() => onSave({ pos: pos.filter(p => (p.poNo || "").trim() || (p.fileUrl || "").trim()).map(p => ({ ...p, poNo: (p.poNo || "").trim() })) })} />
+    </Modal>
+  );
+}
+function PRRequestSummary({ r }) {
+  return (
+    <div style={{ background: "#F5F8FB", border: "1px solid var(--line)", borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
+      <div style={{ fontWeight: 600 }}>{r.requestNo || "—"}{r.requestedBy ? ` · ผู้ขอ ${r.requestedBy}` : ""}</div>
+      {getPRItems(r).map(it => <div key={it.id} style={{ color: "var(--muted)" }}>• {it.text}{prItemQtyText(it)}</div>)}
+    </div>
+  );
+}
+const prItemQtyText = (it) => (it.qty !== undefined && it.qty !== "" && it.qty !== null) ? ` · ${it.qty} ${it.unit || ""}`.trimEnd() : "";
 
 function PurchaseRequestsImportForm({ onCancel, onImport }) {
   const [text, setText] = useState("");
@@ -15925,6 +16012,8 @@ const S = {
     borderRadius: 20, padding: "3px 10px", whiteSpace: "nowrap",
   },
 
+  prStepBtn: { fontSize: 12, fontWeight: 600, color: "#fff", background: "var(--teal)", border: "none", borderRadius: 999, padding: "4px 12px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" },
+  prStepLink: { fontSize: 11.5, color: "var(--teal-dark)", background: "none", border: "none", padding: "2px 0", cursor: "pointer", textDecoration: "underline", fontFamily: "inherit", whiteSpace: "nowrap" },
   toast: { position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", background: "var(--ink)", color: "#fff", padding: "9px 18px", borderRadius: 30, fontSize: 12.5, zIndex: 60 },
 };
 
