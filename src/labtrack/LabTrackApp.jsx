@@ -10,8 +10,9 @@ import { RefreshCw,
   Scale, Microscope, Thermometer, Info, Table2
 } from "lucide-react";
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getDatabase, ref, onValue } from "firebase/database";
+import { getDatabase, ref, onValue, runTransaction } from "firebase/database";
 import * as XLSX from "xlsx";
+import { db as labtrackDb } from "./firebase.js";
 
 // Lab decision (14 ต.ค. 2569): no approvals inside the app — checks and
 // reports are downloaded and signed on paper, then filed.
@@ -1856,7 +1857,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
     if (MOVED_TABS.includes(key)) {
       // The former calibration and Daily check pages now live in Instrument
       // Assurance System (same data); open it in its own tab instead.
-      window.open(calibrationAppUrl(calibHubMemory.instrumentId), "_blank");
+      openLink(calibrationAppUrl(calibHubMemory.instrumentId));
       calibHubMemory.instrumentId = null;
       return;
     }
@@ -1935,9 +1936,12 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
 
   const analysisStats = useMemo(() => analysisJobBuckets(analysisJobs), [analysisJobs]);
 
+  // One timer at a time: an older message's timer must not clear a newer one.
+  const toastTimer = useRef(null);
   function notify(msg, duration = 2200) {
     setToast(msg);
-    setTimeout(() => setToast(null), duration);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), duration);
   }
 
   // MPIR-LP-002 ข้อ 6.7.3: every edit keeps the old value, the new value,
@@ -2079,7 +2083,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
                 return (
                   <Fragment key={n.key}>
                     <button
-                      onClick={() => n.external ? window.open(n.external, "_blank", "noopener,noreferrer") : setTab(n.key)}
+                      onClick={() => n.external ? openLink(n.external) : setTab(n.key)}
                       style={{
                         ...S.navBtn,
                         ...(active ? S.navBtnActive : {}),
@@ -2099,7 +2103,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
                       return (
                         <button
                           key={c.key}
-                          onClick={() => c.external ? window.open(c.external, "_blank", "noopener,noreferrer") : setTab(c.key)}
+                          onClick={() => c.external ? openLink(c.external) : setTab(c.key)}
                           style={{ ...S.navSubBtn, ...(cActive ? S.navSubBtnActive : {}) }}
                           className="ltNavBtn"
                         >
@@ -2234,7 +2238,7 @@ export default function App({ restrictToBooking = false, restrictToDailyCheck = 
               ? bookingsNavBadgeCount
               : 0;
             return (
-              <button key={n.key} onClick={() => n.external ? window.open(n.external, "_blank", "noopener,noreferrer") : setTab(n.key)} className="ltBottomNavBtn" style={{ color: active ? "var(--teal-dark)" : "var(--muted)" }}>
+              <button key={n.key} onClick={() => n.external ? openLink(n.external) : setTab(n.key)} className="ltBottomNavBtn" style={{ color: active ? "var(--teal-dark)" : "var(--muted)" }}>
                 <span style={{ position: "relative" }}>
                   <Icon size={19} strokeWidth={active ? 2.4 : 2} />
                   {count > 0 && <span className="ltBottomNavBadge">{count}</span>}
@@ -2617,7 +2621,7 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], onOpenCalibr
         <button style={S.ghostBtn} onClick={() => setShowImport(true)} hidden>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
         </button>
-        <button style={S.primaryBtn} title="เพิ่มเครื่องมือที่ Instrument Assurance System" onClick={() => window.open(calibrationAppUrl() + "&new=1", "_blank")}>
+        <button style={S.primaryBtn} title="เพิ่มเครื่องมือที่ Instrument Assurance System" onClick={() => openLink(calibrationAppUrl() + "&new=1")}>
           <Plus size={15} /> เพิ่มเครื่องมือ
         </button>
       </Toolbar>
@@ -2727,7 +2731,7 @@ function EquipmentTab({ equipment, setEquipment, certificates = [], onOpenCalibr
           dailyChecks={dailyChecks.filter(c => c.equipmentId === selectedItem.id)}
           bookings={bookings.filter(b => b.equipmentId === selectedItem.id).sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""))}
           onClose={() => setSelected(null)}
-          onEdit={() => window.open(calibrationAppUrl(selectedItem.id) + "&edit=1", "_blank")}
+          onEdit={() => openLink(calibrationAppUrl(selectedItem.id) + "&edit=1")}
           onDelete={null}
           onBook={() => { setBookingFor(selectedItem); setSelected(null); }}
           onSetAvailability={(disabled, reason, approver) => setAvailability(selectedItem.id, disabled, reason, approver)}
@@ -7443,6 +7447,15 @@ function CalibrationGuideModal({ onClose }) {
 // back), so returning lands on the same instrument and page instead of the
 // picker. Also keeps the picker's filters.
 const MOVED_TABS = ["calibrationRecords", "dailyCheck"];
+// Links inside the app (e.g. /?app=calibration…) stay in this browser tab:
+// the shell (App.jsx) switches area when it hears "mpir:navigate"; with no
+// shell listening, it falls back to a normal same-tab load. Outside links
+// (https://…) still open a new tab.
+function openLink(url) {
+  if (/^https?:\/\//.test(url)) { window.open(url, "_blank", "noopener,noreferrer"); return; }
+  const handled = !window.dispatchEvent(new CustomEvent("mpir:navigate", { detail: url, cancelable: true }));
+  if (!handled) window.location.assign(url);
+}
 const calibrationAppUrl = (equip) => `/?app=calibration${equip ? `&equip=${encodeURIComponent(equip)}` : ""}`;
 const calibHubMemory = { instrumentId: null, view: null, q: "", typeFilter: "", statusFilter: "", dueFilter: "", layout: "cards", sortBy: "code" };
 /* ---------- Calibration records: one certificate = one calibration round ----------
@@ -12385,6 +12398,61 @@ function isPRFullyReceived(r) {
   const items = getPRItems(r);
   return items.length > 0 && items.every(it => it.received);
 }
+
+/* ---- Request No. (เลขที่คำขอ) vs Official PR No. (เลขที่ PR บริษัท) ----
+   The company issues the official PR number; it is typed in by hand and
+   kept in the original `prNo` field (never generated, never renamed).
+   The lab's own tracking number is `requestNo`: REQ-<ค.ศ. year>-<seq>,
+   restarting at 001 each year, issued only when a request is first saved.
+   A per-year counter at labtrack/counters/requestNo/<year> is advanced in
+   a Firebase transaction, so two people saving at the same moment still
+   get different numbers. The counter never goes below the highest number
+   already used in the list, and numbers are never reused. */
+const REQUEST_NO_RE = /^REQ-(\d{4})-(\d+)$/;
+function requestNoYear(r) {
+  const y = (r?.date || "").slice(0, 4);
+  return /^\d{4}$/.test(y) ? y : String(new Date().getFullYear());
+}
+function formatRequestNo(year, n) { return `REQ-${year}-${String(n).padStart(3, "0")}`; }
+function maxRequestSeq(requests, year) {
+  let max = 0;
+  (requests || []).forEach(r => {
+    const m = REQUEST_NO_RE.exec(r.requestNo || "");
+    if (m && m[1] === String(year)) max = Math.max(max, Number(m[2]));
+  });
+  return max;
+}
+// Reserves `count` consecutive numbers for `year`; returns the first one.
+async function reserveRequestNos(year, count, requests) {
+  const floor = maxRequestSeq(requests, year);
+  const res = await runTransaction(ref(labtrackDb, `labtrack/counters/requestNo/${year}`),
+    (cur) => Math.max(Number(cur) || 0, floor) + count);
+  if (!res.committed) throw new Error("counter not committed");
+  return Number(res.snapshot.val()) - count + 1;
+}
+const hasOfficialPR = (r) => !!(r.prNo || "").trim();
+function PendingPRBadge() {
+  return <span style={{ display: "inline-block", fontSize: 11, fontWeight: 600, color: "#8A5A00", background: "#FFF4D6", border: "1px solid #F0D58C", borderRadius: 999, padding: "1px 8px" }}>รอเลข PR</span>;
+}
+
+// One-time numbering of records saved before Request No. existed: oldest
+// first within each year (by PR date; same date → the order they were
+// entered). Records with no date go to the current year, after dated ones.
+function planRequestNoBackfill(requests) {
+  const n = requests.length;
+  const missing = requests.map((r, idx) => ({ r, idx })).filter(x => !x.r.requestNo);
+  const byYear = {};
+  missing.forEach(x => {
+    const year = requestNoYear(x.r);
+    (byYear[year] = byYear[year] || []).push(x);
+  });
+  Object.values(byYear).forEach(list => list.sort((a, b) => {
+    const da = a.r.date || "9999", dbb = b.r.date || "9999";
+    if (da !== dbb) return da.localeCompare(dbb);
+    return (n - a.idx) - (n - b.idx); // list is newest-first: higher index = entered earlier
+  }));
+  return byYear; // { year: [{ r, idx }, ...] } in numbering order
+}
 // A PR can now have more than one PO — older records only ever had a single
 // poNo string, so this normalizes both shapes into a consistent array of
 // { poNo, fileUrl }. Checking `!== undefined` (not just truthy/length) matters
@@ -12400,27 +12468,49 @@ function getPRPos(r) {
 function PurchaseRequestsTab({ requests, setRequests, notify }) {
   const [q, setQ] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [prNoFilter, setPrNoFilter] = useState("all"); // "all" | "has" | "pending"
   const [view, setView] = useState("active"); // "active" | "history"
   const [editing, setEditing] = useState(null);
   const [showImport, setShowImport] = useState(false);
+  const [showBackfill, setShowBackfill] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const activeCount = requests.filter(r => !isPRFullyReceived(r)).length;
   const historyCount = requests.filter(r => isPRFullyReceived(r)).length;
+  const missingRequestNo = requests.filter(r => !r.requestNo).length;
 
   const filtered = requests
-    .filter(r => (r.prNo + getPRItems(r).map(i => i.text).join(" ") + r.requestedBy + getPRPos(r).map(p => p.poNo).join(" ")).toLowerCase().includes(q.toLowerCase()))
+    .filter(r => ((r.requestNo || "") + " " + (r.prNo || "") + " " + getPRItems(r).map(i => i.text).join(" ") + " " + (r.requestedBy || "") + " " + getPRPos(r).map(p => p.poNo).join(" ")).toLowerCase().includes(q.toLowerCase()))
     .filter(r => categoryFilter === "all" || (r.categories || []).includes(categoryFilter))
+    .filter(r => prNoFilter === "all" || (prNoFilter === "has" ? hasOfficialPR(r) : !hasOfficialPR(r)))
     .filter(r => view === "history" ? isPRFullyReceived(r) : !isPRFullyReceived(r))
     .slice()
     .sort((a, b) => (b.date || "").localeCompare(a.date || "")); // most recent PR first
 
-  function upsert(item) {
-    const items = reconcilePRItems(requests.find(r => r.id === item.id)?.items, item.itemName);
+  async function upsert(item) {
+    const existing = requests.find(r => r.id === item.id);
+    const items = reconcilePRItems(existing?.items, item.itemName);
     const record = { ...item, items };
-    if (requests.find(r => r.id === item.id)) setRequests(requests.map(r => r.id === item.id ? record : r));
-    else setRequests([record, ...requests]);
-    notify("บันทึกใบขอซื้อแล้ว");
-    setEditing(null);
+    if (existing) {
+      setRequests(requests.map(r => r.id === item.id ? { ...record, requestNo: existing.requestNo || record.requestNo } : r));
+      notify("บันทึกใบขอซื้อแล้ว");
+      setEditing(null);
+      return;
+    }
+    setSaving(true);
+    try {
+      const year = requestNoYear(record);
+      const n = await reserveRequestNos(year, 1, requests);
+      const requestNo = formatRequestNo(year, n);
+      setRequests([{ ...record, requestNo }, ...requests]);
+      notify(`บันทึกใบขอซื้อแล้ว · เลขที่คำขอ ${requestNo}`);
+      setEditing(null);
+    } catch (e) {
+      console.error("[PR] request no.", e);
+      notify("ออกเลขที่คำขอไม่สำเร็จ กรุณาตรวจการเชื่อมต่อแล้วลองบันทึกอีกครั้ง", 6000);
+    } finally {
+      setSaving(false);
+    }
   }
   function remove(id) { setRequests(requests.filter(r => r.id !== id)); notify("ลบรายการแล้ว"); }
   function updateItems(prId, items) {
@@ -12431,12 +12521,25 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
     notify("บันทึกรับของครบทั้ง PO แล้ว");
   }
 
-  function importItems(items) {
+  async function importItems(items) {
     const newItems = items.map(it => ({
       id: uid(), prNo: it.prNo, date: it.date || todayISO(), categories: it.categories.length ? it.categories : ["other"],
       itemName: it.itemName, items: getPRItems({ itemName: it.itemName }), requestedBy: it.requestedBy || "",
       poNo: it.poNo || "", notes: it.notes || "",
     }));
+    try {
+      // Number the imported rows like new requests: per year, in file order.
+      const byYear = {};
+      newItems.forEach(r => { (byYear[requestNoYear(r)] = byYear[requestNoYear(r)] || []).push(r); });
+      for (const [year, list] of Object.entries(byYear)) {
+        const start = await reserveRequestNos(year, list.length, requests);
+        list.forEach((r, i) => { r.requestNo = formatRequestNo(year, start + i); });
+      }
+    } catch (e) {
+      console.error("[PR] request no.", e);
+      notify("ออกเลขที่คำขอไม่สำเร็จ ยังไม่ได้นำเข้า กรุณาลองอีกครั้ง", 6000);
+      return;
+    }
     setRequests([...newItems, ...requests]);
     notify(`นำเข้า ${newItems.length} รายการแล้ว`);
     setShowImport(false);
@@ -12445,15 +12548,25 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
   return (
     <div>
       <TabHeader title="ใบขอซื้อ (PR)" sub="บันทึกรายการที่สั่งซื้อ/ออก PR ทั้งสารเคมี พัสดุ และซ่อมบำรุงเครื่องมือ · 1 PR ออกได้หลาย PO" />
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         <ViewTab active={view === "active"} onClick={() => setView("active")} label="กำลังดำเนินการ" count={activeCount} />
         <ViewTab active={view === "history"} onClick={() => setView("history")} label="ประวัติ (รับครบแล้ว)" count={historyCount} />
+        {missingRequestNo > 0 && (
+          <button style={{ ...S.ghostBtn, marginLeft: "auto" }} onClick={() => setShowBackfill(true)}>
+            <ClipboardList size={14} style={{ marginRight: 4 }} /> สร้างเลขที่คำขอให้รายการเดิม ({missingRequestNo})
+          </button>
+        )}
       </div>
       <Toolbar>
-        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเลข PR, รายการ, ผู้ขอ, เลข PO..." />
+        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาเลขที่คำขอ, เลข PR, รายการ, ผู้ขอ, เลข PO..." />
         <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} style={S.select}>
           <option value="all">ทุกหมวด</option>
           {Object.entries(PR_CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <select value={prNoFilter} onChange={e => setPrNoFilter(e.target.value)} style={S.select} aria-label="สถานะเลข PR บริษัท">
+          <option value="all">เลข PR: ทั้งหมด</option>
+          <option value="has">มีเลข PR แล้ว</option>
+          <option value="pending">รอเลข PR</option>
         </select>
         <button style={S.ghostBtn} onClick={() => setShowImport(true)}>
           <FileDown size={14} style={{ transform: "rotate(180deg)", marginRight: 4 }} /> นำเข้ารายการ
@@ -12463,12 +12576,18 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
         </button>
       </Toolbar>
       {showImport && <PurchaseRequestsImportForm onCancel={() => setShowImport(false)} onImport={importItems} />}
+      {showBackfill && <RequestNoBackfillDialog requests={requests} setRequests={setRequests} notify={notify} onClose={() => setShowBackfill(false)} />}
 
       <Table
-        cols={["เลขที่ PR", "วันที่", "หมวด", "รายการ", ""]}
+        cols={["เลขที่คำขอ / เลขที่ PR (บริษัท)", "วันที่", "หมวด", "รายการ", ""]}
         rows={filtered.map(r => [
           <div>
-            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{r.prNo || "-"}</span>
+            <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 13.5, whiteSpace: "nowrap" }}>{r.requestNo || "—"}</div>
+            <div style={{ fontSize: 11.5, marginTop: 3, whiteSpace: "nowrap" }}>
+              {hasOfficialPR(r)
+                ? <span style={{ fontFamily: "var(--font-mono)", color: "var(--ink)" }}>PR: {r.prNo}</span>
+                : <PendingPRBadge />}
+            </div>
             {getPRPos(r).map(p => (
               <div key={p.id} style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
                 PO: {p.fileUrl ? (
@@ -12491,8 +12610,70 @@ function PurchaseRequestsTab({ requests, setRequests, notify }) {
         ])}
         empty={view === "history" ? "ยังไม่มี PR ที่รับของครบ" : "ยังไม่มีใบขอซื้อที่กำลังดำเนินการ"}
       />
-      {editing && <PurchaseRequestForm item={editing} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {editing && <PurchaseRequestForm item={editing} saving={saving} onCancel={() => setEditing(null)} onSave={upsert} />}
     </div>
+  );
+}
+
+// Preview-then-confirm numbering of records saved before Request No.
+// existed. Only adds `requestNo`; nothing else on the record changes.
+function RequestNoBackfillDialog({ requests, setRequests, notify, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const plan = useMemo(() => planRequestNoBackfill(requests), [requests]);
+  const years = Object.keys(plan).sort();
+  const preview = [];
+  years.forEach(year => {
+    const start = maxRequestSeq(requests, year) + 1;
+    plan[year].forEach((x, i) => preview.push({ ...x, year, requestNo: formatRequestNo(year, start + i) }));
+  });
+
+  async function confirm() {
+    setBusy(true);
+    try {
+      const assigned = {};
+      for (const year of years) {
+        const start = await reserveRequestNos(year, plan[year].length, requests);
+        plan[year].forEach((x, i) => { assigned[x.r.id] = formatRequestNo(year, start + i); });
+      }
+      setRequests(requests.map(r => assigned[r.id] && !r.requestNo ? { ...r, requestNo: assigned[r.id] } : r));
+      notify(`สร้างเลขที่คำขอให้รายการเดิมแล้ว ${Object.keys(assigned).length} รายการ`);
+      onClose();
+    } catch (e) {
+      console.error("[PR] backfill", e);
+      notify("สร้างเลขที่คำขอไม่สำเร็จ ยังไม่มีรายการใดถูกเปลี่ยน กรุณาลองอีกครั้ง", 6000);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal onClose={busy ? () => {} : onClose} title="สร้างเลขที่คำขอให้รายการเดิม" wide>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 10, lineHeight: 1.6 }}>
+        ระบบจะเพิ่ม <b>เลขที่คำขอ</b> ให้ {preview.length} รายการที่ยังไม่มีเลข เรียงตามวันที่จากเก่าไปใหม่ แยกตามปี (ค.ศ.)
+        · เลขที่ PR (บริษัท), PO, การรับของ และข้อมูลอื่นไม่เปลี่ยน · แนะนำให้ส่งออก Excel ใบขอซื้อเก็บไว้ก่อนยืนยัน
+        <br />หากมีผู้ออกใบขอซื้อใหม่ระหว่างนี้ เลขที่ได้จริงอาจเลื่อนไปจากตัวอย่าง แต่ไม่ซ้ำกัน
+      </div>
+      <div style={{ maxHeight: 360, overflow: "auto", border: "1px solid var(--line)", borderRadius: 10 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#F5F8FB", position: "sticky", top: 0 }}>
+              {["เลขที่คำขอที่จะได้", "วันที่", "เลขที่ PR (บริษัท)", "รายการ"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 10px", whiteSpace: "nowrap", borderBottom: "1px solid var(--line)" }}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {preview.map(p => (
+              <tr key={p.r.id}>
+                <td style={{ padding: "6px 10px", fontFamily: "var(--font-mono)", fontWeight: 700, whiteSpace: "nowrap", borderBottom: "1px solid var(--line)" }}>{p.requestNo}</td>
+                <td style={{ padding: "6px 10px", whiteSpace: "nowrap", borderBottom: "1px solid var(--line)" }}>{p.r.date ? fmtDate(p.r.date) : <span style={{ color: "#8A5A00" }}>ไม่มีวันที่</span>}</td>
+                <td style={{ padding: "6px 10px", fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderBottom: "1px solid var(--line)" }}>{hasOfficialPR(p.r) ? p.r.prNo : <PendingPRBadge />}</td>
+                <td style={{ padding: "6px 10px", borderBottom: "1px solid var(--line)" }}>{getPRItems(p.r).map(i => i.text).join(", ").slice(0, 80)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ModalFooter onCancel={onClose} onSave={confirm} disabled={busy || preview.length === 0}
+        extra={busy ? <span style={{ fontSize: 12.5, color: "var(--muted)" }}>กำลังบันทึก…</span> : null} />
+    </Modal>
   );
 }
 
@@ -12603,7 +12784,7 @@ function PRItemsCell({ items, onUpdateItems, onReceiveAll }) {
   );
 }
 
-function PurchaseRequestForm({ item, onCancel, onSave }) {
+function PurchaseRequestForm({ item, saving = false, onCancel, onSave }) {
   const [f, setF] = useState({ ...item, categories: item.categories || [], pos: getPRPos(item) });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const toggleCategory = (key) => {
@@ -12624,7 +12805,16 @@ function PurchaseRequestForm({ item, onCancel, onSave }) {
   return (
     <Modal onClose={onCancel} title={item.itemName ? "แก้ไขใบขอซื้อ" : "ออกใบขอซื้อ (PR)"} wide>
       <div style={S.formGrid} className="ltFormGrid">
-        <Field label="เลขที่ PR"><input style={S.input} value={f.prNo} onChange={set("prNo")} placeholder="เช่น PR-2569-0045" /></Field>
+        <Field label="เลขที่คำขอ" full plain>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#F5F8FB", border: "1px solid var(--line)", borderRadius: 10 }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15 }}>{f.requestNo || "—"}</span>
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>{f.requestNo ? "สร้างโดยระบบ · แก้ไขไม่ได้" : "สร้างอัตโนมัติเมื่อบันทึก"}</span>
+          </div>
+        </Field>
+        <Field label="เลขที่ PR (บริษัท)">
+          <input style={S.input} value={f.prNo || ""} onChange={set("prNo")} placeholder="ใส่หลังบริษัทออกเลข PR เช่น PR-2569-0045" />
+          {!(f.prNo || "").trim() && <div style={{ marginTop: 4 }}><PendingPRBadge /></div>}
+        </Field>
         <Field label="วันที่ออก PR"><input type="date" style={S.input} value={f.date} onChange={set("date")} /></Field>
         <Field label="หมวดหมู่ (เลือกได้มากกว่า 1 ถ้าสั่งรวมกัน)" full plain>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "4px 0" }}>
@@ -12672,7 +12862,8 @@ function PurchaseRequestForm({ item, onCancel, onSave }) {
         </Field>
         <Field label="หมายเหตุ" full><textarea style={{ ...S.input, minHeight: 50 }} value={f.notes} onChange={set("notes")} /></Field>
       </div>
-      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.itemName} />
+      <ModalFooter onCancel={onCancel} onSave={() => onSave(f)} disabled={!f.itemName || saving}
+        extra={saving ? <span style={{ fontSize: 12.5, color: "var(--muted)" }}>กำลังออกเลขที่คำขอ…</span> : null} />
     </Modal>
   );
 }
@@ -12693,7 +12884,7 @@ function PurchaseRequestsImportForm({ onCancel, onImport }) {
   return (
     <Modal onClose={onCancel} title="นำเข้ารายการใบขอซื้อ" wide>
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>
-        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>เลขที่ PR | วันที่ (YYYY-MM-DD) | หมวด (chemical/consumable/equipment/other คั่นหลายหมวดด้วย , ) | รายการ | ผู้ขอ | เลข PO | หมายเหตุ</b> (คั่นด้วย | — ทุกช่องหลังรายการใส่หรือเว้นว่างก็ได้)
+        วางรายการ 1 บรรทัดต่อ 1 รายการ รูปแบบ: <b>เลขที่ PR (บริษัท) | วันที่ (YYYY-MM-DD) | หมวด (chemical/consumable/equipment/other คั่นหลายหมวดด้วย , ) | รายการ | ผู้ขอ | เลข PO | หมายเหตุ</b> (คั่นด้วย | — ทุกช่องหลังรายการใส่หรือเว้นว่างก็ได้ · เลขที่ PR เว้นว่างได้ถ้ายังไม่ได้รับ · เลขที่คำขอสร้างให้อัตโนมัติ)
       </div>
       <textarea
         style={{ ...S.input, minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6 }}
@@ -13975,11 +14166,11 @@ function ReportsTab({ equipment, setEquipment, activities, dailyChecks = [], che
       const pos = getPRPos(r).filter(p => p.poNo || p.fileUrl);
       const poCell = pos.length === 0 ? "" : pos.length === 1 ? link(pos[0].fileUrl, pos[0].poNo || "เปิดไฟล์ PO") : pos.map(p => p.poNo).join("; ");
       getPRItems(r).forEach(it => {
-        rows.push([r.prNo, r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", poCell, r.requestedBy, r.notes || ""]);
+        rows.push([r.requestNo || "", r.prNo || "", r.date, cats, it.text, it.received ? "ได้รับแล้ว" : "ยังไม่ได้รับ", it.receivedDate || "", poCell, r.requestedBy, r.notes || ""]);
       });
     });
     download("purchase-requests.xlsx", "ใบขอซื้อ",
-      ["เลขที่ PR", "วันที่", "หมวด", "รายการ", "สถานะรับของ", "วันที่รับ", "เลขที่ PO", "ผู้ขอ", "หมายเหตุ"],
+      ["เลขที่คำขอ", "เลขที่ PR (บริษัท)", "วันที่", "หมวด", "รายการ", "สถานะรับของ", "วันที่รับ", "เลขที่ PO", "ผู้ขอ", "หมายเหตุ"],
       rows
     );
   };
@@ -15056,10 +15247,10 @@ const CSS = `
 * { box-sizing: border-box; }
 :root {
   --ink:#0B2A4A; --paper:#F3F8FD; --panel:#FFFFFF; --line:#D3E6F5;
-  --teal:#0E6FBA; --teal-dark:#0A4F9B; --amber:#C97F0E; --red:#C6493B; --green:#1E9E6B; --muted:#5B7A96;
-  --sidebar-grad-start:#0E6FBA; --sidebar-grad-end:#0A4F9B;
-  --font-display:'Prompt', ui-sans-serif, system-ui, sans-serif;
-  --font-body:'Prompt', ui-sans-serif, system-ui, sans-serif;
+  --teal:#1F5FA8; --teal-dark:#174A85; --amber:#C97F0E; --red:#C6493B; --green:#1E9E6B; --muted:#5B7A96;
+  --sidebar-grad-start:#1F5FA8; --sidebar-grad-end:#174A85;
+  --font-display:'Sarabun', ui-sans-serif, system-ui, sans-serif;
+  --font-body:'Sarabun', ui-sans-serif, system-ui, sans-serif;
   --font-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 }
 input, select, textarea, button { font-family: var(--font-body); }
