@@ -871,6 +871,7 @@ const reportUsesInstrument = (rep, id) => JSON.stringify(rep).includes(`"instrum
 // "Daily check วันนี้": every instrument with a Daily check form, today's
 // status, records waiting for approval, and the monthly log — one row each.
 // Tapping an instrument opens its page (Daily check tab).
+const typeOf = (x) => x.e.type || "ไม่ระบุประเภท";
 function DailyToday({ equipment, dailyChecks, onOpen }) {
   const [q, setQ] = useState("");
   const [filterSel, setFilter] = useState(null);
@@ -886,12 +887,18 @@ function DailyToday({ equipment, dailyChecks, onOpen }) {
     return { e, mine, todays, last, st, pending: mine.filter(c => !c.approved).length };
   }), [equipment, dailyChecks, today]);
   const groups = { todo: (x) => x.st.key !== "done", pending: (x) => x.pending > 0, all: () => true };
-  const filter = filterSel || (rows.some(groups.todo) ? "todo" : "all");
+  // Opens on every instrument (lab request 26 พ.ย. 2569); the other tabs
+  // stay one click away.
+  const filter = filterSel || "all";
   const ql = q.trim().toLowerCase();
   const shown = rows.filter(groups[filter])
     .filter(x => !ql || [x.e.code, x.e.name, x.e.location, x.e.type].some(v => String(v || "").toLowerCase().includes(ql)))
-    .sort((a, b) => a.st.sort - b.st.sort || String(a.e.code || "").localeCompare(String(b.e.code || ""), "en", { numeric: true }));
-  const tabs = [["todo", "ยังไม่ได้ตรวจ / ไม่ผ่าน"], ["pending", "รออนุมัติ"], ["all", "ทั้งหมด"]];
+    .sort((a, b) => typeOf(a).localeCompare(typeOf(b), "th") || a.st.sort - b.st.sort || String(a.e.code || "").localeCompare(String(b.e.code || ""), "en", { numeric: true }));
+  const tabs = [["all", "ทั้งหมด"], ["todo", "ยังไม่ได้ตรวจ / ไม่ผ่าน"], ["pending", "รออนุมัติ"]];
+  // Grouped by instrument type, like the equipment pages; each group shows
+  // how many of its instruments are checked today.
+  const typeCount = {};
+  rows.forEach(x => { const t = typeOf(x); typeCount[t] = typeCount[t] || { n: 0, done: 0 }; typeCount[t].n++; if (x.todays.length) typeCount[t].done++; });
   return (
     <div className="ca-stack">
       <header className="ca-head"><div><h1>Daily check วันนี้</h1>
@@ -910,10 +917,18 @@ function DailyToday({ equipment, dailyChecks, onOpen }) {
           <div className="ca-scroll">
             <table className="ca-table ca-sticky">
               <thead><tr><th>เครื่องมือ</th><th>วันนี้</th><th className="ca-hide-sm">ตรวจล่าสุด</th><th>รออนุมัติ</th><th></th></tr></thead>
-              <tbody>{shown.map(({ e, mine, todays, last, st, pending }) => {
+              <tbody>{shown.map(({ e, mine, todays, last, st, pending }, i) => {
                 const n = recordsInMonth("daily", mine, month).length;
+                const t = typeOf({ e }); const newGroup = i === 0 || typeOf(shown[i - 1]) !== t;
                 return (
-                  <tr key={e.id}>
+                  <Fragment key={e.id}>
+                  {newGroup && (
+                    <tr className="ca-group-row"><td colSpan={5}>
+                      <span className="ca-strong">{t}</span>
+                      <span className="ca-small ca-muted"> · ตรวจแล้ว {typeCount[t].done}/{typeCount[t].n} เครื่อง</span>
+                    </td></tr>
+                  )}
+                  <tr>
                     <td><button className="ca-link ca-strong ca-codecell" onClick={() => onOpen(e.id)}><InstrumentPhoto e={e} size={36} />{e.code || e.name}</button>
                       <div className="ca-small ca-muted">{[e.name, e.location].filter(Boolean).join(" · ")}</div></td>
                     <td><Pill tone={st.tone}>{st.label}</Pill>{todays[0]?.time ? <div className="ca-small ca-muted">{todays[0].time}{todays.length > 1 ? ` · ${todays.length} ครั้ง` : ""}</div> : null}</td>
@@ -923,7 +938,8 @@ function DailyToday({ equipment, dailyChecks, onOpen }) {
                       <button className={`ca-btn ${st.key === "todo" ? "ca-btn-primary" : ""}`} onClick={() => onOpen(e.id, { openDaily: true })}><Plus size={15} /> บันทึก</button>{" "}
                       <button className="ca-btn" disabled={!n} title={n ? "" : "ไม่มีบันทึกในเดือนที่เลือก"} onClick={() => downloadCheckLog("daily", e, mine, month)}><FileDown size={15} /> รายเดือน ({n})</button>
                     </td>
-                  </tr>);
+                  </tr>
+                  </Fragment>);
               })}</tbody>
             </table>
           </div>
@@ -1577,6 +1593,8 @@ const CSS = `
 .ca-search{display:flex;align-items:center;gap:6px;border:1px solid #B9D3EA;border-radius:10px;padding:0 10px;min-height:42px;color:var(--muted);background:#fff}
 .ca-search input{border:none;outline:none;font-size:14px;min-width:180px;background:none}
 .ca-scroll{overflow-x:auto}
+.ca-group-row td{background:#F5F8FB;padding:8px 10px 8px 20px;border-top:1px solid #E6EEF6;font-size:13px}
+.ca-table tbody tr.ca-group-row:hover td{background:#F5F8FB}
 /* Table standard (same as LabTrack): on desktop, list headers stay visible
    under the app's top bar while scrolling; quiet row hover; 44px rows. The
    wide LF-033 history table keeps its own sideways scroll. */
